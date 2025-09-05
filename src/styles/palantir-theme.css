@@ -1,0 +1,88 @@
+/**
+ * Palantir Light Theme Variables and Base Styles
+ * Imported from the original platform design system
+ */
+
+/* Root Variables */
+:root {
+  /* Surface Colors */
+  --snow-50: #FFFFFF;
+  --snow-100: #FAFBFC;
+  --snow-150: #F5F7FA;
+  --snow-200: #EDF0F5;
+  
+  /* Azure Blue Primary */
+  --azure-primary: #0066CC;
+  --azure-light: #3384E0;
+  --azure-lighter: #66A3E8;
+  --azure-lightest: #E6F2FF;
+  --azure-dark: #004499;
+  --azure-glow: rgba(0, 102, 204, 0.2);
+  
+  /* Semantic Colors */
+  --success-500: #059669;
+  --success-100: #D1FAE5;
+  --warning-500: #D97706;
+  --warning-100: #FEF3C7;
+  --danger-500: #DC2626;
+  --danger-100: #FEE2E2;
+  --info-500: #0891B2;
+  --info-100: #E0F2FE;
+  
+  /* Text Colors */
+  --text-primary: #111827;
+  --text-secondary: #4B5563;
+  --text-muted: #9CA3AF;
+  --text-inverse: #FFFFFF;
+  
+  /* Borders */
+  --border-default: #E5E7EB;
+  --border-light: #F3F4F6;
+  --border-strong: #D1D5DB;
+  
+  /* Layout */
+  --sidebar-width: 320px;
+  --navbar-height: 48px;
+  --panel-width: 400px;
+  
+  /* Transitions */
+  --duration-base: 200ms;
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Base Typography */
+body {
+  color: var(--text-primary);
+  background: var(--snow-100);
+}
+
+/* Focus Ring */
+*:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--azure-glow);
+}
+
+/* Selection */
+::selection {
+  background-color: var(--azure-lightest);
+  color: var(--text-primary);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--snow-150);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #9CA3AF;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6B7280;
+}

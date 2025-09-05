@@ -1,0 +1,230 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useFiltersStore } from '../../state/filtersStore';
+import { analyticsClient } from '../../api/analyticsClient';
+import { FilterPanel } from '../../components/FilterPanel/FilterPanel';
+import { EventCard } from '../../components/EventCard/EventCard';
+import type { EventSummary, Cursor } from '../../api/types';
+
+export const DirectoryView: React.FC = () => {
+  const [events, setEvents] = useState<EventSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [cursor, setCursor] = useState<Cursor | undefined>(undefined);
+  const [hasMore, setHasMore] = useState(false);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(true);
+  
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  
+  const { filters, isApplying } = useFiltersStore();
+
+  // Load events when filters change
+  useEffect(() => {
+    if (!isApplying) {
+      setEvents([]);
+      setCursor(undefined);
+      setHasMore(false);
+      loadEvents(true);
+    }
+  }, [filters]);
+
+  // Setup infinite scroll observer
+  useEffect(() => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+
+    observerRef.current = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loading) {
+          loadEvents(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    if (loadMoreRef.current) {
+      observerRef.current.observe(loadMoreRef.current);
+    }
+
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+    };
+  }, [hasMore, loading, cursor]);
+
+  const loadEvents = async (isInitial: boolean) => {
+    if (loading) return;
+    
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await analyticsClient.getDirectoryEvents(
+        filters,
+        50,
+        isInitial ? undefined : cursor
+      );
+
+      if (isInitial) {
+        setEvents(response.events);
+        setTotalCount(response.total_count);
+      } else {
+        setEvents(prev => [...prev, ...response.events]);
+      }
+      
+      setCursor(response.next_cursor);
+      setHasMore(response.has_more);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load events');
+      console.error('Error loading directory events:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const rows = await analyticsClient.exportEvents({
+        scope: 'map',
+        scope_params: {},
+        filters
+      });
+      
+      // Convert to CSV
+      const csv = rows.map(row => row.join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `events-export-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  };
+
+  return (
+    <div className="h-full flex">
+      {/* Filter Panel */}
+      <FilterPanel 
+        className={`${showFilters ? 'w-80' : 'w-0'} transition-all duration-300 overflow-hidden flex-shrink-0`}
+        onClose={() => setShowFilters(false)}
+      />
+      
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <div className="bg-white border-b border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              {!showFilters && (
+                <button
+                  onClick={() => setShowFilters(true)}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                  </svg>
+                </button>
+              )}
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900">Event Directory</h1>
+                <p className="text-sm text-gray-500">
+                  {totalCount.toLocaleString()} total events
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center"
+            >
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        {/* Events List */}
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          {error ? (
+            <div className="p-6">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-sm text-red-700">{error}</p>
+                <button
+                  onClick={() => loadEvents(true)}
+                  className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
+                >
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : events.length === 0 && !loading ? (
+            <div className="p-6 text-center text-gray-500">
+              No events found matching your filters
+            </div>
+          ) : (
+            <div className="max-w-4xl mx-auto p-6 space-y-4">
+              {events.map((event) => (
+                <EventCard
+                  key={event.id}
+                  event={event}
+                  isExpanded={expandedEventId === event.id}
+                  onToggleExpand={() => 
+                    setExpandedEventId(expandedEventId === event.id ? null : event.id)
+                  }
+                />
+              ))}
+              
+              {/* Loading indicator */}
+              {loading && events.length > 0 && (
+                <div className="py-8 text-center">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+              )}
+              
+              {/* Initial loading */}
+              {loading && events.length === 0 && (
+                <div className="space-y-4">
+                  {[1, 2, 3, 4, 5].map(i => (
+                    <div key={i} className="bg-white border border-gray-200 rounded-lg p-6 animate-pulse">
+                      <div className="h-5 bg-gray-200 rounded w-3/4 mb-3"></div>
+                      <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+                      <div className="h-4 bg-gray-200 rounded w-full"></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Load more trigger */}
+              {hasMore && !loading && (
+                <div ref={loadMoreRef} className="py-8 text-center">
+                  <button
+                    onClick={() => loadEvents(false)}
+                    className="text-blue-600 hover:text-blue-800 font-medium"
+                  >
+                    Load more events
+                  </button>
+                </div>
+              )}
+              
+              {/* End of list */}
+              {!hasMore && events.length > 0 && (
+                <div className="py-8 text-center text-gray-500">
+                  <p>End of results</p>
+                  <p className="text-sm mt-1">Showing all {events.length} of {totalCount} events</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
