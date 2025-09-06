@@ -66,7 +66,6 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, height = 200
 
   // Check if today's date falls within the chart range and calculate its position
   const today = new Date();
-  const todayString = today.toISOString().split('T')[0]; // YYYY-MM-DD format
   const startDate = new Date(data.data_points[0].date);
   const endDate = new Date(data.data_points[data.data_points.length - 1].date);
   
