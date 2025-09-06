@@ -8,7 +8,8 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
     background: linear-gradient(180deg, #fef3c7 0%, #fed7aa 20%, #ffffff 50%);
     min-height: 100vh;
-    overflow: hidden; /* This will hide elements outside the viewport */
+    overflow-x: hidden; /* Hide horizontal overflow for animations */
+    overflow-y: auto; /* Allow vertical scrolling */
 }
 
 /* Sun */
@@ -390,13 +391,38 @@ button.desert-btn:disabled:hover {
 
 /* Mobile Responsive */
 @media (max-width: 768px) {
+    .launch-page-wrapper {
+        /* Ensure proper scrolling behavior on mobile */
+        -webkit-overflow-scrolling: touch;
+    }
+    
     .container {
-        padding: 40px 15px;
+        padding: 20px 15px;
+        min-height: auto; /* Remove min-height constraint */
+        justify-content: flex-start; /* Start from top instead of center */
     }
 
     .app-grid {
         grid-template-columns: 1fr;
         gap: 20px;
+        margin-top: 20px; /* Reduce top margin */
+    }
+
+    .app-widget {
+        /* Improve touch interactions */
+        padding: 24px;
+        margin-bottom: 10px;
+    }
+
+    /* Make touch targets larger */
+    .desert-btn {
+        padding: 12px 24px;
+        font-size: 16px; /* Prevent zoom on iOS */
+        min-height: 44px; /* iOS touch target minimum */
+    }
+
+    .logo-section {
+        margin-bottom: 40px; /* Reduce spacing */
     }
 
     .logo-sub {
@@ -413,5 +439,30 @@ button.desert-btn:disabled:hover {
         right: 30px;
         width: 60px;
         height: 60px;
+    }
+}
+
+/* Extra small screens */
+@media (max-width: 480px) {
+    .container {
+        padding: 15px 10px;
+    }
+    
+    .logo-main {
+        font-size: 48px;
+    }
+    
+    .logo-sub {
+        font-size: 24px;
+        letter-spacing: 4px;
+    }
+    
+    .app-widget {
+        padding: 20px;
+    }
+    
+    .app-description {
+        font-size: 14px;
+        line-height: 1.6;
     }
 }

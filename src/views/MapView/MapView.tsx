@@ -319,8 +319,16 @@ export const MapView: React.FC = () => {
       {/* Filter Panel */}
       {showFilters && (
         <FilterPanel 
-          className="w-80 flex-shrink-0"
+          className="w-80 flex-shrink-0 md:relative fixed inset-y-0 left-0 z-40 md:z-10"
           onClose={() => setShowFilters(false)}
+        />
+      )}
+      
+      {/* Filter Panel Backdrop (Mobile) */}
+      {showFilters && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
+          onClick={() => setShowFilters(false)}
         />
       )}
       
@@ -330,37 +338,38 @@ export const MapView: React.FC = () => {
         {!showFilters && (
           <button
             onClick={() => setShowFilters(true)}
-            className="absolute top-4 left-4 z-10 bg-white rounded-lg shadow-lg p-2 hover:bg-gray-50"
+            className="absolute top-4 left-4 z-10 bg-white rounded-lg shadow-lg p-3 hover:bg-gray-50 touch-manipulation"
+            style={{ minHeight: '44px', minWidth: '44px' }}
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
             </svg>
           </button>
         )}
         
         {/* Search Bar */}
-        <div className="absolute top-4 left-16 right-4 z-10 max-w-md">
+        <div className="absolute top-4 left-16 md:left-20 right-4 z-10 max-w-md">
           <SearchBar 
             placeholder="Search events by topic, description, or context..."
-            className="bg-white rounded-lg shadow-lg"
+            className="bg-white rounded-lg shadow-lg text-base md:text-sm"
           />
         </div>
         
         {/* KPI Strip */}
         {mapData && (
-          <div className="absolute top-20 left-16 z-10 bg-white rounded-lg shadow-lg p-4">
-            <div className="flex space-x-6">
-              <div>
-                <div className="text-sm text-gray-500">Total Events</div>
-                <div className="text-2xl font-bold">{mapData.total_events.toLocaleString()}</div>
+          <div className="absolute top-20 md:top-20 left-4 md:left-20 right-4 md:right-auto z-10 bg-white rounded-lg shadow-lg p-3 md:p-4">
+            <div className="flex flex-wrap md:flex-nowrap space-x-3 md:space-x-6 text-sm md:text-base">
+              <div className="flex-1 md:flex-none">
+                <div className="text-xs md:text-sm text-gray-500">Total Events</div>
+                <div className="text-lg md:text-2xl font-bold">{mapData.total_events.toLocaleString()}</div>
               </div>
-              <div>
-                <div className="text-sm text-gray-500">Cities</div>
-                <div className="text-2xl font-bold">{mapData.map_points.length}</div>
+              <div className="flex-1 md:flex-none">
+                <div className="text-xs md:text-sm text-gray-500">Cities</div>
+                <div className="text-lg md:text-2xl font-bold">{mapData.map_points.length}</div>
               </div>
-              <div>
-                <div className="text-sm text-gray-500">States</div>
-                <div className="text-2xl font-bold">
+              <div className="flex-1 md:flex-none">
+                <div className="text-xs md:text-sm text-gray-500">States</div>
+                <div className="text-lg md:text-2xl font-bold">
                   {new Set(mapData.map_points
                     .map(p => p.state)
                     .filter(state => VALID_STATE_CODES.has(state))
@@ -380,12 +389,14 @@ export const MapView: React.FC = () => {
                 setSelectedCity(null);
                 setSelectedCluster(null);
               }}
-              className="bg-amber-50 border border-amber-300 text-amber-700 px-4 py-2 rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2"
+              className="bg-amber-50 border border-amber-300 text-amber-700 px-3 md:px-4 py-2 rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2 text-sm md:text-base touch-manipulation"
+              style={{ minHeight: '44px' }}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
-              <span className="font-medium">Virtual/Non-geocoded</span>
+              <span className="font-medium hidden md:inline">Virtual/Non-geocoded</span>
+              <span className="font-medium md:hidden">Virtual</span>
               <span className="bg-amber-200 text-amber-800 px-2 py-1 rounded-full text-xs font-bold">
                 {virtualEventsCount}
               </span>

@@ -140,8 +140,9 @@
   }
   
   .nav-tab {
-    padding: 8px 16px;
-    font-size: 13px;
+    padding: 10px 16px;
+    font-size: 14px; /* Keep readable size */
+    min-height: 44px; /* Ensure proper touch target */
   }
   
   .nav-actions {
