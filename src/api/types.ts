@@ -15,6 +15,7 @@ export interface Filters {
   link_depth?: number; // 1-5, default 1
   search?: {
     query: string;
+    embedding?: number[];
     min_similarity?: number;
   };
   project_id?: string; // UUID
@@ -173,6 +174,15 @@ export interface EntityDetails {
     handle: string;
     url?: string;
     is_primary?: boolean;
+  }>;
+  social_profiles?: Array<{
+    platform: 'x' | 'instagram' | 'truth_social';
+    username: string;
+    url?: string;
+    bio?: string;
+    followers?: number;
+    verified?: boolean;
+    profile_image?: string;
   }>;
   links_primary?: ActorLink[];
   links_out?: ActorLink[];

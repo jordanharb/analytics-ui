@@ -6,6 +6,7 @@ import { EventCard } from '../../components/EventCard/EventCard';
 import { ActivityChart } from '../../components/ActivityChart/ActivityChart';
 import { getUniqueValidStates } from '../../utils/stateUtils';
 import { getOrderedMetadataFields } from '../../utils/metadataUtils';
+import { SocialProfile } from '../../components/SocialProfile/SocialProfile';
 import type { EntityDetails, EntityStats, EventSummary, ActorLink, TimeseriesResponse } from '../../api/types';
 
 export const EntityView: React.FC = () => {
@@ -662,6 +663,29 @@ export const EntityView: React.FC = () => {
                             </div>
                           </div>
                         ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Social Profiles Section */}
+              {details.social_profiles && details.social_profiles.length > 0 && (
+                <div className="col-span-12 mt-4">
+                  <div className="card p-6">
+                    <h3 className="text-lg font-semibold mb-4">Social Media Profiles</h3>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {details.social_profiles.map((profile, index) => (
+                        <SocialProfile
+                          key={`${profile.platform}-${profile.username}-${index}`}
+                          platform={profile.platform}
+                          username={profile.username}
+                          url={profile.url}
+                          bio={profile.bio}
+                          followers={profile.followers}
+                          verified={profile.verified}
+                          profile_image={profile.profile_image}
+                        />
+                      ))}
                     </div>
                   </div>
                 </div>

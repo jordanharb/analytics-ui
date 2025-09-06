@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { MapView } from './views/MapView/MapView';
 import { DirectoryView } from './views/DirectoryView/DirectoryView';
 import { EntityView } from './views/EntityView/EntityView';
