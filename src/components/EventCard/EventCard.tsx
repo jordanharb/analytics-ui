@@ -53,27 +53,28 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
     <div className="card card-interactive overflow-hidden">
       {/* Summary Card */}
       <div 
-        className="p-4 cursor-pointer"
+        className="p-4 md:p-6 cursor-pointer touch-manipulation"
         onClick={handleToggleExpand}
+        style={{ minHeight: '64px' }}
       >
         <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 line-clamp-2">
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold text-gray-900 line-clamp-2 text-base md:text-lg">
               {event.name}
             </h3>
-            <div className="mt-1 flex items-center text-sm text-gray-500 space-x-3">
+            <div className="mt-2 flex flex-col sm:flex-row sm:items-center text-xs md:text-sm text-gray-500 space-y-1 sm:space-y-0 sm:space-x-3">
               <span className="flex items-center">
-                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
                 {formatDate(event.date)}
               </span>
               <span className="flex items-center">
-                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                {event.city}, {event.state}
+                <span className="truncate">{event.city}, {event.state}</span>
               </span>
               {event.confidence_score !== undefined && (
                 <span className={`flex items-center font-medium ${
@@ -81,22 +82,23 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                   event.confidence_score >= 0.6 ? 'text-yellow-600' :
                   'text-red-600'
                 }`}>
-                  <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" clipRule="evenodd" />
                     <path fillRule="evenodd" d="M4 5a2 2 0 012-2 1 1 0 000 2H6a2 2 0 100 4h2a2 2 0 100-4h-.5a1 1 0 000-2H8a2 2 0 012 2v10a2 2 0 11-4 0V5z" clipRule="evenodd" />
                   </svg>
-                  {Math.round(event.confidence_score * 100)}%
+                  <span className="whitespace-nowrap">{Math.round(event.confidence_score * 100)}%</span>
                 </span>
               )}
             </div>
             
             {/* Tags */}
             {event.tags && event.tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap" style={{ gap: '0.25rem' }}>
+              <div className="mt-3 flex flex-wrap gap-1.5 md:gap-2">
                 {event.tags.slice(0, 3).map((tag, index) => (
                   <button
                     key={index}
-                    className="badge badge-primary hover:bg-azure-lighter transition-colors cursor-pointer"
+                    className="badge badge-primary hover:bg-azure-lighter transition-colors cursor-pointer touch-manipulation text-xs md:text-sm"
+                    style={{ minHeight: '32px', padding: '4px 8px' }}
                     onClick={(e) => {
                       e.stopPropagation();
                       // Use the full tag format (parent:slug) for navigation
@@ -111,7 +113,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                   </button>
                 ))}
                 {event.tags.length > 3 && (
-                  <span className="badge badge-neutral">
+                  <span className="badge badge-neutral text-xs md:text-sm" style={{ minHeight: '32px', padding: '4px 8px' }}>
                     +{event.tags.length - 3} more
                   </span>
                 )}
@@ -119,9 +121,9 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
             )}
           </div>
           
-          <div className="ml-4">
+          <div className="ml-3 md:ml-4 flex-shrink-0 flex items-center justify-center" style={{ minWidth: '44px', minHeight: '44px' }}>
             <svg
-              className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+              className={`w-5 h-5 md:w-6 md:h-6 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -136,7 +138,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
       {isExpanded && (
         <div className="border-t border-gray-100 bg-snow-150">
           {loadingDetails ? (
-            <div className="p-4">
+            <div className="p-4 md:p-6">
               <div className="space-y-3">
                 <div className="skeleton h-4 rounded w-3/4"></div>
                 <div className="skeleton h-3 rounded w-full"></div>
@@ -144,11 +146,11 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
               </div>
             </div>
           ) : error ? (
-            <div className="p-4">
+            <div className="p-4 md:p-6">
               <p className="text-sm text-danger-500">{error}</p>
             </div>
           ) : details ? (
-            <div className="p-4 space-y-4">
+            <div className="p-4 md:p-6 space-y-4">
               {/* Description */}
               {details.description && (
                 <div>
@@ -168,12 +170,13 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
               {/* Actors */}
               {details.actors && details.actors.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-1">Related Actors</h4>
-                  <div className="flex flex-wrap" style={{ gap: '0.5rem' }}>
+                  <h4 className="text-sm md:text-base font-medium text-gray-700 mb-2">Related Actors</h4>
+                  <div className="flex flex-wrap gap-2">
                     {details.actors.map(actor => (
                       <button
                         key={actor.id}
-                        className="chip hover:bg-violet-100 bg-violet-100 text-violet-500 border-violet-500"
+                        className="chip hover:bg-violet-100 bg-violet-100 text-violet-500 border-violet-500 touch-manipulation text-sm"
+                        style={{ minHeight: '32px', padding: '6px 12px' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           navigate(`/entity/actor/${actor.id}`, {
