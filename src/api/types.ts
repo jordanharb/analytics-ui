@@ -48,6 +48,7 @@ export interface FilterOptions {
   slugs_by_parent?: Record<string, Array<{
     slug: string;
     label: string;
+    count_global: number;
   }>>;
   actor_types?: Array<{
     actor_type: string;

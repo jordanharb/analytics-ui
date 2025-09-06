@@ -55,7 +55,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         // Initialize cluster counts with 0 so cities show immediately
         const initialCounts: Record<string, number> = {};
         cluster.forEach(location => {
-          initialCounts[`${location.city}, ${location.state}`] = 0;
+          const cityName = location.city || 'Statewide';
+          initialCounts[`${cityName}, ${location.state}`] = 0;
         });
         setClusterCounts(initialCounts);
         // Load actual counts asynchronously
@@ -110,7 +111,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           1,
           undefined
         );
-        counts[`${location.city}, ${location.state}`] = response.total_count;
+        const cityName = location.city || 'Statewide';
+        counts[`${cityName}, ${location.state}`] = response.total_count;
       }
       
       setClusterCounts(counts);
@@ -181,9 +183,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     if (showVirtual) {
       return 'Virtual/Non-geocoded Events';
     } else if (selectedCity) {
-      return `${selectedCity.city}, ${selectedCity.state}`;
+      const cityName = selectedCity.city || 'Statewide';
+      return `${cityName}, ${selectedCity.state}`;
     } else if (city) {
-      return `${city.city}, ${city.state}`;
+      const cityName = city.city || 'Statewide';
+      return `${cityName}, ${city.state}`;
     } else if (cluster && cluster.length > 0) {
       return `Cluster: ${cluster.length} Cities`;
     }
@@ -253,11 +257,13 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                         .slice(0, showAllCities ? undefined : 4)
                         .map(([cityKey, count]) => {
                           const [cityName, stateName] = cityKey.split(', ');
+                          // Handle Statewide (convert back to empty string for API)
+                          const actualCity = cityName === 'Statewide' ? '' : cityName;
                           return (
                             <button
                               key={cityKey}
                               onClick={() => {
-                                setSelectedCity({ city: cityName, state: stateName });
+                                setSelectedCity({ city: actualCity, state: stateName });
                                 setEvents([]);
                                 setCursor(undefined);
                                 setHasMore(false);

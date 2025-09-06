@@ -237,9 +237,9 @@ export const MapView: React.FC = () => {
               
               // Extract cities from leaves - these should all be actual points, not sub-clusters
               const cities = (Array.isArray(leafFeatures) ? leafFeatures : []).map((f: any) => ({
-                city: f.properties?.city,
+                city: f.properties?.city || '',
                 state: f.properties?.state
-              })).filter((c: any) => c.city && c.state);
+              })).filter((c: any) => c.state);
               
               console.log('Extracted cities from cluster leaves:', cities);
               callback(cities);
@@ -268,13 +268,21 @@ export const MapView: React.FC = () => {
 
         map.current!.on('click', 'unclustered-point', (e) => {
           const properties = e.features![0].properties;
+          console.log('Unclustered point clicked!', properties);
           
-          if (properties?.city && properties?.state) {
+          // Handle clicks on points, including statewide events (no city)
+          if (properties?.state) {
+            // Keep the original city value (could be null/empty for statewide)
+            const city = properties.city || '';
+            console.log(`Selected: ${city || 'Statewide'}, ${properties.state}`);
+            
             setSelectedCity({
-              city: properties.city,
+              city: city,
               state: properties.state
             });
             setSelectedCluster(null);
+          } else {
+            console.warn('Point clicked but missing state property:', properties);
           }
         });
 

@@ -67,15 +67,17 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
     // Process slugs_by_parent which now includes "Category" as a parent
     if (filterOptions.slugs_by_parent) {
       Object.entries(filterOptions.slugs_by_parent).forEach(([parent, slugs]) => {
-        // Sort by label since count_global is not available in new structure
+        // Sort by count_global descending, then by label
         const sortedSlugs = [...slugs].sort((a, b) => {
+          const countDiff = (b.count_global || 0) - (a.count_global || 0);
+          if (countDiff !== 0) return countDiff;
           return a.label.localeCompare(b.label);
         });
         
         slugsByParent[parent] = sortedSlugs.map(slug => ({
           value: slug.slug,
           label: slug.label,
-          count: 0 // Count not available in new structure
+          count: slug.count_global || 0
         }));
       });
     }
