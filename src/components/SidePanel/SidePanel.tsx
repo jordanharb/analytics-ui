@@ -213,12 +213,12 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       />
       
       {/* Panel */}
-      <div className={`panel fixed right-0 top-16 h-full w-full max-w-lg z-50 ${
+      <div className={`panel fixed right-0 w-full max-w-lg z-50 ${
         isOpen ? 'panel-open' : ''
       }`}>
-        <div className="h-full flex flex-col">
+        <div className="h-full flex flex-col overflow-hidden">
           {/* Header */}
-          <div className="panel-header bg-snow-150 p-4 md:p-6">
+          <div className="panel-header bg-snow-150 p-4 md:p-6 flex-shrink-0 border-b border-gray-200">
             {/* Back button for city view within cluster */}
             {selectedCity && originalCluster && (
               <button
@@ -246,7 +246,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 
                 {/* Cluster city tokens */}
                 {cluster && !selectedCity && Object.keys(clusterCounts).length > 0 && (
-                  <div className="mt-2">
+                  <div className="mt-2 max-h-48 overflow-y-auto">
                     <div className="flex flex-wrap gap-1">
                       {Object.entries(clusterCounts)
                         .sort((a, b) => b[1] - a[1])
@@ -318,7 +318,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </div>
 
           {/* Events List */}
-          <div className="panel-body flex-1 overflow-y-auto">
+          <div className="panel-body flex-1 overflow-y-auto -webkit-overflow-scrolling-touch">
             {error ? (
               <div className="p-6">
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4">
@@ -391,7 +391,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </div>
 
           {/* Footer with export button */}
-          <div className="px-4 md:px-6 py-3 border-t border-gray-200 bg-gray-50">
+          <div className="px-4 md:px-6 py-3 border-t border-gray-200 bg-gray-50 flex-shrink-0">
             <button
               onClick={() => {
                 // Export functionality will be implemented

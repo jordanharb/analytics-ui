@@ -14,7 +14,7 @@ export const DirectoryView: React.FC = () => {
   const [cursor, setCursor] = useState<Cursor | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
-  const [showFilters, setShowFilters] = useState(true);
+  const [showFilters, setShowFilters] = useState(false); // Hidden by default on mobile
   
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -208,7 +208,7 @@ export const DirectoryView: React.FC = () => {
               <div className="text-sm">No events found matching your filters</div>
             </div>
           ) : (
-            <div className="max-w-4xl mx-auto p-3 md:p-6 space-y-2 md:space-y-3">
+            <div className="w-full md:max-w-4xl md:mx-auto p-3 md:p-6 space-y-2 md:space-y-3">
               {events.map((event) => (
                 <EventCard
                   key={event.id}
