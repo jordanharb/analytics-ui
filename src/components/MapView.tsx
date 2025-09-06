@@ -101,7 +101,7 @@ export const MapView: React.FC<MapViewProps> = ({ filters = {} }) => {
             const coordinates = (features[0].geometry as any).coordinates;
             map.current!.easeTo({
               center: coordinates,
-              zoom: zoom
+              zoom: zoom ?? 12
             });
           });
         });

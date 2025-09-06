@@ -47,14 +47,14 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, height = 200
   });
   
   // Create smooth bezier curve path
-  const createSmoothPath = (points: typeof points) => {
-    if (points.length < 2) return '';
+  const createSmoothPath = (pathPoints: Array<{ x: number; y: number; count: number; label: string; date: string }>) => {
+    if (pathPoints.length < 2) return '';
     
-    let path = `M ${points[0].x} ${points[0].y}`;
+    let path = `M ${pathPoints[0].x} ${pathPoints[0].y}`;
     
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const curr = points[i];
+    for (let i = 1; i < pathPoints.length; i++) {
+      const prev = pathPoints[i - 1];
+      const curr = pathPoints[i];
       const cpx = (prev.x + curr.x) / 2;
       path += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`;
     }

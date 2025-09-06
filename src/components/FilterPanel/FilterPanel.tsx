@@ -3,7 +3,6 @@ import { useFiltersStore, filterHelpers } from '../../state/filtersStore';
 import { analyticsClient } from '../../api/analyticsClient';
 import { MultiSelect } from './MultiSelect';
 import { DateRangeFilter } from './DateRangeFilter';
-import type { FilterOptions } from '../../api/types';
 
 interface FilterPanelProps {
   className?: string;
@@ -68,17 +67,15 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
     // Process slugs_by_parent which now includes "Category" as a parent
     if (filterOptions.slugs_by_parent) {
       Object.entries(filterOptions.slugs_by_parent).forEach(([parent, slugs]) => {
-        // Sort by count_global descending, then by label
+        // Sort by label since count_global is not available in new structure
         const sortedSlugs = [...slugs].sort((a, b) => {
-          const countDiff = (b.count_global || 0) - (a.count_global || 0);
-          if (countDiff !== 0) return countDiff;
           return a.label.localeCompare(b.label);
         });
         
         slugsByParent[parent] = sortedSlugs.map(slug => ({
           value: slug.slug,
           label: slug.label,
-          count: slug.count_global || 0
+          count: 0 // Count not available in new structure
         }));
       });
     }
@@ -214,7 +211,6 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
         {Object.entries(dynamicSlugsByParent).map(([parent, slugs]) => {
           // Determine if this is a category or dynamic parent
           const isCategory = parent === 'Category';
-          const isDynamicSlug = parent !== 'Category';
           
           return (
             <MultiSelect

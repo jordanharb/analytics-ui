@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { analyticsClient } from '../../api/analyticsClient';
 import { useFiltersStore } from '../../state/filtersStore';
 import { EventCard } from '../EventCard/EventCard';
-import type { EventsListResponse, EventSummary, Cursor, Filters } from '../../api/types';
+import type { EventSummary, Cursor, Filters } from '../../api/types';
 
 interface SidePanelProps {
   city?: { city: string; state: string } | null;
@@ -127,7 +127,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
     try {
       let target;
-      let displayTarget = null;
       
       if (showVirtual) {
         // For virtual events, use the new virtual target format
@@ -135,13 +134,10 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       } else if (selectedCity) {
         // When a city is selected from cluster, show that city
         target = selectedCity;
-        displayTarget = selectedCity;
       } else if (city) {
         target = city;
-        displayTarget = city;
       } else if (cluster) {
         target = { cities: cluster };
-        displayTarget = cluster;
       } else {
         return;
       }

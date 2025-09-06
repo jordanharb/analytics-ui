@@ -36,7 +36,7 @@ async function debugMapPoints() {
   
   // Test with a date filter
   const dateFilter = {
-    period: 'last_7_days' as const
+    period: 'week' as const
   };
   console.log('\nTesting with date filter:', dateFilter);
   

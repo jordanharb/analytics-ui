@@ -58,7 +58,7 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
   },
   
   applyFilters: () => {
-    const { pendingFilters, networkExpanded } = get();
+    const { pendingFilters } = get();
     set({ 
       filters: pendingFilters, 
       isApplying: true 

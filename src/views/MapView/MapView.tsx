@@ -39,7 +39,7 @@ export const MapView: React.FC = () => {
   const [showVirtualEvents, setShowVirtualEvents] = useState(false);
   const [virtualEventsCount, setVirtualEventsCount] = useState(0);
 
-  const { filters, isApplying, networkExpanded, expandedActorIds, setExpandedActorIds } = useFiltersStore();
+  const { filters, networkExpanded, expandedActorIds, setExpandedActorIds } = useFiltersStore();
   
   // Trigger map resize when filter panel toggles
   useEffect(() => {
@@ -223,7 +223,7 @@ export const MapView: React.FC = () => {
                   const coordinates = (features[0].geometry as any).coordinates;
                   map.current!.easeTo({
                     center: coordinates,
-                    zoom: zoom
+                    zoom: zoom ?? 12
                   });
                 });
                 return;
@@ -257,7 +257,7 @@ export const MapView: React.FC = () => {
                 const coordinates = (features[0].geometry as any).coordinates;
                 map.current!.easeTo({
                   center: coordinates,
-                  zoom: zoom + 1
+                  zoom: (zoom ?? 11) + 1
                 });
               });
             }

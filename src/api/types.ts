@@ -221,4 +221,5 @@ export interface CityTarget {
   city?: string;
   state?: string;
   cities?: Array<{ city: string; state: string }>;
+  virtual?: boolean;
 }
