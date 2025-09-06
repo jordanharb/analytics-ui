@@ -334,72 +334,142 @@ export const MapView: React.FC = () => {
       
       {/* Map Container */}
       <div className="flex-1 relative">
-        {/* Toggle Filters Button (when hidden) */}
-        {!showFilters && (
-          <button
-            onClick={() => setShowFilters(true)}
-            className="absolute top-4 left-4 z-10 bg-white rounded-lg shadow-lg p-3 hover:bg-gray-50 touch-manipulation"
-            style={{ minHeight: '44px', minWidth: '44px' }}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-            </svg>
-          </button>
-        )}
         
-        {/* Search Bar */}
-        <div className="absolute top-4 left-16 md:left-20 right-4 z-10 max-w-md">
-          <SearchBar 
-            placeholder="Search events by topic, description, or context..."
-            className="bg-white rounded-lg shadow-lg text-base md:text-sm"
-          />
+        {/* Mobile: Compact Search + Filter Row */}
+        <div className="absolute top-4 left-4 right-4 z-10 md:hidden">
+          <div className="flex space-x-2">
+            {/* Filter Toggle Button */}
+            {!showFilters && (
+              <button
+                onClick={() => setShowFilters(true)}
+                className="bg-white rounded-lg shadow-lg p-2 hover:bg-gray-50 touch-manipulation flex-shrink-0"
+                style={{ minHeight: '40px', minWidth: '40px' }}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>
+              </button>
+            )}
+            
+            {/* Compact Search Bar */}
+            <div className="flex-1">
+              <SearchBar 
+                placeholder="Search events..."
+                className="bg-white rounded-lg shadow-lg text-sm h-10"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop: Original Layout */}
+        <div className="hidden md:block">
+          {/* Toggle Filters Button (when hidden) */}
+          {!showFilters && (
+            <button
+              onClick={() => setShowFilters(true)}
+              className="absolute top-4 left-4 z-10 bg-white rounded-lg shadow-lg p-3 hover:bg-gray-50 touch-manipulation"
+              style={{ minHeight: '44px', minWidth: '44px' }}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              </svg>
+            </button>
+          )}
+          
+          {/* Search Bar */}
+          <div className="absolute top-4 left-16 md:left-20 right-4 z-10 max-w-md">
+            <SearchBar 
+              placeholder="Search events by topic, description, or context..."
+              className="bg-white rounded-lg shadow-lg text-sm"
+            />
+          </div>
         </div>
         
-        {/* KPI Strip */}
+        {/* Compact Stats Bar - Mobile Collapsible */}
         {mapData && (
-          <div className="absolute top-20 md:top-20 left-4 md:left-20 right-4 md:right-auto z-10 bg-white rounded-lg shadow-lg p-3 md:p-4">
-            <div className="flex flex-wrap md:flex-nowrap space-x-3 md:space-x-6 text-sm md:text-base">
-              <div className="flex-1 md:flex-none">
-                <div className="text-xs md:text-sm text-gray-500">Total Events</div>
-                <div className="text-lg md:text-2xl font-bold">{mapData.total_events.toLocaleString()}</div>
+          <div className="absolute top-16 md:top-20 left-4 md:left-20 right-4 md:right-auto z-10">
+            {/* Mobile: Compact Icons + Numbers */}
+            <div className="md:hidden bg-white rounded-lg shadow-lg px-3 py-2">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-3">
+                  <div className="flex items-center">
+                    <span className="text-blue-600">📊</span>
+                    <span className="ml-1 font-semibold">{mapData.total_events.toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-green-600">🏙️</span>
+                    <span className="ml-1 font-semibold">{mapData.map_points.length}</span>
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-purple-600">📍</span>
+                    <span className="ml-1 font-semibold">
+                      {new Set(mapData.map_points
+                        .map(p => p.state)
+                        .filter(state => VALID_STATE_CODES.has(state))
+                      ).size}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="flex-1 md:flex-none">
-                <div className="text-xs md:text-sm text-gray-500">Cities</div>
-                <div className="text-lg md:text-2xl font-bold">{mapData.map_points.length}</div>
-              </div>
-              <div className="flex-1 md:flex-none">
-                <div className="text-xs md:text-sm text-gray-500">States</div>
-                <div className="text-lg md:text-2xl font-bold">
-                  {new Set(mapData.map_points
-                    .map(p => p.state)
-                    .filter(state => VALID_STATE_CODES.has(state))
-                  ).size}
+            </div>
+            
+            {/* Desktop: Full Stats */}
+            <div className="hidden md:block bg-white rounded-lg shadow-lg p-4">
+              <div className="flex space-x-6 text-base">
+                <div>
+                  <div className="text-sm text-gray-500">Total Events</div>
+                  <div className="text-2xl font-bold">{mapData.total_events.toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500">Cities</div>
+                  <div className="text-2xl font-bold">{mapData.map_points.length}</div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500">States</div>
+                  <div className="text-2xl font-bold">
+                    {new Set(mapData.map_points
+                      .map(p => p.state)
+                      .filter(state => VALID_STATE_CODES.has(state))
+                    ).size}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
         
-        {/* Virtual/Non-geocoded Events Button */}
+        {/* Virtual/Non-geocoded Events Button - Bottom Right on Mobile */}
         {virtualEventsCount > 0 && (
-          <div className="absolute top-4 right-4 z-10">
+          <div className="absolute bottom-4 right-4 md:top-4 md:bottom-auto z-10">
             <button
               onClick={() => {
                 setShowVirtualEvents(true);
                 setSelectedCity(null);
                 setSelectedCluster(null);
               }}
-              className="bg-amber-50 border border-amber-300 text-amber-700 px-3 md:px-4 py-2 rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2 text-sm md:text-base touch-manipulation"
-              style={{ minHeight: '44px' }}
+              className="bg-amber-50 border border-amber-300 text-amber-700 rounded-full md:rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2 touch-manipulation"
+              style={{ minHeight: '44px', minWidth: '44px' }}
             >
-              <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className="font-medium hidden md:inline">Virtual/Non-geocoded</span>
-              <span className="font-medium md:hidden">Virtual</span>
-              <span className="bg-amber-200 text-amber-800 px-2 py-1 rounded-full text-xs font-bold">
-                {virtualEventsCount}
-              </span>
+              {/* Mobile: Icon + Badge Only */}
+              <div className="md:hidden flex items-center justify-center w-10 h-10">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
+                  {virtualEventsCount}
+                </span>
+              </div>
+              
+              {/* Desktop: Full Button */}
+              <div className="hidden md:flex items-center space-x-2 px-4 py-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span className="font-medium">Virtual/Non-geocoded</span>
+                <span className="bg-amber-200 text-amber-800 px-2 py-1 rounded-full text-xs font-bold">
+                  {virtualEventsCount}
+                </span>
+              </div>
             </button>
           </div>
         )}
