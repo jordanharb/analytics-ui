@@ -208,7 +208,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     <>
       {/* Backdrop for mobile */}
       <div
-        className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+        className="fixed inset-0 top-16 bg-black bg-opacity-50 z-40 lg:hidden"
         onClick={onClose}
       />
       
