@@ -50,39 +50,39 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
   };
 
   return (
-    <div className="card card-interactive overflow-hidden">
+    <div className="card card-interactive overflow-hidden w-full">
       {/* Summary Card */}
       <div 
         className="p-3 md:p-4 cursor-pointer touch-manipulation"
         onClick={handleToggleExpand}
         style={{ minHeight: '48px' }}
       >
-        <div className="flex items-start justify-between">
-          <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0 overflow-hidden">
             <h3 className="font-semibold text-gray-900 line-clamp-2 text-sm md:text-base">
               {event.name}
             </h3>
-            <div className="mt-1.5 flex flex-wrap items-center text-xs text-gray-500 gap-2">
-              <span className="flex items-center">
-                <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="mt-1.5 flex flex-wrap items-center text-xs text-gray-500 gap-x-3 gap-y-1">
+              <span className="inline-flex items-center">
+                <svg className="w-3 h-3 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
-                {formatDate(event.date)}
+                <span>{formatDate(event.date)}</span>
               </span>
-              <span className="flex items-center">
-                <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <span className="inline-flex items-center min-w-0">
+                <svg className="w-3 h-3 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
                 <span className="truncate">{event.city}, {event.state}</span>
               </span>
               {event.confidence_score !== undefined && (
-                <span className={`flex items-center font-medium ${
+                <span className={`inline-flex items-center font-medium ${
                   event.confidence_score >= 0.8 ? 'text-green-600' :
                   event.confidence_score >= 0.6 ? 'text-yellow-600' :
                   'text-red-600'
                 }`}>
-                  <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <svg className="w-3 h-3 mr-1 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" clipRule="evenodd" />
                     <path fillRule="evenodd" d="M4 5a2 2 0 012-2 1 1 0 000 2H6a2 2 0 100 4h2a2 2 0 100-4h-.5a1 1 0 000-2H8a2 2 0 012 2v10a2 2 0 11-4 0V5z" clipRule="evenodd" />
                   </svg>
