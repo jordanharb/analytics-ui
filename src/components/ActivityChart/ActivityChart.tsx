@@ -64,6 +64,23 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, height = 200
   
   const pathData = createSmoothPath(points);
 
+  // Check if today's date falls within the chart range and calculate its position
+  const today = new Date();
+  const todayString = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+  const startDate = new Date(data.data_points[0].date);
+  const endDate = new Date(data.data_points[data.data_points.length - 1].date);
+  
+  const todayMarker = (() => {
+    if (today >= startDate && today <= endDate) {
+      // Calculate position as percentage
+      const totalRange = endDate.getTime() - startDate.getTime();
+      const todayOffset = today.getTime() - startDate.getTime();
+      const todayPosition = (todayOffset / totalRange) * 100;
+      return { show: true, x: todayPosition };
+    }
+    return { show: false, x: 0 };
+  })();
+
   // Format Y-axis labels to be cleaner
   const formatYLabel = (value: number) => {
     if (value >= 1000000) {
@@ -161,6 +178,30 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, height = 200
               />
             ))}
           </g>
+          
+          {/* Today marker line if today is in range */}
+          {todayMarker.show && (
+            <g>
+              <line
+                x1={todayMarker.x}
+                y1="0"
+                x2={todayMarker.x}
+                y2="100"
+                stroke="rgb(239, 68, 68)"
+                strokeWidth="1.5"
+                vectorEffect="non-scaling-stroke"
+                opacity="0.8"
+                strokeDasharray="3 3"
+              />
+              <circle
+                cx={todayMarker.x}
+                cy="100"
+                r="2.5"
+                fill="rgb(239, 68, 68)"
+                opacity="0.9"
+              />
+            </g>
+          )}
           
           {/* Area under the line with gradient */}
           <path
@@ -267,6 +308,19 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, height = 200
             </span>
           ))}
         </div>
+        
+        {/* Today marker label */}
+        {todayMarker.show && (
+          <div 
+            className="absolute top-full mt-3 text-[10px] font-bold text-red-500 bg-white px-1 rounded shadow-sm border border-red-200"
+            style={{ 
+              left: `${todayMarker.x}%`, 
+              transform: 'translateX(-50%)' 
+            }}
+          >
+            Today
+          </div>
+        )}
         
         {/* Subtle bottom border */}
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
