@@ -75,11 +75,19 @@
 }
 
 @keyframes fly {
-    from {
+    0% {
         left: -50px; /* Start further off-screen */
+        opacity: 0;
     }
-    to {
+    1% {
+        opacity: 1;
+    }
+    99% {
+        opacity: 1;
+    }
+    100% {
         left: 110%;
+        opacity: 0;
     }
 }
 
@@ -91,19 +99,26 @@
     height: 40px;
     background: radial-gradient(circle, #d4a574, #a16207);
     border-radius: 50%;
-    opacity: 0.3;
     animation: tumble 20s linear infinite;
     z-index: 1;
 }
 
 @keyframes tumble {
-    from {
+    0% {
         left: -60px; /* Start further off-screen */
         transform: rotate(0deg);
+        opacity: 0;
     }
-    to {
+    1% {
+        opacity: 0.3;
+    }
+    99% {
+        opacity: 0.3;
+    }
+    100% {
         left: 110%;
         transform: rotate(720deg);
+        opacity: 0;
     }
 }
 
