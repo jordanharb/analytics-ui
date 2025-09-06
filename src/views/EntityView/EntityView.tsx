@@ -295,40 +295,42 @@ export const EntityView: React.FC = () => {
   );
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto -webkit-overflow-scrolling-touch">
       {/* Header */}
       <div className="bg-white border-b">
-        <div className="px-6 py-4">
+        <div className="px-4 md:px-6 py-3 md:py-4">
             <div className="flex items-start justify-between">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">{details.name}</h1>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl md:text-2xl font-bold text-gray-900 pr-2">{details.name}</h1>
                 {/* Header metadata line */}
                 {metadataFields.length > 0 && (
-                  <div className="mt-2 flex items-center text-sm text-gray-600 space-x-3">
-                    {/* Show key header fields inline */}
-                    {metadataFields
-                      .filter(field => ['actor_type', 'Type'].includes(field.label))
-                      .map(field => (
-                        <span key={field.key} className="capitalize">{field.value}</span>
-                      ))}
-                    {metadataFields
-                      .filter(field => ['City', 'State'].includes(field.label))
-                      .length > 0 && (
-                      <>
-                        <span>•</span>
-                        <span>
-                          {metadataFields.find(f => f.label === 'City')?.value}
-                          {metadataFields.find(f => f.label === 'City') && 
-                           metadataFields.find(f => f.label === 'State') && ', '}
-                          {metadataFields.find(f => f.label === 'State')?.value}
-                        </span>
-                      </>
-                    )}
+                  <div className="mt-2 flex flex-col sm:flex-row sm:items-center text-xs md:text-sm text-gray-600 space-y-1 sm:space-y-0 sm:space-x-3">
+                    {/* Show key header fields */}
+                    <div className="flex items-center space-x-3">
+                      {metadataFields
+                        .filter(field => ['actor_type', 'Type'].includes(field.label))
+                        .map(field => (
+                          <span key={field.key} className="capitalize">{field.value}</span>
+                        ))}
+                      {metadataFields
+                        .filter(field => ['City', 'State'].includes(field.label))
+                        .length > 0 && (
+                        <>
+                          <span className="hidden sm:inline">•</span>
+                          <span>
+                            {metadataFields.find(f => f.label === 'City')?.value}
+                            {metadataFields.find(f => f.label === 'City') && 
+                             metadataFields.find(f => f.label === 'State') && ', '}
+                            {metadataFields.find(f => f.label === 'State')?.value}
+                          </span>
+                        </>
+                      )}
+                    </div>
                     {details.global_count !== undefined && (
-                      <>
-                        <span>•</span>
+                      <div className="flex items-center">
+                        <span className="hidden sm:inline">•</span>
                         <span>{details.global_count.toLocaleString()} total events</span>
-                      </>
+                      </div>
                     )}
                   </div>
                 )}
@@ -349,9 +351,10 @@ export const EntityView: React.FC = () => {
                     navigate(-1);
                   }
                 }}
-                className="ml-4 text-gray-400 hover:text-gray-600"
+                className="ml-2 md:ml-4 text-gray-400 hover:text-gray-600 flex-shrink-0 p-2 hover:bg-gray-100 rounded-lg touch-manipulation"
+                style={{ minHeight: '44px', minWidth: '44px' }}
               >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
@@ -359,18 +362,19 @@ export const EntityView: React.FC = () => {
 
             {/* Usernames for actors */}
             {details.usernames && details.usernames.length > 0 && (
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-3 md:mt-4 flex flex-wrap gap-1.5 md:gap-2">
                 {details.usernames.filter(u => u.handle && u.handle.trim()).map((username, idx) => (
                   <a
                     key={idx}
                     href={username.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-gray-100 hover:bg-gray-200 transition-colors"
+                    className="inline-flex items-center px-2 md:px-3 py-1.5 md:py-1 rounded-full text-xs md:text-sm bg-gray-100 hover:bg-gray-200 transition-colors touch-manipulation"
+                    style={{ minHeight: '32px' }}
                   >
                     <span className="font-medium">{username.platform}</span>
                     <span className="mx-1">:</span>
-                    <span>{username.handle.startsWith('@') ? username.handle : `@${username.handle}`}</span>
+                    <span className="truncate max-w-32 md:max-w-none">{username.handle.startsWith('@') ? username.handle : `@${username.handle}`}</span>
                     {username.is_primary && (
                       <span className="ml-1 text-xs text-amber-600">•</span>
                     )}
@@ -381,41 +385,44 @@ export const EntityView: React.FC = () => {
           </div>
 
           {/* Tabs */}
-          <div className="px-6">
-            <div className="flex space-x-6 border-b">
+          <div className="px-4 md:px-6">
+            <div className="flex space-x-4 md:space-x-6 border-b overflow-x-auto">
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`pb-3 px-1 border-b-2 transition-colors ${
+                className={`pb-3 px-1 md:px-2 border-b-2 transition-colors whitespace-nowrap touch-manipulation text-sm md:text-base ${
                   activeTab === 'overview'
                     ? 'border-blue-600 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
+                style={{ minHeight: '44px' }}
               >
                 Overview
               </button>
               {hasNetwork && (
                 <button
                   onClick={() => setActiveTab('network')}
-                  className={`pb-3 px-1 border-b-2 transition-colors ${
+                  className={`pb-3 px-1 md:px-2 border-b-2 transition-colors whitespace-nowrap touch-manipulation text-sm md:text-base ${
                     activeTab === 'network'
                       ? 'border-blue-600 text-blue-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
+                  style={{ minHeight: '44px' }}
                 >
                   Network
                 </button>
               )}
               <button
                 onClick={() => setActiveTab('events')}
-                className={`pb-3 px-1 border-b-2 transition-colors flex items-center ${
+                className={`pb-3 px-1 md:px-2 border-b-2 transition-colors flex items-center whitespace-nowrap touch-manipulation text-sm md:text-base ${
                   activeTab === 'events'
                     ? 'border-blue-600 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
+                style={{ minHeight: '44px' }}
               >
                 Events
                 {totalEvents > 0 && (
-                  <span className="ml-2 px-2 py-0.5 text-xs bg-gray-100 rounded-full">
+                  <span className="ml-2 px-1.5 md:px-2 py-0.5 text-xs bg-gray-100 rounded-full">
                     {totalEvents.toLocaleString()}
                   </span>
                 )}
@@ -426,15 +433,15 @@ export const EntityView: React.FC = () => {
         </div>
 
         {/* Tab Content */}
-        <div className="p-6">
+        <div className="p-4 md:p-6">
           {activeTab === 'overview' && stats && (
-            <div className="grid grid-cols-12 gap-4">
-              {/* Top Row - Key Stats */}
-              <div className="col-span-3">
-                <div className="card p-4 h-full">
-                  <div className="text-sm text-gray-500">Total Events</div>
-                  <div className="text-3xl font-bold mt-1">{stats.total_count.toLocaleString()}</div>
-                  <div className="text-xs text-gray-400 mt-2">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+              {/* Top Row - Key Stats - Mobile: 2x2, Desktop: 1x4 */}
+              <div className="md:col-span-3">
+                <div className="card p-3 md:p-4 h-full">
+                  <div className="text-xs md:text-sm text-gray-500">Total Events</div>
+                  <div className="text-xl md:text-3xl font-bold mt-1">{stats.total_count.toLocaleString()}</div>
+                  <div className="text-xs text-gray-400 mt-1 md:mt-2">
                     {timeseriesPeriod === 'week' ? 'Past week' :
                      timeseriesPeriod === 'month' ? 'Past month' :
                      timeseriesPeriod === 'year' ? 'Past year' :
@@ -443,118 +450,123 @@ export const EntityView: React.FC = () => {
                 </div>
               </div>
               
-              <div className="col-span-3">
-                <div className="card p-4 h-full">
-                  <div className="text-sm text-gray-500">Geographic Reach</div>
+              <div className="md:col-span-3">
+                <div className="card p-3 md:p-4 h-full">
+                  <div className="text-xs md:text-sm text-gray-500">Geographic Reach</div>
                   <div className="flex items-baseline mt-1">
-                    <div className="text-3xl font-bold">{validStateStats.validCount}</div>
-                    <span className="ml-2 text-lg text-gray-600">states</span>
+                    <div className="text-xl md:text-3xl font-bold">{validStateStats.validCount}</div>
+                    <span className="ml-1 md:ml-2 text-sm md:text-lg text-gray-600">states</span>
                   </div>
-                  <div className="text-xs text-gray-400 mt-2">{stats.by_city.length} cities</div>
+                  <div className="text-xs text-gray-400 mt-1 md:mt-2">{stats.by_city.length} cities</div>
                 </div>
               </div>
               
-              <div className="col-span-3">
-                <div className="card p-4 h-full">
-                  <div className="text-sm text-gray-500">Average Activity</div>
-                  <div className="text-3xl font-bold mt-1">
+              <div className="md:col-span-3">
+                <div className="card p-3 md:p-4 h-full">
+                  <div className="text-xs md:text-sm text-gray-500">Average Activity</div>
+                  <div className="text-xl md:text-3xl font-bold mt-1">
                     {timeseries ? timeseries.summary.average.toFixed(0) : '-'}
                   </div>
-                  <div className="text-xs text-gray-400 mt-2">Events per {timeseries?.granularity || 'period'}</div>
+                  <div className="text-xs text-gray-400 mt-1 md:mt-2">Events per {timeseries?.granularity || 'period'}</div>
                 </div>
               </div>
               
-              <div className="col-span-3">
-                <div className="card p-4 h-full">
-                  <div className="text-sm text-gray-500">Activity Trend</div>
+              <div className="md:col-span-3">
+                <div className="card p-3 md:p-4 h-full">
+                  <div className="text-xs md:text-sm text-gray-500">Activity Trend</div>
                   <div className={`flex items-center mt-1 ${
                     timeseries?.summary.trend === 'increasing' ? 'text-green-600' :
                     timeseries?.summary.trend === 'decreasing' ? 'text-red-600' :
                     'text-gray-600'
                   }`}>
                     {timeseries?.summary.trend === 'increasing' && (
-                      <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                       </svg>
                     )}
                     {timeseries?.summary.trend === 'decreasing' && (
-                      <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
                       </svg>
                     )}
                     {timeseries?.summary.trend === 'stable' && (
-                      <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
                       </svg>
                     )}
-                    <span className="text-2xl font-bold">
+                    <span className="text-xl md:text-2xl font-bold">
                       {timeseries ? (timeseries.summary.trend.charAt(0).toUpperCase() + timeseries.summary.trend.slice(1)) : '-'}
                     </span>
                   </div>
-                  <div className="text-xs text-gray-400 mt-2">
+                  <div className="text-xs text-gray-400 mt-1 md:mt-2">
                     {timeseries && `Peak: ${timeseries.summary.peak_count} on ${new Date(timeseries.summary.peak_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
                   </div>
                 </div>
               </div>
 
               {/* Activity Chart - Full Width */}
-              <div className="col-span-12">
-                <div className="card p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold">Activity Timeline</h3>
-                    <div className="flex space-x-1">
+              <div className="md:col-span-12">
+                <div className="card p-4 md:p-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
+                    <h3 className="text-base md:text-lg font-semibold">Activity Timeline</h3>
+                    <div className="flex overflow-x-auto space-x-1">
                       <button
                         onClick={() => loadTimeseries('week')}
                         disabled={timeseriesLoading}
-                        className={`px-3 py-1.5 text-sm rounded-l transition-colors ${
+                        className={`px-2 md:px-3 py-1.5 text-xs md:text-sm rounded-l transition-colors whitespace-nowrap touch-manipulation ${
                           timeseriesPeriod === 'week' 
                             ? 'bg-blue-600 text-white' 
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
+                        style={{ minHeight: '32px' }}
                       >
                         7 Days
                       </button>
                       <button
                         onClick={() => loadTimeseries('month')}
                         disabled={timeseriesLoading}
-                        className={`px-3 py-1.5 text-sm transition-colors ${
+                        className={`px-2 md:px-3 py-1.5 text-xs md:text-sm transition-colors whitespace-nowrap touch-manipulation ${
                           timeseriesPeriod === 'month' 
                             ? 'bg-blue-600 text-white' 
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
+                        style={{ minHeight: '32px' }}
                       >
                         30 Days
                       </button>
                       <button
                         onClick={() => loadTimeseries('year')}
                         disabled={timeseriesLoading}
-                        className={`px-3 py-1.5 text-sm transition-colors ${
+                        className={`px-2 md:px-3 py-1.5 text-xs md:text-sm transition-colors whitespace-nowrap touch-manipulation ${
                           timeseriesPeriod === 'year' 
                             ? 'bg-blue-600 text-white' 
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
+                        style={{ minHeight: '32px' }}
                       >
                         1 Year
                       </button>
                       <button
                         onClick={() => loadTimeseries('all' as any)}
                         disabled={timeseriesLoading}
-                        className={`px-3 py-1.5 text-sm transition-colors border-l ${
+                        className={`px-2 md:px-3 py-1.5 text-xs md:text-sm transition-colors border-l whitespace-nowrap touch-manipulation ${
                           timeseriesPeriod === 'all' 
                             ? 'bg-blue-600 text-white' 
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
+                        style={{ minHeight: '32px' }}
                       >
                         All Time
                       </button>
                       <button
                         onClick={() => {/* TODO: Add custom date range modal */}}
                         disabled={timeseriesLoading}
-                        className={`px-3 py-1.5 text-sm rounded-r transition-colors ${
+                        className={`px-2 md:px-3 py-1.5 text-xs md:text-sm rounded-r transition-colors whitespace-nowrap touch-manipulation ${
                           false 
                             ? 'bg-blue-600 text-white' 
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
+                        style={{ minHeight: '32px' }}
                       >
                         Custom
                       </button>
@@ -562,13 +574,13 @@ export const EntityView: React.FC = () => {
                   </div>
                   
                   {timeseriesLoading ? (
-                    <div className="h-64 flex items-center justify-center">
+                    <div className="h-48 md:h-64 flex items-center justify-center">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                     </div>
                   ) : timeseries ? (
-                    <ActivityChart data={timeseries} height={240} />
+                    <ActivityChart data={timeseries} height={window.innerWidth < 768 ? 180 : 240} />
                   ) : (
-                    <div className="h-64 flex items-center justify-center text-gray-500">
+                    <div className="h-48 md:h-64 flex items-center justify-center text-gray-500">
                       No activity data available
                     </div>
                   )}
@@ -576,9 +588,9 @@ export const EntityView: React.FC = () => {
               </div>
 
               {/* Geographic Distribution */}
-              <div className="col-span-6">
-                <div className="card p-6 h-full">
-                  <h3 className="text-lg font-semibold mb-4">Top States</h3>
+              <div className="md:col-span-6">
+                <div className="card p-4 md:p-6 h-full">
+                  <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Top States</h3>
                   {validStateStats.validCount > 0 ? (
                     <div className="space-y-2">
                       {Array.from(validStateStats.statesByCode.entries())
@@ -610,9 +622,9 @@ export const EntityView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="col-span-6">
-                <div className="card p-6 h-full">
-                  <h3 className="text-lg font-semibold mb-4">Top Cities</h3>
+              <div className="md:col-span-6">
+                <div className="card p-4 md:p-6 h-full">
+                  <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Top Cities</h3>
                   {stats.by_city.length > 0 ? (
                     <div className="space-y-2">
                       {stats.by_city.slice(0, 8).map((city, idx) => {
@@ -648,10 +660,10 @@ export const EntityView: React.FC = () => {
                   !['About', 'Type', 'City', 'State'].includes(field.label)
                 );
                 return detailsFields.length > 0 && (
-                  <div className="col-span-12 mt-4">
-                    <div className="card p-6">
-                      <h3 className="text-lg font-semibold mb-4">Details</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  <div className="md:col-span-12 mt-4">
+                    <div className="card p-4 md:p-6">
+                      <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Details</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
                         {detailsFields.map(field => (
                           <div key={field.key} className="border-l-2 border-gray-200 pl-3">
                             <div className="text-xs text-gray-500 uppercase tracking-wider">
@@ -670,10 +682,10 @@ export const EntityView: React.FC = () => {
               
               {/* Social Profiles Section */}
               {details.social_profiles && details.social_profiles.length > 0 && (
-                <div className="col-span-12 mt-4">
-                  <div className="card p-6">
-                    <h3 className="text-lg font-semibold mb-4">Social Media Profiles</h3>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="md:col-span-12 mt-4">
+                  <div className="card p-4 md:p-6">
+                    <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Social Media Profiles</h3>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
                       {details.social_profiles.map((profile, index) => (
                         <SocialProfile
                           key={`${profile.platform}-${profile.username}-${index}`}
@@ -711,8 +723,8 @@ export const EntityView: React.FC = () => {
 
           {activeTab === 'events' && (
             <div>
-              <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-lg font-semibold">
+              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between space-y-2 sm:space-y-0">
+                <h3 className="text-base md:text-lg font-semibold">
                   Events ({totalEvents.toLocaleString()})
                 </h3>
                 <button
@@ -749,7 +761,8 @@ export const EntityView: React.FC = () => {
                     }
                   }}
                   disabled={exporting}
-                  className="btn btn-outline btn-sm"
+                  className="btn btn-outline btn-sm touch-manipulation text-xs md:text-sm"
+                  style={{ minHeight: '36px' }}
                 >
                   {exporting ? 'Exporting...' : 'Export CSV'}
                 </button>
@@ -758,7 +771,7 @@ export const EntityView: React.FC = () => {
               {events.length === 0 && !eventsLoading ? (
                 <div className="text-center py-8 text-gray-500">No events found</div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2 md:space-y-3">
                   {events.map(event => (
                     <EventCard
                       key={event.id}
@@ -773,7 +786,8 @@ export const EntityView: React.FC = () => {
                       <button
                         onClick={() => loadEvents()}
                         disabled={eventsLoading}
-                        className="btn btn-outline"
+                        className="btn btn-outline touch-manipulation text-sm md:text-base"
+                        style={{ minHeight: '44px' }}
                       >
                         {eventsLoading ? 'Loading...' : 'Load More'}
                       </button>

@@ -36,9 +36,10 @@ export const MapView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedCity, setSelectedCity] = useState<{ city: string; state: string } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<Array<{ city: string; state: string }> | null>(null);
-  const [showFilters, setShowFilters] = useState(true);
+  const [showFilters, setShowFilters] = useState(false); // Hidden by default on mobile
   const [showVirtualEvents, setShowVirtualEvents] = useState(false);
   const [virtualEventsCount, setVirtualEventsCount] = useState(0);
+  const [showStatsModal, setShowStatsModal] = useState(false);
 
   const { filters, networkExpanded, expandedActorIds, setExpandedActorIds } = useFiltersStore();
   
@@ -319,7 +320,7 @@ export const MapView: React.FC = () => {
       {/* Filter Panel */}
       {showFilters && (
         <FilterPanel 
-          className="w-80 flex-shrink-0 md:relative fixed inset-y-0 left-0 z-40 md:z-10"
+          className="w-80 flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10"
           onClose={() => setShowFilters(false)}
         />
       )}
@@ -327,7 +328,7 @@ export const MapView: React.FC = () => {
       {/* Filter Panel Backdrop (Mobile) */}
       {showFilters && (
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
+          className="fixed inset-0 top-16 bg-black bg-opacity-50 z-30 md:hidden"
           onClick={() => setShowFilters(false)}
         />
       )}
@@ -385,12 +386,16 @@ export const MapView: React.FC = () => {
           </div>
         </div>
         
-        {/* Compact Stats Bar - Mobile Collapsible */}
+        {/* Stats Bar with Virtual Events - Mobile Expandable */}
         {mapData && (
           <div className="absolute top-16 md:top-20 left-4 md:left-20 right-4 md:right-auto z-10">
-            {/* Mobile: Compact Icons + Numbers */}
+            {/* Mobile: Compact Stats + Virtual Button */}
             <div className="md:hidden bg-white rounded-lg shadow-lg px-3 py-2">
-              <div className="flex items-center justify-between text-xs">
+              <button
+                onClick={() => setShowStatsModal(true)}
+                className="w-full flex items-center justify-between text-xs touch-manipulation"
+                style={{ minHeight: '32px' }}
+              >
                 <div className="flex items-center space-x-3">
                   <div className="flex items-center">
                     <span className="text-blue-600">📊</span>
@@ -410,7 +415,30 @@ export const MapView: React.FC = () => {
                     </span>
                   </div>
                 </div>
-              </div>
+                
+                {/* Virtual Events Button + Expand Indicator */}
+                <div className="flex items-center space-x-2">
+                  {virtualEventsCount > 0 && (
+                    <div 
+                      className="flex items-center bg-amber-100 text-amber-700 px-2 py-1 rounded-full"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowVirtualEvents(true);
+                        setSelectedCity(null);
+                        setSelectedCluster(null);
+                      }}
+                    >
+                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                      <span className="text-xs font-bold">{virtualEventsCount}</span>
+                    </div>
+                  )}
+                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </button>
             </div>
             
             {/* Desktop: Full Stats */}
@@ -437,39 +465,126 @@ export const MapView: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Full-Screen Stats Modal (Mobile Only) */}
+        {showStatsModal && (
+          <div className="fixed inset-0 z-50 md:hidden">
+            {/* Backdrop */}
+            <div 
+              className="absolute inset-0 bg-black bg-opacity-50"
+              onClick={() => setShowStatsModal(false)}
+            />
+            
+            {/* Modal Content */}
+            <div className="absolute inset-x-4 top-20 bottom-20 bg-white rounded-lg shadow-xl overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900">Event Statistics</h2>
+                <button
+                  onClick={() => setShowStatsModal(false)}
+                  className="p-2 hover:bg-gray-100 rounded-lg touch-manipulation"
+                  style={{ minHeight: '44px', minWidth: '44px' }}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Stats Content */}
+              <div className="p-6 space-y-6">
+                {/* Main Stats */}
+                <div className="grid grid-cols-1 gap-6">
+                  <div className="bg-blue-50 rounded-lg p-4">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-3">📊</span>
+                      <div>
+                        <div className="text-sm text-blue-600 font-medium">Total Events</div>
+                        <div className="text-3xl font-bold text-blue-800">{mapData?.total_events.toLocaleString()}</div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-green-50 rounded-lg p-4">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-3">🏙️</span>
+                      <div>
+                        <div className="text-sm text-green-600 font-medium">Cities</div>
+                        <div className="text-3xl font-bold text-green-800">{mapData?.map_points.length}</div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-purple-50 rounded-lg p-4">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-3">📍</span>
+                      <div>
+                        <div className="text-sm text-purple-600 font-medium">States</div>
+                        <div className="text-3xl font-bold text-purple-800">
+                          {mapData && new Set(mapData.map_points
+                            .map(p => p.state)
+                            .filter(state => VALID_STATE_CODES.has(state))
+                          ).size}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Virtual Events Section */}
+                {virtualEventsCount > 0 && (
+                  <div className="pt-4 border-t border-gray-200">
+                    <h3 className="text-sm font-medium text-gray-700 mb-3">Additional Events</h3>
+                    <button
+                      onClick={() => {
+                        setShowVirtualEvents(true);
+                        setSelectedCity(null);
+                        setSelectedCluster(null);
+                        setShowStatsModal(false);
+                      }}
+                      className="w-full bg-amber-50 border border-amber-300 text-amber-700 p-4 rounded-lg hover:bg-amber-100 transition-colors touch-manipulation"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center">
+                          <svg className="w-6 h-6 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          <div className="text-left">
+                            <div className="font-medium">Virtual/Non-geocoded Events</div>
+                            <div className="text-sm text-amber-600">Events without location data</div>
+                          </div>
+                        </div>
+                        <span className="bg-amber-200 text-amber-800 px-3 py-1 rounded-full text-sm font-bold">
+                          {virtualEventsCount}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         
-        {/* Virtual/Non-geocoded Events Button - Bottom Right on Mobile */}
+        {/* Desktop Virtual/Non-geocoded Events Button */}
         {virtualEventsCount > 0 && (
-          <div className="absolute bottom-4 right-4 md:top-4 md:bottom-auto z-10">
+          <div className="absolute top-4 right-4 z-10 hidden md:block">
             <button
               onClick={() => {
                 setShowVirtualEvents(true);
                 setSelectedCity(null);
                 setSelectedCluster(null);
               }}
-              className="bg-amber-50 border border-amber-300 text-amber-700 rounded-full md:rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2 touch-manipulation"
-              style={{ minHeight: '44px', minWidth: '44px' }}
+              className="bg-amber-50 border border-amber-300 text-amber-700 rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2 touch-manipulation px-4 py-2"
+              style={{ minHeight: '44px' }}
             >
-              {/* Mobile: Icon + Badge Only */}
-              <div className="md:hidden flex items-center justify-center w-10 h-10">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
-                  {virtualEventsCount}
-                </span>
-              </div>
-              
-              {/* Desktop: Full Button */}
-              <div className="hidden md:flex items-center space-x-2 px-4 py-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                <span className="font-medium">Virtual/Non-geocoded</span>
-                <span className="bg-amber-200 text-amber-800 px-2 py-1 rounded-full text-xs font-bold">
-                  {virtualEventsCount}
-                </span>
-              </div>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              <span className="font-medium">Virtual/Non-geocoded</span>
+              <span className="bg-amber-200 text-amber-800 px-2 py-1 rounded-full text-xs font-bold">
+                {virtualEventsCount}
+              </span>
             </button>
           </div>
         )}

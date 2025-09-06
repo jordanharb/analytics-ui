@@ -53,16 +53,16 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
     <div className="card card-interactive overflow-hidden">
       {/* Summary Card */}
       <div 
-        className="p-4 md:p-6 cursor-pointer touch-manipulation"
+        className="p-3 md:p-4 cursor-pointer touch-manipulation"
         onClick={handleToggleExpand}
-        style={{ minHeight: '64px' }}
+        style={{ minHeight: '48px' }}
       >
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-gray-900 line-clamp-2 text-base md:text-lg">
+            <h3 className="font-semibold text-gray-900 line-clamp-2 text-sm md:text-base">
               {event.name}
             </h3>
-            <div className="mt-2 flex flex-col sm:flex-row sm:items-center text-xs md:text-sm text-gray-500 space-y-1 sm:space-y-0 sm:space-x-3">
+            <div className="mt-1.5 flex flex-col sm:flex-row sm:items-center text-xs text-gray-500 space-y-1 sm:space-y-0 sm:space-x-2">
               <span className="flex items-center">
                 <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -93,12 +93,12 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
             
             {/* Tags */}
             {event.tags && event.tags.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-1.5 md:gap-2">
+              <div className="mt-2 flex flex-wrap gap-1">
                 {event.tags.slice(0, 3).map((tag, index) => (
                   <button
                     key={index}
-                    className="badge badge-primary hover:bg-azure-lighter transition-colors cursor-pointer touch-manipulation text-xs md:text-sm"
-                    style={{ minHeight: '32px', padding: '4px 8px' }}
+                    className="badge badge-primary hover:bg-azure-lighter transition-colors cursor-pointer touch-manipulation text-xs"
+                    style={{ minHeight: '24px', padding: '2px 6px' }}
                     onClick={(e) => {
                       e.stopPropagation();
                       // Use the full tag format (parent:slug) for navigation
@@ -113,17 +113,17 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                   </button>
                 ))}
                 {event.tags.length > 3 && (
-                  <span className="badge badge-neutral text-xs md:text-sm" style={{ minHeight: '32px', padding: '4px 8px' }}>
-                    +{event.tags.length - 3} more
+                  <span className="badge badge-neutral text-xs" style={{ minHeight: '24px', padding: '2px 6px' }}>
+                    +{event.tags.length - 3}
                   </span>
                 )}
               </div>
             )}
           </div>
           
-          <div className="ml-3 md:ml-4 flex-shrink-0 flex items-center justify-center" style={{ minWidth: '44px', minHeight: '44px' }}>
+          <div className="ml-2 md:ml-3 flex-shrink-0 flex items-center justify-center" style={{ minWidth: '32px', minHeight: '32px' }}>
             <svg
-              className={`w-5 h-5 md:w-6 md:h-6 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+              className={`w-4 h-4 md:w-5 md:h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -138,7 +138,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
       {isExpanded && (
         <div className="border-t border-gray-100 bg-snow-150">
           {loadingDetails ? (
-            <div className="p-4 md:p-6">
+            <div className="p-3 md:p-4">
               <div className="space-y-3">
                 <div className="skeleton h-4 rounded w-3/4"></div>
                 <div className="skeleton h-3 rounded w-full"></div>
@@ -146,37 +146,37 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
               </div>
             </div>
           ) : error ? (
-            <div className="p-4 md:p-6">
-              <p className="text-sm text-danger-500">{error}</p>
+            <div className="p-3 md:p-4">
+              <p className="text-xs md:text-sm text-danger-500">{error}</p>
             </div>
           ) : details ? (
-            <div className="p-4 md:p-6 space-y-4">
+            <div className="p-3 md:p-4 space-y-3">
               {/* Description */}
               {details.description && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-1">Description</h4>
-                  <p className="text-sm text-gray-600">{details.description}</p>
+                  <h4 className="text-xs md:text-sm font-medium text-gray-700 mb-1">Description</h4>
+                  <p className="text-xs md:text-sm text-gray-600">{details.description}</p>
                 </div>
               )}
 
               {/* AI Justification */}
               {details.ai_justification && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-1">AI Analysis</h4>
-                  <p className="text-sm text-gray-600 italic">{details.ai_justification}</p>
+                  <h4 className="text-xs md:text-sm font-medium text-gray-700 mb-1">AI Analysis</h4>
+                  <p className="text-xs md:text-sm text-gray-600 italic">{details.ai_justification}</p>
                 </div>
               )}
 
               {/* Actors */}
               {details.actors && details.actors.length > 0 && (
                 <div>
-                  <h4 className="text-sm md:text-base font-medium text-gray-700 mb-2">Related Actors</h4>
-                  <div className="flex flex-wrap gap-2">
+                  <h4 className="text-xs md:text-sm font-medium text-gray-700 mb-2">Related Actors</h4>
+                  <div className="flex flex-wrap gap-1.5">
                     {details.actors.map(actor => (
                       <button
                         key={actor.id}
-                        className="chip hover:bg-violet-100 bg-violet-100 text-violet-500 border-violet-500 touch-manipulation text-sm"
-                        style={{ minHeight: '32px', padding: '6px 12px' }}
+                        className="chip hover:bg-violet-100 bg-violet-100 text-violet-500 border-violet-500 touch-manipulation text-xs"
+                        style={{ minHeight: '28px', padding: '4px 8px' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           navigate(`/entity/actor/${actor.id}`, {
@@ -184,7 +184,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                           });
                         }}
                       >
-                        <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                        <svg className="w-2.5 h-2.5 mr-1" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
                         </svg>
                         {actor.name}
@@ -197,14 +197,14 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
               {/* Social Media Posts */}
               {details.posts && details.posts.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">
+                  <h4 className="text-xs md:text-sm font-medium text-gray-700 mb-2">
                     Source Posts ({details.posts.length})
                   </h4>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
                     {details.posts.map(post => (
                       <div
                         key={post.id}
-                        className="card p-3 bg-white"
+                        className="card p-2 md:p-3 bg-white"
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">

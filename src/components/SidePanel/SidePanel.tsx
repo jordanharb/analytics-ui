@@ -213,12 +213,12 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       />
       
       {/* Panel */}
-      <div className={`panel fixed right-0 top-0 h-full w-full max-w-lg ${
+      <div className={`panel fixed right-0 top-16 h-full w-full max-w-lg z-50 ${
         isOpen ? 'panel-open' : ''
       }`}>
         <div className="h-full flex flex-col">
           {/* Header */}
-          <div className="panel-header bg-snow-150">
+          <div className="panel-header bg-snow-150 p-4 md:p-6">
             {/* Back button for city view within cluster */}
             {selectedCity && originalCluster && (
               <button
@@ -246,11 +246,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 
                 {/* Cluster city tokens */}
                 {cluster && !selectedCity && Object.keys(clusterCounts).length > 0 && (
-                  <div className="mt-3">
-                    <div className="flex flex-wrap gap-2">
+                  <div className="mt-2">
+                    <div className="flex flex-wrap gap-1">
                       {Object.entries(clusterCounts)
                         .sort((a, b) => b[1] - a[1])
-                        .slice(0, showAllCities ? undefined : 5)
+                        .slice(0, showAllCities ? undefined : 4)
                         .map(([cityKey, count]) => {
                           const [cityName, stateName] = cityKey.split(', ');
                           return (
@@ -263,16 +263,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                                 setHasMore(false);
                                 loadEvents(true);
                               }}
-                              className="inline-flex items-center px-3 py-1.5 rounded-full text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors"
+                              className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors touch-manipulation"
+                              style={{ minHeight: '28px' }}
                             >
                               <span className="font-medium">{cityName}</span>
                               {count === 0 ? (
-                                <span className="ml-2 px-2 py-0.5 bg-blue-100 rounded-full text-xs">
+                                <span className="ml-1 px-1.5 py-0.5 bg-blue-100 rounded-full text-xs">
                                   <span className="inline-block animate-pulse">...</span>
                                 </span>
                               ) : (
-                                <span className="ml-2 px-2 py-0.5 bg-blue-200 rounded-full text-xs font-bold">
-                                  {count.toLocaleString()}
+                                <span className="ml-1 px-1.5 py-0.5 bg-blue-200 rounded-full text-xs font-bold">
+                                  {count}
                                 </span>
                               )}
                             </button>
@@ -281,14 +282,15 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                     
                     {/* Show more/less toggle */}
-                    {Object.keys(clusterCounts).length > 5 && (
+                    {Object.keys(clusterCounts).length > 4 && (
                       <button
                         onClick={() => setShowAllCities(!showAllCities)}
-                        className="mt-2 text-sm text-blue-600 hover:text-blue-800"
+                        className="mt-1.5 text-xs text-blue-600 hover:text-blue-800 touch-manipulation"
+                        style={{ minHeight: '32px' }}
                       >
                         {showAllCities 
                           ? 'Show less' 
-                          : `Show ${Object.keys(clusterCounts).length - 5} more cities`
+                          : `+${Object.keys(clusterCounts).length - 4} more`
                         }
                       </button>
                     )}
@@ -316,7 +318,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </div>
 
           {/* Events List */}
-          <div className="panel-body">
+          <div className="panel-body flex-1 overflow-y-auto">
             {error ? (
               <div className="p-6">
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4">
@@ -334,7 +336,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 <p className="text-center text-gray-500">No events found</p>
               </div>
             ) : (
-              <div className="p-4 space-y-3">
+              <div className="p-2 md:p-4 space-y-2">
                 {events.map((event) => (
                   <EventCard
                     key={event.id}
@@ -355,11 +357,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 
                 {/* Initial loading */}
                 {loading && events.length === 0 && (
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {[1, 2, 3].map(i => (
-                      <div key={i} className="bg-white border border-gray-200 rounded-lg p-4 animate-pulse">
-                        <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                        <div className="h-3 bg-gray-200 rounded w-1/2 mb-2"></div>
+                      <div key={i} className="bg-white border border-gray-200 rounded-lg p-3 animate-pulse">
+                        <div className="h-3 bg-gray-200 rounded w-3/4 mb-2"></div>
+                        <div className="h-3 bg-gray-200 rounded w-1/2 mb-1"></div>
                         <div className="h-3 bg-gray-200 rounded w-full"></div>
                       </div>
                     ))}
@@ -389,13 +391,13 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </div>
 
           {/* Footer with export button */}
-          <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+          <div className="px-4 md:px-6 py-3 border-t border-gray-200 bg-gray-50">
             <button
               onClick={() => {
                 // Export functionality will be implemented
                 console.log('Export events for', city || cluster);
               }}
-              className="btn-primary w-full flex items-center justify-center"
+              className="btn-primary w-full flex items-center justify-center text-sm"
             >
               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

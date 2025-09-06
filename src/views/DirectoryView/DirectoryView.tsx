@@ -130,14 +130,14 @@ export const DirectoryView: React.FC = () => {
     <div className="h-full flex">
       {/* Filter Panel */}
       <FilterPanel 
-        className={`${showFilters ? 'w-80' : 'w-0'} md:relative fixed inset-y-0 left-0 z-40 md:z-10 transition-all duration-300 overflow-hidden flex-shrink-0`}
+        className={`${showFilters ? 'w-80' : 'w-0'} md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 transition-all duration-300 overflow-hidden flex-shrink-0`}
         onClose={() => setShowFilters(false)}
       />
       
       {/* Filter Panel Backdrop (Mobile) */}
       {showFilters && (
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
+          className="fixed inset-0 top-16 bg-black bg-opacity-50 z-30 md:hidden"
           onClick={() => setShowFilters(false)}
         />
       )}
@@ -145,14 +145,14 @@ export const DirectoryView: React.FC = () => {
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
-        <div className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 md:py-4">
+        <div className="bg-white border-b border-gray-200 px-3 md:px-6 py-2 md:py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3 md:space-x-4 flex-1 min-w-0">
               {!showFilters && (
                 <button
                   onClick={() => setShowFilters(true)}
                   className="p-2 hover:bg-gray-100 rounded-lg touch-manipulation flex-shrink-0"
-                  style={{ minHeight: '44px', minWidth: '44px' }}
+                  style={{ minHeight: '40px', minWidth: '40px' }}
                 >
                   <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -160,16 +160,16 @@ export const DirectoryView: React.FC = () => {
                 </button>
               )}
               <div className="min-w-0 flex-1">
-                <h1 className="text-lg md:text-xl font-semibold text-gray-900 truncate">Event Directory</h1>
-                <p className="text-xs md:text-sm text-gray-500">
-                  {totalCount.toLocaleString()} total events
+                <h1 className="text-base md:text-xl font-semibold text-gray-900 truncate">Event Directory</h1>
+                <p className="text-xs text-gray-500">
+                  {totalCount.toLocaleString()} events
                 </p>
               </div>
             </div>
             <button
               onClick={handleExport}
-              className="px-3 md:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center touch-manipulation text-sm md:text-base flex-shrink-0"
-              style={{ minHeight: '44px' }}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center touch-manipulation text-xs md:text-base flex-shrink-0"
+              style={{ minHeight: '36px' }}
             >
               <svg className="w-4 h-4 md:w-5 md:h-5 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -181,17 +181,17 @@ export const DirectoryView: React.FC = () => {
         </div>
         
         {/* Search Bar */}
-        <div className="bg-white border-b border-gray-200 px-4 md:px-6 py-3">
+        <div className="bg-white border-b border-gray-200 px-3 md:px-6 py-2">
           <SearchBar 
             placeholder="Search events by topic, description, or context..."
-            className="max-w-full md:max-w-2xl text-base md:text-sm"
+            className="max-w-full md:max-w-2xl text-sm"
           />
         </div>
 
         {/* Events List */}
         <div className="flex-1 overflow-y-auto bg-gray-50 -webkit-overflow-scrolling-touch">
           {error ? (
-            <div className="p-4 md:p-6">
+            <div className="p-3 md:p-6">
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                 <p className="text-sm text-red-700">{error}</p>
                 <button
@@ -204,11 +204,11 @@ export const DirectoryView: React.FC = () => {
               </div>
             </div>
           ) : events.length === 0 && !loading ? (
-            <div className="p-4 md:p-6 text-center text-gray-500">
-              <div className="text-sm md:text-base">No events found matching your filters</div>
+            <div className="p-3 md:p-6 text-center text-gray-500">
+              <div className="text-sm">No events found matching your filters</div>
             </div>
           ) : (
-            <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-3 md:space-y-4">
+            <div className="max-w-4xl mx-auto p-3 md:p-6 space-y-2 md:space-y-3">
               {events.map((event) => (
                 <EventCard
                   key={event.id}
@@ -222,20 +222,20 @@ export const DirectoryView: React.FC = () => {
               
               {/* Loading indicator */}
               {loading && events.length > 0 && hasMore && (
-                <div className="py-6 md:py-8 text-center">
-                  <div className="inline-block animate-spin rounded-full h-6 w-6 md:h-8 md:w-8 border-b-2 border-blue-600"></div>
-                  <p className="mt-2 text-sm text-gray-600">Loading more events...</p>
+                <div className="py-4 md:py-8 text-center">
+                  <div className="inline-block animate-spin rounded-full h-5 w-5 md:h-8 md:w-8 border-b-2 border-blue-600"></div>
+                  <p className="mt-1 text-xs md:text-sm text-gray-600">Loading more events...</p>
                 </div>
               )}
               
               {/* Initial loading */}
               {loading && events.length === 0 && (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {[1, 2, 3, 4, 5].map(i => (
-                    <div key={i} className="bg-white border border-gray-200 rounded-lg p-6 animate-pulse">
-                      <div className="h-5 bg-gray-200 rounded w-3/4 mb-3"></div>
-                      <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-                      <div className="h-4 bg-gray-200 rounded w-full"></div>
+                    <div key={i} className="bg-white border border-gray-200 rounded-lg p-4 animate-pulse">
+                      <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                      <div className="h-3 bg-gray-200 rounded w-1/2 mb-1"></div>
+                      <div className="h-3 bg-gray-200 rounded w-full"></div>
                     </div>
                   ))}
                 </div>
@@ -243,7 +243,7 @@ export const DirectoryView: React.FC = () => {
               
               {/* Load more trigger */}
               {hasMore && !loading && (
-                <div ref={loadMoreRef} className="py-8 text-center">
+                <div ref={loadMoreRef} className="py-4 md:py-8 text-center">
                   <button
                     onClick={() => loadEvents(false)}
                     className="text-blue-600 hover:text-blue-800 font-medium"
@@ -255,9 +255,9 @@ export const DirectoryView: React.FC = () => {
               
               {/* End of list */}
               {!hasMore && events.length > 0 && (
-                <div className="py-8 text-center text-gray-500">
-                  <p>End of results</p>
-                  <p className="text-sm mt-1">Showing all {events.length} of {totalCount} events</p>
+                <div className="py-4 md:py-8 text-center text-gray-500">
+                  <p className="text-sm">End of results</p>
+                  <p className="text-xs mt-1">Showing all {events.length} of {totalCount} events</p>
                 </div>
               )}
             </div>
