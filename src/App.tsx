@@ -10,7 +10,7 @@ function AppContent() {
   const isLaunchPage = location.pathname === '/';
 
   return (
-    <div className="w-screen h-screen">
+    <div className="w-full h-screen overflow-x-hidden">
       <div className="h-full flex flex-col">
         {/* Only show Header on non-launch pages */}
         {!isLaunchPage && <Header />}

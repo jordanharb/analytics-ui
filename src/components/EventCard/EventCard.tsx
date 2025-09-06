@@ -62,7 +62,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
             <h3 className="font-semibold text-gray-900 line-clamp-2 text-sm md:text-base">
               {event.name}
             </h3>
-            <div className="mt-1.5 flex flex-col sm:flex-row sm:items-center text-xs text-gray-500 space-y-1 sm:space-y-0 sm:space-x-2">
+            <div className="mt-1.5 flex flex-wrap items-center text-xs text-gray-500 gap-2">
               <span className="flex items-center">
                 <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -86,7 +86,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                     <path fillRule="evenodd" d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" clipRule="evenodd" />
                     <path fillRule="evenodd" d="M4 5a2 2 0 012-2 1 1 0 000 2H6a2 2 0 100 4h2a2 2 0 100-4h-.5a1 1 0 000-2H8a2 2 0 012 2v10a2 2 0 11-4 0V5z" clipRule="evenodd" />
                   </svg>
-                  <span className="whitespace-nowrap">{Math.round(event.confidence_score * 100)}%</span>
+                  <span>{Math.round(event.confidence_score * 100)}%</span>
                 </span>
               )}
             </div>
@@ -121,7 +121,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
             )}
           </div>
           
-          <div className="ml-2 md:ml-3 flex-shrink-0 flex items-center justify-center" style={{ minWidth: '32px', minHeight: '32px' }}>
+          <div className="ml-2 md:ml-3 flex-shrink-0 flex items-center justify-center" style={{ minHeight: '32px' }}>
             <svg
               className={`w-4 h-4 md:w-5 md:h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
               fill="none"
@@ -208,7 +208,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
-                            <div className="flex items-center space-x-2 text-xs text-gray-500">
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                               <span className="font-medium">{post.platform}</span>
                               <span>•</span>
                               <span>@{post.author_handle}</span>
@@ -225,7 +225,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
                                 className="mt-2 rounded max-h-32 object-cover"
                               />
                             )}
-                            <div className="mt-2 flex items-center space-x-4 text-xs text-gray-500">
+                            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-500">
                               {post.like_count !== undefined && (
                                 <span>❤️ {post.like_count}</span>
                               )}
