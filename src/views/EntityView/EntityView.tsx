@@ -54,17 +54,16 @@ export const EntityView: React.FC = () => {
       setError(null);
       
       try {
-        // For entity view, use global filters but with period from the timeseriesPeriod
-        // This respects both state filters and selected timeframe
-        const entityFilters = { 
-          ...filters,
+        // For entity details, just get base entity info (no filtering)
+        // For stats and timeseries, only apply the selected time period
+        const entityOnlyFilters = { 
           period: timeseriesPeriod 
         };
         
         const [detailsData, statsData, timeseriesData] = await Promise.all([
           analyticsClient.getEntityDetails(entityType as any, entityId),
-          analyticsClient.getEntityStats(entityType as any, entityId, entityFilters),
-          analyticsClient.getEntityTimeseries(entityType as any, entityId, entityFilters, timeseriesPeriod)
+          analyticsClient.getEntityStats(entityType as any, entityId, entityOnlyFilters),
+          analyticsClient.getEntityTimeseries(entityType as any, entityId, entityOnlyFilters, timeseriesPeriod)
         ]);
         
         setDetails(detailsData);
@@ -79,7 +78,7 @@ export const EntityView: React.FC = () => {
     };
     
     loadDetails();
-  }, [entityType, entityId, filters, timeseriesPeriod]); // Reload when filters or timeframe change
+  }, [entityType, entityId, timeseriesPeriod]); // Only reload when entity or timeframe change
 
   // Load events
   const loadEvents = useCallback(async (isInitial = false) => {
@@ -643,17 +642,17 @@ export const EntityView: React.FC = () => {
               </div>
               
               {/* Metadata Details Section */}
-              {metadataFields.length > 0 && (
-                <div className="col-span-12 mt-4">
-                  <div className="card p-6">
-                    <h3 className="text-lg font-semibold mb-4">Details</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                      {metadataFields
-                        .filter(field => 
-                          // Don't show fields already displayed in header or as primary stats
-                          !['About', 'Type', 'City', 'State'].includes(field.label)
-                        )
-                        .map(field => (
+              {(() => {
+                const detailsFields = metadataFields.filter(field => 
+                  // Don't show fields already displayed in header or as primary stats
+                  !['About', 'Type', 'City', 'State'].includes(field.label)
+                );
+                return detailsFields.length > 0 && (
+                  <div className="col-span-12 mt-4">
+                    <div className="card p-6">
+                      <h3 className="text-lg font-semibold mb-4">Details</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                        {detailsFields.map(field => (
                           <div key={field.key} className="border-l-2 border-gray-200 pl-3">
                             <div className="text-xs text-gray-500 uppercase tracking-wider">
                               {field.label}
@@ -663,10 +662,11 @@ export const EntityView: React.FC = () => {
                             </div>
                           </div>
                         ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
               
               {/* Social Profiles Section */}
               {details.social_profiles && details.social_profiles.length > 0 && (
