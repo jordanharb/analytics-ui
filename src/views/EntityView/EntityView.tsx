@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { analyticsClient } from '../../api/analyticsClient';
 import { useFiltersStore } from '../../state/filtersStore';
 import { EventCard } from '../../components/EventCard/EventCard';
 import { ActivityChart } from '../../components/ActivityChart/ActivityChart';
+import { getUniqueValidStates } from '../../utils/stateUtils';
+import { getOrderedMetadataFields } from '../../utils/metadataUtils';
 import type { EntityDetails, EntityStats, EventSummary, ActorLink, TimeseriesResponse } from '../../api/types';
 
 export const EntityView: React.FC = () => {
@@ -28,6 +30,20 @@ export const EntityView: React.FC = () => {
   const [timeseriesPeriod, setTimeseriesPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
 
+  // Calculate valid state count, handling duplicates and invalid entries
+  // Must be called before any conditional returns to follow React hooks rules
+  const validStateStats = useMemo(() => {
+    if (!stats?.by_state) return { validCount: 0, statesByCode: new Map() };
+    return getUniqueValidStates(stats.by_state);
+  }, [stats]);
+  
+  // Get ordered metadata fields for display
+  // Must be called before any conditional returns to follow React hooks rules
+  const metadataFields = useMemo(() => {
+    if (!details?.metadata) return [];
+    return getOrderedMetadataFields(details.metadata);
+  }, [details?.metadata]);
+
   // Load entity details
   useEffect(() => {
     if (!entityType || !entityId) return;
@@ -37,13 +53,17 @@ export const EntityView: React.FC = () => {
       setError(null);
       
       try {
-        // For entity view, use all-time stats and independent timeseries
-        const allTimeFilters = { period: 'all' as const };
+        // For entity view, use global filters but with period from the timeseriesPeriod
+        // This respects both state filters and selected timeframe
+        const entityFilters = { 
+          ...filters,
+          period: timeseriesPeriod 
+        };
         
         const [detailsData, statsData, timeseriesData] = await Promise.all([
           analyticsClient.getEntityDetails(entityType as any, entityId),
-          analyticsClient.getEntityStats(entityType as any, entityId, allTimeFilters),
-          analyticsClient.getEntityTimeseries(entityType as any, entityId, allTimeFilters, 'month')
+          analyticsClient.getEntityStats(entityType as any, entityId, entityFilters),
+          analyticsClient.getEntityTimeseries(entityType as any, entityId, entityFilters, timeseriesPeriod)
         ]);
         
         setDetails(detailsData);
@@ -58,7 +78,7 @@ export const EntityView: React.FC = () => {
     };
     
     loadDetails();
-  }, [entityType, entityId]); // Don't reload on filter changes
+  }, [entityType, entityId, filters, timeseriesPeriod]); // Reload when filters or timeframe change
 
   // Load events
   const loadEvents = useCallback(async (isInitial = false) => {
@@ -67,22 +87,30 @@ export const EntityView: React.FC = () => {
     setEventsLoading(true);
     
     try {
-      // Don't use global filters for entity events - show all events
-      const allTimeFilters = { period: 'all' as const };
+      // Use global filters but with all-time period for entity events
+      const entityFilters = { 
+        ...filters,
+        period: 'all' as const 
+      };
       
       const response = await analyticsClient.getEntityEvents(
         entityType as any,
         entityId,
-        allTimeFilters,
+        entityFilters,
         50,
         isInitial ? undefined : cursor
       );
       
-      // Dedupe events
+      // Dedupe and sort events chronologically (newest first)
       const newEvents = isInitial ? response.events : [...events, ...response.events];
       const uniqueEvents = Array.from(
         new Map(newEvents.map(e => [e.id, e])).values()
-      );
+      ).sort((a, b) => {
+        // Sort by date descending (newest first)
+        const dateA = new Date(a.date).getTime();
+        const dateB = new Date(b.date).getTime();
+        return dateB - dateA;
+      });
       
       setEvents(uniqueEvents);
       setTotalEvents(response.total_count);
@@ -93,12 +121,12 @@ export const EntityView: React.FC = () => {
     } finally {
       setEventsLoading(false);
     }
-  }, [entityType, entityId, cursor, events, eventsLoading]); // Don't depend on filters
+  }, [entityType, entityId, cursor, events, eventsLoading, filters]); // Include filters in dependencies
 
-  // Initial events load
+  // Initial events load and reload when filters change
   useEffect(() => {
     loadEvents(true);
-  }, [entityType, entityId]); // Don't reload on filter changes
+  }, [entityType, entityId, filters]); // Reload when filters change
 
   const handleToggleExpand = (eventId: string) => {
     setExpandedEvents(prev => {
@@ -274,17 +302,25 @@ export const EntityView: React.FC = () => {
             <div className="flex items-start justify-between">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">{details.name}</h1>
-                {details.metadata && (
+                {/* Header metadata line */}
+                {metadataFields.length > 0 && (
                   <div className="mt-2 flex items-center text-sm text-gray-600 space-x-3">
-                    {details.metadata.actor_type && (
-                      <span className="capitalize">{details.metadata.actor_type}</span>
-                    )}
-                    {(details.metadata.city || details.metadata.state) && (
+                    {/* Show key header fields inline */}
+                    {metadataFields
+                      .filter(field => ['actor_type', 'Type'].includes(field.label))
+                      .map(field => (
+                        <span key={field.key} className="capitalize">{field.value}</span>
+                      ))}
+                    {metadataFields
+                      .filter(field => ['City', 'State'].includes(field.label))
+                      .length > 0 && (
                       <>
                         <span>•</span>
                         <span>
-                          {details.metadata.city && `${details.metadata.city}, `}
-                          {details.metadata.state}
+                          {metadataFields.find(f => f.label === 'City')?.value}
+                          {metadataFields.find(f => f.label === 'City') && 
+                           metadataFields.find(f => f.label === 'State') && ', '}
+                          {metadataFields.find(f => f.label === 'State')?.value}
                         </span>
                       </>
                     )}
@@ -296,8 +332,11 @@ export const EntityView: React.FC = () => {
                     )}
                   </div>
                 )}
-                {details.metadata?.about && (
-                  <p className="mt-3 text-gray-700">{details.metadata.about}</p>
+                {/* About section if present */}
+                {metadataFields.find(f => f.label === 'About') && (
+                  <p className="mt-3 text-gray-700">
+                    {metadataFields.find(f => f.label === 'About')?.value}
+                  </p>
                 )}
               </div>
               <button
@@ -395,7 +434,12 @@ export const EntityView: React.FC = () => {
                 <div className="card p-4 h-full">
                   <div className="text-sm text-gray-500">Total Events</div>
                   <div className="text-3xl font-bold mt-1">{stats.total_count.toLocaleString()}</div>
-                  <div className="text-xs text-gray-400 mt-2">Across all time</div>
+                  <div className="text-xs text-gray-400 mt-2">
+                    {timeseriesPeriod === 'week' ? 'Past week' :
+                     timeseriesPeriod === 'month' ? 'Past month' :
+                     timeseriesPeriod === 'year' ? 'Past year' :
+                     'All time'}
+                  </div>
                 </div>
               </div>
               
@@ -403,7 +447,7 @@ export const EntityView: React.FC = () => {
                 <div className="card p-4 h-full">
                   <div className="text-sm text-gray-500">Geographic Reach</div>
                   <div className="flex items-baseline mt-1">
-                    <div className="text-3xl font-bold">{stats.by_state.length}</div>
+                    <div className="text-3xl font-bold">{validStateStats.validCount}</div>
                     <span className="ml-2 text-lg text-gray-600">states</span>
                   </div>
                   <div className="text-xs text-gray-400 mt-2">{stats.by_city.length} cities</div>
@@ -535,24 +579,27 @@ export const EntityView: React.FC = () => {
               <div className="col-span-6">
                 <div className="card p-6 h-full">
                   <h3 className="text-lg font-semibold mb-4">Top States</h3>
-                  {stats.by_state.length > 0 ? (
+                  {validStateStats.validCount > 0 ? (
                     <div className="space-y-2">
-                      {stats.by_state.slice(0, 8).map((state, idx) => {
-                        const percentage = (state.count / stats.total_count) * 100;
-                        return (
-                          <div key={state.state}>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="font-medium">
-                                {idx + 1}. {state.state}
-                              </span>
-                              <span className="text-gray-600">{state.count.toLocaleString()}</span>
-                            </div>
-                            <div className="mt-1 w-full bg-gray-200 rounded-full h-1.5">
-                              <div 
-                                className="bg-blue-500 h-1.5 rounded-full" 
-                                style={{ width: `${Math.min(percentage * 2, 100)}%` }}
-                              />
-                            </div>
+                      {Array.from(validStateStats.statesByCode.entries())
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 8)
+                        .map(([stateCode, count], idx) => {
+                          const percentage = (count / stats.total_count) * 100;
+                          return (
+                            <div key={stateCode}>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="font-medium">
+                                  {idx + 1}. {stateCode}
+                                </span>
+                                <span className="text-gray-600">{count.toLocaleString()}</span>
+                              </div>
+                              <div className="mt-1 w-full bg-gray-200 rounded-full h-1.5">
+                                <div 
+                                  className="bg-blue-500 h-1.5 rounded-full" 
+                                  style={{ width: `${Math.min(percentage * 2, 100)}%` }}
+                                />
+                              </div>
                           </div>
                         );
                       })}
@@ -593,6 +640,32 @@ export const EntityView: React.FC = () => {
                   )}
                 </div>
               </div>
+              
+              {/* Metadata Details Section */}
+              {metadataFields.length > 0 && (
+                <div className="col-span-12 mt-4">
+                  <div className="card p-6">
+                    <h3 className="text-lg font-semibold mb-4">Details</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                      {metadataFields
+                        .filter(field => 
+                          // Don't show fields already displayed in header or as primary stats
+                          !['About', 'Type', 'City', 'State'].includes(field.label)
+                        )
+                        .map(field => (
+                          <div key={field.key} className="border-l-2 border-gray-200 pl-3">
+                            <div className="text-xs text-gray-500 uppercase tracking-wider">
+                              {field.label}
+                            </div>
+                            <div className="text-sm font-medium text-gray-900 mt-1">
+                              {field.value}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -196,8 +196,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     } else if (selectedCity && originalCluster) {
       return 'Part of cluster';
     } else if (cluster) {
-      const total = Object.values(clusterCounts).reduce((sum, count) => sum + count, 0);
-      return `${total.toLocaleString()} total events`;
+      // Don't show total here as it's already shown elsewhere
+      return '';
     }
     return '';
   };
@@ -347,7 +347,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 ))}
                 
                 {/* Loading indicator for pagination */}
-                {loading && events.length > 0 && (
+                {loading && events.length > 0 && hasMore && (
                   <div className="py-4 text-center">
                     <div className="spinner"></div>
                   </div>

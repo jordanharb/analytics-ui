@@ -11,6 +11,11 @@ interface FiltersStore {
   // Network expansion state
   networkExpanded: boolean;
   expandedActorIds: string[] | null;
+  // Search state
+  searchQuery: string;
+  searchVector: number[] | null;
+  minSimilarity: number;
+  isSearching: boolean;
   // Loading states
   isApplying: boolean;
   isLoadingOptions: boolean;
@@ -24,6 +29,9 @@ interface FiltersStore {
   clearSearch: () => void;
   setNetworkExpanded: (expanded: boolean) => void;
   setExpandedActorIds: (ids: string[] | null) => void;
+  setSearchQuery: (query: string) => void;
+  setSearchVector: (vector: number[] | null) => void;
+  setMinSimilarity: (threshold: number) => void;
 }
 
 const DEFAULT_FILTERS: Filters = {
@@ -42,6 +50,10 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
   filterOptions: null,
   networkExpanded: false,
   expandedActorIds: null,
+  searchQuery: '',
+  searchVector: null,
+  minSimilarity: 0.4,  // Balanced threshold for semantic matches
+  isSearching: false,
   isApplying: false,
   isLoadingOptions: false,
   
@@ -59,13 +71,19 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
   
   applyFilters: () => {
     const { pendingFilters } = get();
+    console.log('Applying filters:', pendingFilters);
+    console.log('Has search in pending filters?', pendingFilters.search ? 'Yes' : 'No');
+    
     set({ 
       filters: pendingFilters, 
       isApplying: true 
     });
     
-    // Reset applying flag after a tick
-    setTimeout(() => set({ isApplying: false }), 0);
+    // Reset applying flag after a small delay to ensure components see the change
+    setTimeout(() => {
+      console.log('Resetting isApplying flag');
+      set({ isApplying: false });
+    }, 50);
   },
   
   resetFilters: () => {
@@ -82,7 +100,10 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
   },
   
   clearSearch: () => {
+    console.log('Clearing search from store');
     set(state => ({
+      searchQuery: '',
+      searchVector: null,
       pendingFilters: { ...state.pendingFilters, search: undefined },
       filters: { ...state.filters, search: undefined }
     }));
@@ -98,6 +119,62 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
   
   setExpandedActorIds: (ids) => {
     set({ expandedActorIds: ids });
+  },
+  
+  setSearchQuery: async (query) => {
+    console.log('setSearchQuery called with:', query);
+    set({ searchQuery: query, isSearching: true });
+    
+    if (!query) {
+      set({ searchVector: null, isSearching: false });
+      set(state => ({
+        pendingFilters: { ...state.pendingFilters, search: undefined }
+      }));
+      return;
+    }
+    
+    try {
+      // Generate embedding using Google's API
+      const { analyticsClient } = await import('../api/analyticsClient');
+      const embedding = await analyticsClient.generateEmbedding(query);
+      
+      console.log('Generated embedding for query:', query, 'Dimension:', embedding.length);
+      
+      // Update filters with embedding
+      set(state => ({
+        searchVector: embedding,
+        pendingFilters: { 
+          ...state.pendingFilters, 
+          search: { 
+            query,
+            embedding: embedding.length > 0 ? embedding : undefined,
+            min_similarity: state.minSimilarity 
+          }
+        },
+        isSearching: false
+      }));
+    } catch (error) {
+      console.error('Error generating embedding:', error);
+      // Fall back to text search
+      set(state => ({
+        pendingFilters: { 
+          ...state.pendingFilters, 
+          search: { 
+            query,
+            min_similarity: state.minSimilarity 
+          }
+        },
+        isSearching: false
+      }));
+    }
+  },
+  
+  setSearchVector: (vector) => {
+    set({ searchVector: vector });
+  },
+  
+  setMinSimilarity: (threshold) => {
+    set({ minSimilarity: threshold });
   }
 }));
 

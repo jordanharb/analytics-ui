@@ -3,6 +3,7 @@ import { useFiltersStore } from '../../state/filtersStore';
 import { analyticsClient } from '../../api/analyticsClient';
 import { FilterPanel } from '../../components/FilterPanel/FilterPanel';
 import { EventCard } from '../../components/EventCard/EventCard';
+import { SearchBar } from '../../components/SearchBar/SearchBar';
 import type { EventSummary, Cursor } from '../../api/types';
 
 export const DirectoryView: React.FC = () => {
@@ -19,10 +20,24 @@ export const DirectoryView: React.FC = () => {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   
   const { filters, isApplying } = useFiltersStore();
+  const prevSearchRef = useRef(filters.search);
 
   // Load events when filters change
   useEffect(() => {
-    if (!isApplying) {
+    console.log('DirectoryView: Filters changed:', filters);
+    console.log('DirectoryView: isApplying:', isApplying);
+    console.log('DirectoryView: Has search?', filters.search ? 'Yes' : 'No');
+    
+    // Check if search changed specifically
+    const searchChanged = prevSearchRef.current !== filters.search;
+    if (searchChanged) {
+      console.log('DirectoryView: Search changed, forcing reload');
+      prevSearchRef.current = filters.search;
+    }
+    
+    // Always reload when filters change, even if isApplying is true for search changes
+    if (!isApplying || searchChanged) {
+      console.log('DirectoryView: Reloading events due to filter change');
       setEvents([]);
       setCursor(undefined);
       setHasMore(false);
@@ -58,6 +73,9 @@ export const DirectoryView: React.FC = () => {
 
   const loadEvents = async (isInitial: boolean) => {
     if (loading) return;
+    
+    console.log('DirectoryView: Loading events with filters:', filters);
+    console.log('DirectoryView: Has search?', filters.search ? 'Yes' : 'No');
     
     setLoading(true);
     setError(null);
@@ -150,6 +168,14 @@ export const DirectoryView: React.FC = () => {
             </button>
           </div>
         </div>
+        
+        {/* Search Bar */}
+        <div className="bg-white border-b border-gray-200 px-6 py-3">
+          <SearchBar 
+            placeholder="Search events by topic, description, or context..."
+            className="max-w-2xl"
+          />
+        </div>
 
         {/* Events List */}
         <div className="flex-1 overflow-y-auto bg-gray-50">
@@ -183,7 +209,7 @@ export const DirectoryView: React.FC = () => {
               ))}
               
               {/* Loading indicator */}
-              {loading && events.length > 0 && (
+              {loading && events.length > 0 && hasMore && (
                 <div className="py-8 text-center">
                   <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                 </div>

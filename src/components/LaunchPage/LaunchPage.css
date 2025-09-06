@@ -1,0 +1,402 @@
+/* Launch Page Specific Styles */
+.launch-page-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: linear-gradient(180deg, #fef3c7 0%, #fed7aa 20%, #ffffff 50%);
+    min-height: 100vh;
+    overflow: hidden; /* This will hide elements outside the viewport */
+}
+
+/* Sun */
+.sun {
+    position: fixed;
+    top: 60px;
+    right: 80px;
+    width: 80px;
+    height: 80px;
+    background: radial-gradient(circle, #fbbf24, #f59e0b);
+    border-radius: 50%;
+    box-shadow: 0 0 60px rgba(251, 191, 36, 0.6);
+    animation: sunPulse 4s ease-in-out infinite;
+    z-index: 0;
+}
+
+@keyframes sunPulse {
+    0%, 100% { 
+        box-shadow: 0 0 60px rgba(251, 191, 36, 0.6);
+        transform: scale(1);
+    }
+    50% { 
+        box-shadow: 0 0 80px rgba(251, 191, 36, 0.8);
+        transform: scale(1.05);
+    }
+}
+
+/* Desert Mountains */
+.mountains {
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+    height: 300px;
+    background: linear-gradient(135deg, #fed7aa 0%, #fdba74 50%, #fb923c 100%);
+    clip-path: polygon(
+        0 100%, 0 70%,
+        10% 60%, 20% 65%,
+        30% 40%, 40% 55%,
+        50% 30%, 60% 45%,
+        70% 35%, 80% 50%,
+        90% 40%, 100% 55%,
+        100% 100%
+    );
+    opacity: 0.3;
+    z-index: 0;
+}
+
+/* Flying Birds */
+.bird {
+    position: fixed;
+    font-size: 20px;
+    animation: fly 15s linear infinite;
+    z-index: 1;
+}
+
+.bird-1 {
+    top: 100px;
+    animation-delay: 0s;
+}
+
+.bird-2 {
+    top: 150px;
+    animation-delay: 5s;
+}
+
+@keyframes fly {
+    from {
+        left: -50px; /* Start further off-screen */
+    }
+    to {
+        left: 110%;
+    }
+}
+
+/* Tumbleweeds */
+.tumbleweed {
+    position: fixed;
+    bottom: 20px;
+    width: 40px;
+    height: 40px;
+    background: radial-gradient(circle, #d4a574, #a16207);
+    border-radius: 50%;
+    opacity: 0.3;
+    animation: tumble 20s linear infinite;
+    z-index: 1;
+}
+
+@keyframes tumble {
+    from {
+        left: -60px; /* Start further off-screen */
+        transform: rotate(0deg);
+    }
+    to {
+        left: 110%;
+        transform: rotate(720deg);
+    }
+}
+
+/* Main Container */
+.container {
+    position: relative;
+    z-index: 10;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 60px 20px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Logo Section */
+.logo-section {
+    text-align: center;
+    margin-bottom: 80px;
+    animation: fadeInDown 1s ease-out;
+}
+
+.logo-main {
+    font-size: clamp(56px, 9vw, 84px);
+    font-weight: 900;
+    letter-spacing: -3px;
+    color: #1f2937;
+    text-shadow: 3px 3px 6px rgba(0,0,0,0.1);
+    margin-bottom: 10px;
+    position: relative;
+    display: inline-block;
+}
+
+.logo-sub {
+    font-size: clamp(28px, 5vw, 42px);
+    font-weight: 700;
+    color: #dc2626;
+    letter-spacing: 10px;
+    text-transform: uppercase;
+    position: relative;
+    text-shadow: 2px 2px 4px rgba(220, 38, 38, 0.2);
+}
+
+.logo-sub::before,
+.logo-sub::after {
+    content: '•';
+    position: absolute;
+    color: #dc2626;
+    font-size: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.logo-sub::before { left: -40px; }
+.logo-sub::after { right: -40px; }
+
+/* App Grid */
+.app-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 30px;
+    width: 100%;
+    max-width: 900px;
+    margin-top: 40px;
+}
+
+/* App Widget */
+.app-widget {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border: 2px solid rgba(251, 146, 60, 0.2);
+    border-radius: 20px;
+    padding: 28px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    animation: fadeInUp 1s ease-out;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.app-widget::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #f59e0b, #dc2626, #fb923c);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.app-widget:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+    border-color: rgba(251, 146, 60, 0.4);
+}
+
+.app-widget:hover::before {
+    opacity: 1;
+}
+
+/* App Header */
+.app-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.live-indicator {
+    width: 8px;
+    height: 8px;
+    background: #10b981;
+    border-radius: 50%;
+    position: relative;
+    animation: pulse 2s infinite;
+}
+
+.live-indicator::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px;
+    height: 16px;
+    background: #10b981;
+    border-radius: 50%;
+    opacity: 0.4;
+    animation: ping 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+@keyframes ping {
+    0% {
+        transform: translate(-50%, -50%) scale(0.8);
+        opacity: 0.8;
+    }
+    80%, 100% {
+        transform: translate(-50%, -50%) scale(2);
+        opacity: 0;
+    }
+}
+
+.app-title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #1f2937;
+}
+
+.app-description {
+    color: #6b7280;
+    font-size: 15px;
+    line-height: 1.7;
+    margin-bottom: 24px;
+}
+
+.app-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 20px;
+    border-top: 1px solid rgba(251, 146, 60, 0.2);
+}
+
+.status-badge {
+    padding: 6px 14px;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 14px;
+    color: #10b981;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-badge.coming-soon {
+    background: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.3);
+    color: #f59e0b;
+}
+
+/* Desert-themed button */
+button.desert-btn {
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #f97316, #dc2626);
+    border: none;
+    border-radius: 10px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+button.desert-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 24px rgba(249, 115, 22, 0.4);
+    background: linear-gradient(135deg, #ea580c, #b91c1c);
+}
+
+button.desert-btn:disabled {
+    background: #d1d5db;
+    cursor: not-allowed;
+    transform: none;
+    color: #9ca3af;
+}
+
+button.desert-btn:disabled:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* Footer */
+.footer {
+    margin-top: 80px;
+    text-align: center;
+    color: #6b7280;
+    font-size: 14px;
+    z-index: 10;
+    position: relative;
+}
+
+.footer a {
+    color: #dc2626;
+    text-decoration: none;
+    transition: color 0.3s ease;
+    font-weight: 600;
+}
+
+.footer a:hover {
+    color: #b91c1c;
+}
+
+/* Animations */
+@keyframes fadeInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .container {
+        padding: 40px 15px;
+    }
+
+    .app-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+
+    .logo-sub {
+        letter-spacing: 6px;
+    }
+
+    .logo-sub::before,
+    .logo-sub::after {
+        display: none;
+    }
+
+    .sun {
+        top: 30px;
+        right: 30px;
+        width: 60px;
+        height: 60px;
+    }
+}

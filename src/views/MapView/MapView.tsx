@@ -15,6 +15,7 @@ import { analyticsClient } from '../../api/analyticsClient';
 import { useFiltersStore } from '../../state/filtersStore';
 import { FilterPanel } from '../../components/FilterPanel/FilterPanel';
 import { SidePanel } from '../../components/SidePanel/SidePanel';
+import { SearchBar } from '../../components/SearchBar/SearchBar';
 import type { MapPointsResponse } from '../../api/types';
 
 // Valid US state codes (50 states + DC)
@@ -337,9 +338,17 @@ export const MapView: React.FC = () => {
           </button>
         )}
         
+        {/* Search Bar */}
+        <div className="absolute top-4 left-16 right-4 z-10 max-w-md">
+          <SearchBar 
+            placeholder="Search events by topic, description, or context..."
+            className="bg-white rounded-lg shadow-lg"
+          />
+        </div>
+        
         {/* KPI Strip */}
         {mapData && (
-          <div className="absolute top-4 left-16 z-10 bg-white rounded-lg shadow-lg p-4">
+          <div className="absolute top-20 left-16 z-10 bg-white rounded-lg shadow-lg p-4">
             <div className="flex space-x-6">
               <div>
                 <div className="text-sm text-gray-500">Total Events</div>

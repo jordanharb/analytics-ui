@@ -1,8 +1,17 @@
 import { supabaseClient } from './supabaseClient';
 import type * as T from './types';
+import { embeddingService } from '../services/embeddingService';
 
 class AnalyticsClient {
   private abortControllers = new Map<string, AbortController>();
+  
+  // Generate embedding vector from text
+  // For now, we'll use text search as the backend handles it
+  // The backend will convert text to embeddings on the server side
+  async generateEmbedding(text: string): Promise<number[]> {
+    // Generate embedding using Google's API (same model as backend)
+    return embeddingService.generateQueryEmbedding(text);
+  }
   
   private convertFiltersForBackend(filters: T.Filters): any {
     const converted: any = { ...filters };
@@ -47,6 +56,9 @@ class AnalyticsClient {
       }
       delete converted.date_range;
     }
+    
+    // Keep search parameters separate for vector search
+    // Don't add to converted filters
     
     return converted;
   }
@@ -103,9 +115,38 @@ class AnalyticsClient {
   }
   
   async getMapPoints(filters: T.Filters): Promise<T.MapPointsResponse> {
+    const convertedFilters = this.convertFiltersForBackend(filters);
+    
+    console.log('getMapPoints called with filters:', filters);
+    console.log('Search in filters:', filters.search);
+    
+    // Handle vector search if embedding is present
+    if (filters.search?.embedding && filters.search.embedding.length > 0) {
+      console.log('Vector search detected in getMapPoints');
+      console.log('Embedding length:', filters.search.embedding.length);
+      console.log('Min similarity:', filters.search.min_similarity);
+      
+      // Format embedding as pgvector string for the backend
+      const queryVecLiteral = embeddingService.formatForPgVector(filters.search.embedding);
+      console.log('Formatted vector (first 100 chars):', queryVecLiteral.substring(0, 100) + '...');
+      
+      // Add vector search parameters to filters
+      convertedFilters.search_vec = queryVecLiteral;
+      convertedFilters.min_similarity = filters.search.min_similarity || 0.30;
+      
+      console.log('Added search_vec to filters');
+    } else {
+      console.log('No embedding in search, using regular filters');
+    }
+    
+    console.log('Final converted filters:', {
+      ...convertedFilters,
+      search_vec: convertedFilters.search_vec ? '[vector data]' : undefined
+    });
+    
     return this.rpc<T.MapPointsResponse>(
       'get_map_points', 
-      { p_filters: this.convertFiltersForBackend(filters) },
+      { p_filters: convertedFilters },
       'map-points'
     );
   }
@@ -128,17 +169,35 @@ class AnalyticsClient {
     pageSize: number = 100,
     cursor?: T.Cursor
   ): Promise<T.EventsListResponse> {
-    // For Directory view, we need to get ALL events regardless of geocoding
-    // We'll fetch both geocoded and virtual events and combine them
-    // First, let's use a special flag that tells backend to return all events
-    
-    // Get all geocoded events by not specifying any location filter
     const convertedFilters = this.convertFiltersForBackend(filters);
     
-    // We need to query the events directly without location filtering
-    // Using the list_entity_events without an entity should work
+    // Handle vector search if embedding is present
+    if (filters.search?.embedding && filters.search.embedding.length > 0) {
+      console.log('Vector search detected in getDirectoryEvents');
+      console.log('Embedding length:', filters.search.embedding.length);
+      console.log('Min similarity:', filters.search.min_similarity);
+      
+      // Format embedding as pgvector string for the backend
+      const queryVecLiteral = embeddingService.formatForPgVector(filters.search.embedding);
+      console.log('Formatted vector (first 100 chars):', queryVecLiteral.substring(0, 100) + '...');
+      
+      // Add vector search parameters to filters (same as Map view)
+      convertedFilters.search_vec = queryVecLiteral;
+      convertedFilters.min_similarity = filters.search.min_similarity || 0.30;
+      
+      console.log('Added search_vec to filters for directory');
+    } else {
+      console.log('No embedding in search, using regular filters');
+    }
+    
+    console.log('Final converted filters for directory:', {
+      ...convertedFilters,
+      search_vec: convertedFilters.search_vec ? '[vector data]' : undefined
+    });
+    
+    // Use list_directory_events which now supports vector search
     return this.rpc<T.EventsListResponse>(
-      'list_all_events_keyset',
+      'list_directory_events',
       { 
         filters: convertedFilters, 
         page_size: pageSize, 
