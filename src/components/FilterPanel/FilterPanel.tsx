@@ -126,22 +126,24 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
 
   return (
     <div className={`bg-white border-r border-gray-200 overflow-hidden flex flex-col ${className}`}>
-      <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
-        {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
-          <h2 className="text-xl font-semibold text-gray-900">Filters</h2>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-              title="Collapse filters"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-              </svg>
-            </button>
-          )}
-        </div>
+      {/* Header */}
+      <div className="flex items-center justify-between p-6 pb-4 border-b border-gray-200">
+        <h2 className="text-xl font-semibold text-gray-900">Filters</h2>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 transition-colors"
+            title="Collapse filters"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+          </button>
+        )}
+      </div>
+      
+      {/* Scrollable Content */}
+      <div className="flex-1 p-6 space-y-6 overflow-y-auto scrollbar-thin">
 
         {/* Date Range */}
         <DateRangeFilter
@@ -322,23 +324,23 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
             </label>
           </div>
         )}
+      </div>
 
-        {/* Action Buttons */}
-        <div className="flex pt-4 border-t border-gray-200" style={{ gap: '0.75rem' }}>
-          <button
-            onClick={handleApply}
-            className="btn-primary flex-1"
-          >
-            Apply Filters
-          </button>
-          <button
-            onClick={handleReset}
-            disabled={!hasActiveFilters}
-            className="btn-secondary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Reset
-          </button>
-        </div>
+      {/* Action Buttons - Fixed at bottom */}
+      <div className="flex p-6 pt-4 border-t border-gray-200" style={{ gap: '0.75rem' }}>
+        <button
+          onClick={handleApply}
+          className="btn-primary flex-1"
+        >
+          Apply Filters
+        </button>
+        <button
+          onClick={handleReset}
+          disabled={!hasActiveFilters}
+          className="btn-secondary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Reset
+        </button>
       </div>
     </div>
   );

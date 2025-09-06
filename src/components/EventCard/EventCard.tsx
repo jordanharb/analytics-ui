@@ -50,7 +50,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, isExpanded, onToggl
   };
 
   return (
-    <div className="card card-interactive overflow-hidden w-full">
+    <div className="card card-interactive overflow-hidden w-full" style={{ maxWidth: '100%' }}>
       {/* Summary Card */}
       <div 
         className="p-3 md:p-4 cursor-pointer touch-manipulation"

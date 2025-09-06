@@ -115,9 +115,15 @@
 }
 
 .card-interactive:hover {
-  transform: translateY(-0.125rem);
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   border-color: #0066CC;
+}
+
+/* Only apply transform on desktop to avoid mobile layout shifts */
+@media (min-width: 768px) {
+  .card-interactive:hover {
+    transform: translateY(-0.125rem);
+  }
 }
 
 .card-header {

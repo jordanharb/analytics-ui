@@ -36,7 +36,7 @@ export const MapView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedCity, setSelectedCity] = useState<{ city: string; state: string } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<Array<{ city: string; state: string }> | null>(null);
-  const [showFilters, setShowFilters] = useState(false); // Hidden by default on mobile
+  const [showFilters, setShowFilters] = useState(false); // Always start hidden
   const [showVirtualEvents, setShowVirtualEvents] = useState(false);
   const [virtualEventsCount, setVirtualEventsCount] = useState(0);
   const [showStatsModal, setShowStatsModal] = useState(false);
@@ -320,7 +320,7 @@ export const MapView: React.FC = () => {
       {/* Filter Panel */}
       {showFilters && (
         <FilterPanel 
-          className="w-80 flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10"
+          className="w-full md:w-80 h-full flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto"
           onClose={() => setShowFilters(false)}
         />
       )}

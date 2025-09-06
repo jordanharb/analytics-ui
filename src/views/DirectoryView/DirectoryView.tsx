@@ -130,7 +130,7 @@ export const DirectoryView: React.FC = () => {
     <div className="h-full flex">
       {/* Filter Panel */}
       <FilterPanel 
-        className={`${showFilters ? 'w-80' : 'w-0'} md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 transition-all duration-300 overflow-hidden flex-shrink-0`}
+        className={`${showFilters ? 'w-full md:w-80' : 'w-0'} h-full md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto transition-all duration-300 overflow-hidden flex-shrink-0`}
         onClose={() => setShowFilters(false)}
       />
       
@@ -189,7 +189,7 @@ export const DirectoryView: React.FC = () => {
         </div>
 
         {/* Events List */}
-        <div className="flex-1 overflow-y-auto bg-gray-50 -webkit-overflow-scrolling-touch">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden bg-gray-50 -webkit-overflow-scrolling-touch">
           {error ? (
             <div className="p-3 md:p-6">
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
@@ -208,7 +208,7 @@ export const DirectoryView: React.FC = () => {
               <div className="text-sm">No events found matching your filters</div>
             </div>
           ) : (
-            <div className="w-full md:max-w-4xl md:mx-auto p-3 md:p-6 space-y-2 md:space-y-3">
+            <div className="w-full md:max-w-4xl md:mx-auto p-3 md:p-6 space-y-2 md:space-y-3" style={{ boxSizing: 'border-box' }}>
               {events.map((event) => (
                 <EventCard
                   key={event.id}
