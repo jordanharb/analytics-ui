@@ -144,6 +144,16 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
         )}
       </div>
       
+      {/* Mobile Apply Button - Only visible on mobile devices */}
+      <div className="md:hidden flex p-4 border-b border-gray-200 bg-gray-50">
+        <button
+          onClick={handleApply}
+          className="btn-primary flex-1 font-semibold"
+        >
+          Apply Filters
+        </button>
+      </div>
+      
       {/* Scrollable Content */}
       <div className="flex-1 p-6 space-y-6 overflow-y-auto scrollbar-thin">
 
@@ -328,8 +338,8 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
         )}
       </div>
 
-      {/* Action Buttons - Fixed at bottom */}
-      <div className="flex p-6 pt-4 border-t border-gray-200" style={{ gap: '0.75rem' }}>
+      {/* Action Buttons - Fixed at bottom (Hidden on mobile) */}
+      <div className="hidden md:flex p-6 pt-4 border-t border-gray-200" style={{ gap: '0.75rem' }}>
         <button
           onClick={handleApply}
           className="btn-primary flex-1"
@@ -340,6 +350,17 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
           onClick={handleReset}
           disabled={!hasActiveFilters}
           className="btn-secondary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Reset
+        </button>
+      </div>
+      
+      {/* Mobile Action Buttons - At bottom but simplified */}
+      <div className="md:hidden flex p-4 border-t border-gray-200 bg-gray-50" style={{ gap: '0.5rem' }}>
+        <button
+          onClick={handleReset}
+          disabled={!hasActiveFilters}
+          className="btn-secondary flex-1 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
         >
           Reset
         </button>
