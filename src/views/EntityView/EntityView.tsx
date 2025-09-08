@@ -731,20 +731,54 @@ export const EntityView: React.FC = () => {
                   onClick={async () => {
                     setExporting(true);
                     try {
-                      const data = await analyticsClient.exportEvents({
+                      const data: any = await analyticsClient.exportEvents({
                         filters,
                         scope: 'entity',
                         scope_params: { entity_type: entityType, entity_id: entityId }
                       });
-                      
-                      // Convert to CSV
-                      const csv = data.map(row => 
-                        row.map(cell => 
-                          typeof cell === 'string' && cell.includes(',') 
-                            ? `"${cell}"` 
-                            : cell
-                        ).join(',')
-                      ).join('\n');
+
+                      // Normalize rows, expand post_urls into separate columns, and add header
+                      let header: string[] = [];
+                      let dataRows: any[][] = [];
+                      if (Array.isArray(data) && data.length > 0) {
+                        if (typeof data[0] === 'object' && !Array.isArray(data[0])) {
+                          const objRows = data as any[];
+                          const maxPosts = objRows.reduce((m, r) => Math.max(m, Array.isArray(r.post_urls) ? r.post_urls.length : 0), 0);
+                          header = ['event_id','event_date','event_name','city','state','tags','actor_names', ...Array.from({length: maxPosts}, (_, i) => `post_url_${i+1}`)];
+                          dataRows = objRows.map(r => {
+                            const base = [
+                              r.event_id ?? '',
+                              r.event_date ?? '',
+                              r.event_name ?? '',
+                              r.city ?? '',
+                              r.state ?? '',
+                              Array.isArray(r.tags) ? r.tags.join('|') : '',
+                              Array.isArray(r.actor_names) ? r.actor_names.join('|') : ''
+                            ];
+                            const posts: string[] = Array.isArray(r.post_urls) ? r.post_urls : [];
+                            const postCols = Array.from({length: maxPosts}, (_, i) => posts[i] ?? '');
+                            return [...base, ...postCols];
+                          });
+                        } else if (Array.isArray(data[0])) {
+                          header = ['event_id','event_date','event_name','city','state','tags','actor_names','post_urls'];
+                          dataRows = data as any[][];
+                        }
+                      } else {
+                        header = ['event_id','event_date','event_name','city','state','tags','actor_names'];
+                      }
+
+                      const escapeCell = (cell: any) => {
+                        const s = String(cell ?? '');
+                        return s.includes(',') || s.includes('"') || s.includes('\n')
+                          ? '"' + s.replace(/"/g, '""') + '"'
+                          : s;
+                      };
+                      const csvLines = [header, ...dataRows].map((row) => {
+                        if (Array.isArray(row)) return row.map(escapeCell).join(',');
+                        if (row && typeof row === 'object') return Object.values(row).map(escapeCell).join(',');
+                        return escapeCell(row);
+                      });
+                      const csv = csvLines.join('\n');
                       
                       // Download
                       const blob = new Blob([csv], { type: 'text/csv' });
@@ -752,8 +786,10 @@ export const EntityView: React.FC = () => {
                       const a = document.createElement('a');
                       a.href = url;
                       a.download = `${details.name.replace(/[^a-z0-9]/gi, '_')}_events.csv`;
+                      document.body.appendChild(a);
                       a.click();
-                      window.URL.revokeObjectURL(url);
+                      document.body.removeChild(a);
+                      setTimeout(() => window.URL.revokeObjectURL(url), 0);
                     } catch (err) {
                       console.error('Export failed:', err);
                     } finally {

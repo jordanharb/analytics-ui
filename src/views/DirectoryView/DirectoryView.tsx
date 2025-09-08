@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useFiltersStore } from '../../state/filtersStore';
 import { analyticsClient } from '../../api/analyticsClient';
 import { FilterPanel } from '../../components/FilterPanel/FilterPanel';
@@ -19,31 +19,48 @@ export const DirectoryView: React.FC = () => {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   
-  const { filters, isApplying } = useFiltersStore();
+  const { filters, isApplying, networkExpanded, expandedActorIds } = useFiltersStore();
   const prevSearchRef = useRef(filters.search);
 
-  // Load events when filters change
+  // Build effective filters (include network expansion when enabled)
+  const effectiveFilters = useMemo(() => {
+    if (networkExpanded && expandedActorIds && expandedActorIds.length > 0) {
+      return { ...filters, actor_ids: expandedActorIds } as typeof filters;
+    }
+    return filters;
+  }, [filters, networkExpanded, expandedActorIds]);
+
+  // Stable key for deep filter changes
+  const filtersKey = useMemo(() => JSON.stringify(effectiveFilters), [effectiveFilters]);
+  const prevFiltersKeyRef = useRef<string | null>(null);
+
+  // Load events when filters change (deep compare)
   useEffect(() => {
-    console.log('DirectoryView: Filters changed:', filters);
+    console.log('DirectoryView: Filters changed:', effectiveFilters);
     console.log('DirectoryView: isApplying:', isApplying);
-    console.log('DirectoryView: Has search?', filters.search ? 'Yes' : 'No');
-    
+    console.log('DirectoryView: Has search?', effectiveFilters.search ? 'Yes' : 'No');
+    const prevKey = prevFiltersKeyRef.current;
+    prevFiltersKeyRef.current = filtersKey;
+
+    if (prevKey && prevKey === filtersKey) {
+      // No deep change, skip
+      return;
+    }
+
     // Check if search changed specifically
-    const searchChanged = prevSearchRef.current !== filters.search;
+    const searchChanged = prevSearchRef.current !== effectiveFilters.search;
     if (searchChanged) {
       console.log('DirectoryView: Search changed, forcing reload');
-      prevSearchRef.current = filters.search;
+      prevSearchRef.current = effectiveFilters.search;
     }
     
-    // Always reload when filters change, even if isApplying is true for search changes
-    if (!isApplying || searchChanged) {
-      console.log('DirectoryView: Reloading events due to filter change');
-      setEvents([]);
-      setCursor(undefined);
-      setHasMore(false);
-      loadEvents(true);
-    }
-  }, [filters]);
+    // Always reload when filters change - the isApplying flag shouldn't block directory refresh
+    console.log('DirectoryView: Reloading events due to filter change');
+    setEvents([]);
+    setCursor(undefined);
+    setHasMore(false);
+    loadEvents(true);
+  }, [filtersKey]);
 
   // Setup infinite scroll observer
   useEffect(() => {
@@ -74,16 +91,16 @@ export const DirectoryView: React.FC = () => {
   const loadEvents = async (isInitial: boolean) => {
     if (loading) return;
     
-    console.log('DirectoryView: Loading events with filters:', filters);
-    console.log('DirectoryView: Has search?', filters.search ? 'Yes' : 'No');
+    console.log('DirectoryView: Loading events with filters:', effectiveFilters);
+    console.log('DirectoryView: Has search?', effectiveFilters.search ? 'Yes' : 'No');
     
     setLoading(true);
     setError(null);
 
     try {
       const response = await analyticsClient.getDirectoryEvents(
-        filters,
-        50,
+        effectiveFilters,
+        100,
         isInitial ? undefined : cursor
       );
 
@@ -106,14 +123,55 @@ export const DirectoryView: React.FC = () => {
 
   const handleExport = async () => {
     try {
-      const rows = await analyticsClient.exportEvents({
+      const rows: any = await analyticsClient.exportEvents({
         scope: 'map',
         scope_params: {},
         filters
       });
-      
-      // Convert to CSV
-      const csv = rows.map(row => row.join(',')).join('\n');
+
+      // Normalize rows and expand post_urls into separate columns
+      let header: string[] = [];
+      let dataRows: any[][] = [];
+      if (Array.isArray(rows) && rows.length > 0) {
+        if (typeof rows[0] === 'object' && !Array.isArray(rows[0])) {
+          const objRows = rows as any[];
+          const maxPosts = objRows.reduce((m, r) => Math.max(m, Array.isArray(r.post_urls) ? r.post_urls.length : 0), 0);
+          header = ['event_id','event_date','event_name','city','state','tags','actor_names', ...Array.from({length: maxPosts}, (_, i) => `post_url_${i+1}`)];
+          dataRows = objRows.map(r => {
+            const base = [
+              r.event_id ?? '',
+              r.event_date ?? '',
+              r.event_name ?? '',
+              r.city ?? '',
+              r.state ?? '',
+              Array.isArray(r.tags) ? r.tags.join('|') : '',
+              Array.isArray(r.actor_names) ? r.actor_names.join('|') : ''
+            ];
+            const posts: string[] = Array.isArray(r.post_urls) ? r.post_urls : [];
+            const postCols = Array.from({length: maxPosts}, (_, i) => posts[i] ?? '');
+            return [...base, ...postCols];
+          });
+        } else if (Array.isArray(rows[0])) {
+          // Fallback header for array rows
+          header = ['event_id','event_date','event_name','city','state','tags','actor_names','post_urls'];
+          dataRows = rows as any[][];
+        }
+      } else {
+        header = ['event_id','event_date','event_name','city','state','tags','actor_names'];
+      }
+
+      const escapeCell = (cell: any) => {
+        const s = String(cell ?? '');
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+          ? '"' + s.replace(/"/g, '""') + '"'
+          : s;
+      };
+      const csvLines = [header, ...dataRows].map((row) => {
+        if (Array.isArray(row)) return row.map(escapeCell).join(',');
+        if (row && typeof row === 'object') return Object.values(row).map(escapeCell).join(',');
+        return escapeCell(row);
+      });
+      const csv = csvLines.join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

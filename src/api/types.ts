@@ -195,7 +195,7 @@ export interface EntityDetails {
 }
 
 // Export scope types
-export type ExportScope = 'map' | 'city' | 'cluster' | 'entity';
+export type ExportScope = 'map' | 'virtual' | 'city' | 'cluster' | 'entity';
 
 export interface ExportParams {
   scope: ExportScope;

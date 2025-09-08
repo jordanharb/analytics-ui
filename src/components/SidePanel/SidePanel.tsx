@@ -26,6 +26,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const [cursor, setCursor] = useState<Cursor | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   
   // Cluster view state
   const [selectedCity, setSelectedCity] = useState<{ city: string; state: string } | null>(null);
@@ -399,16 +400,118 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           {/* Footer with export button */}
           <div className="px-4 md:px-6 py-3 border-t border-gray-200 bg-gray-50 flex-shrink-0">
             <button
-              onClick={() => {
-                // Export functionality will be implemented
-                console.log('Export events for', city || cluster);
+              onClick={async () => {
+                try {
+                  setExporting(true);
+                  // Build scope and params based on current view
+                  let scope: 'city' | 'cluster' | 'map' = 'map';
+                  let scope_params: Record<string, any> = {};
+
+                  if (showVirtual) {
+                    // Export only virtual/non-geocoded events
+                    scope = 'virtual';
+                    scope_params = {};
+                  } else if (selectedCity || city) {
+                    const targetCity = selectedCity || city!;
+                    scope = 'city';
+                    scope_params = { city: targetCity.city || 'Statewide', state: targetCity.state };
+                  } else if (cluster && cluster.length > 0) {
+                    scope = 'cluster';
+                    scope_params = { cities: cluster };
+                  }
+
+                  // Respect network expansion if enabled
+                  let effectiveFilters = { ...filters };
+                  if (networkExpanded && expandedActorIds) {
+                    effectiveFilters = { ...filters, actor_ids: expandedActorIds };
+                  }
+
+                  const rows: any = await analyticsClient.exportEvents({
+                    scope,
+                    scope_params,
+                    filters: effectiveFilters
+                  });
+
+                  // Normalize rows: handle array-of-objects (preferred) or array-of-arrays
+                  let header: string[] = [];
+                  let dataRows: any[][] = [];
+                  if (Array.isArray(rows) && rows.length > 0) {
+                    if (typeof rows[0] === 'object' && !Array.isArray(rows[0])) {
+                      const objRows = rows as any[];
+                      const maxPosts = objRows.reduce((m, r) => Math.max(m, Array.isArray(r.post_urls) ? r.post_urls.length : 0), 0);
+                      header = ['event_id','event_date','event_name','city','state','tags','actor_names', ...Array.from({length: maxPosts}, (_, i) => `post_url_${i+1}`)];
+                      dataRows = objRows.map(r => {
+                        const base = [
+                          r.event_id ?? '',
+                          r.event_date ?? '',
+                          r.event_name ?? '',
+                          r.city ?? '',
+                          r.state ?? '',
+                          Array.isArray(r.tags) ? r.tags.join('|') : '',
+                          Array.isArray(r.actor_names) ? r.actor_names.join('|') : ''
+                        ];
+                        const posts: string[] = Array.isArray(r.post_urls) ? r.post_urls : [];
+                        const postCols = Array.from({length: maxPosts}, (_, i) => posts[i] ?? '');
+                        return [...base, ...postCols];
+                      });
+                    } else if (Array.isArray(rows[0])) {
+                      // Already arrays (headerless) — fallback to a static header including a single post_urls column
+                      header = ['event_id','event_date','event_name','city','state','tags','actor_names','post_urls'];
+                      dataRows = rows as any[][];
+                    }
+                  } else {
+                    header = ['event_id','event_date','event_name','city','state','tags','actor_names'];
+                  }
+
+                  // Convert to CSV with header and robust escaping
+                  const escapeCell = (cell: any) => {
+                    const s = String(cell ?? '');
+                    return s.includes(',') || s.includes('"') || s.includes('\n')
+                      ? '"' + s.replace(/"/g, '""') + '"'
+                      : s;
+                  };
+                  const csvLines = [header, ...dataRows].map((row) => {
+                    if (Array.isArray(row)) return row.map(escapeCell).join(',');
+                    if (row && typeof row === 'object') return Object.values(row).map(escapeCell).join(',');
+                    return escapeCell(row);
+                  });
+                  const csv = csvLines.join('\n');
+
+                  const blob = new Blob([csv], { type: 'text/csv' });
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+
+                  // Build filename
+                  let filename = 'events.csv';
+                  if (showVirtual) {
+                    filename = 'virtual_events.csv';
+                  } else if (selectedCity || city) {
+                    const targetCity = selectedCity || city!;
+                    const cityPart = (targetCity.city || 'Statewide').replace(/[^a-z0-9]/gi, '_');
+                    filename = `${cityPart}_${targetCity.state}_events.csv`;
+                  } else if (cluster && cluster.length > 0) {
+                    filename = `cluster_${cluster.length}_cities_events.csv`;
+                  }
+
+                  a.href = url;
+                  a.download = filename;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  setTimeout(() => window.URL.revokeObjectURL(url), 0);
+                } catch (err) {
+                  console.error('Export failed:', err);
+                } finally {
+                  setExporting(false);
+                }
               }}
-              className="btn-primary w-full flex items-center justify-center text-sm"
+              disabled={exporting}
+              className="btn-primary w-full flex items-center justify-center text-sm disabled:opacity-60"
             >
               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              Export CSV
+              {exporting ? 'Exporting…' : 'Export CSV'}
             </button>
           </div>
         </div>
