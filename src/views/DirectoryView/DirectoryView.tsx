@@ -104,11 +104,35 @@ export const DirectoryView: React.FC = () => {
         isInitial ? undefined : cursor
       );
 
+      const mergeAndSort = (prevList: EventSummary[], nextList: EventSummary[]) => {
+        const byId = new Map<string, EventSummary>();
+        // Keep latest occurrence by event_date
+        for (const e of [...prevList, ...nextList]) {
+          const existing = byId.get(e.id);
+          if (!existing) {
+            byId.set(e.id, e);
+          } else {
+            // Replace if the new one is more recent or equal but comes later
+            if (new Date(e.date).getTime() >= new Date(existing.date).getTime()) {
+              byId.set(e.id, e);
+            }
+          }
+        }
+        // Sort descending by date, then by id to stabilize
+        const merged = Array.from(byId.values()).sort((a, b) => {
+          const da = new Date(a.date).getTime();
+          const db = new Date(b.date).getTime();
+          if (db !== da) return db - da;
+          return (b.id || '').localeCompare(a.id || '');
+        });
+        return merged;
+      };
+
       if (isInitial) {
-        setEvents(response.events);
+        setEvents(mergeAndSort([], response.events));
         setTotalCount(response.total_count);
       } else {
-        setEvents(prev => [...prev, ...response.events]);
+        setEvents(prev => mergeAndSort(prev, response.events));
       }
       
       setCursor(response.next_cursor);
