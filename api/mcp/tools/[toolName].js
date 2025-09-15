@@ -51,18 +51,19 @@ async function queryEvents(args) {
   const { filters = {} } = args;
 
   let query = supabase
-    .from('events')
+    .from('v2_events')
     .select('*')
-    .order('date', { ascending: false });
+    .order('event_date', { ascending: false });
 
   if (filters.date_range?.start_date) {
-    query = query.gte('date', filters.date_range.start_date);
+    query = query.gte('event_date', filters.date_range.start_date);
   }
   if (filters.date_range?.end_date) {
-    query = query.lte('date', filters.date_range.end_date);
+    query = query.lte('event_date', filters.date_range.end_date);
   }
   if (filters.tags?.length) {
-    query = query.contains('tags', filters.tags);
+    // Use dynamic_slugs for tag filtering
+    query = query.contains('dynamic_slugs', filters.tags);
   }
   if (filters.states?.length) {
     query = query.in('state', filters.states);
@@ -72,6 +73,8 @@ async function queryEvents(args) {
   }
   if (filters.limit) {
     query = query.limit(filters.limit);
+  } else {
+    query = query.limit(100);
   }
 
   const { data, error } = await query;
@@ -84,10 +87,10 @@ async function searchPosts(args) {
   const { query: searchQuery, platform = 'all', limit = 50 } = args;
 
   let query = supabase
-    .from('posts')
+    .from('v2_social_media_posts')
     .select('*')
-    .textSearch('content', searchQuery)
-    .order('created_at', { ascending: false })
+    .or(`post_text.ilike.%${searchQuery}%,author_name.ilike.%${searchQuery}%`)
+    .order('post_date', { ascending: false })
     .limit(limit);
 
   if (platform !== 'all') {
