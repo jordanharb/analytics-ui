@@ -56,6 +56,7 @@ ${this.mcpContext ? `Database Query Context:\n${this.mcpContext}\n\n` : ''}
 ${this.projectContext ? `Project Context:\n${this.projectContext}\n\n` : ''}
 
 When users ask questions, use the available tools when appropriate to provide accurate, data-driven responses.
+Before crafting any SQL, review the schema included in the context and prefer read-only queries (SELECT/CTE).
 Always explain what tools you're using and why.
 When dealing with date-related queries, use the current date provided above as your reference point.`;
   }
