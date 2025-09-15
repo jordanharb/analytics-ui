@@ -72,9 +72,9 @@ export class GeminiProvider implements LLMProvider {
       // Start chat session with history
       const chat = this.model.startChat({
         history: this.chatHistory.length === 0
-          ? [{ role: 'user', parts: [{ text: systemPrompt }] },
-             { role: 'model', parts: [{ text: 'Understood. I have access to MCP tools and will help you with your queries.' }] }]
-          : this.chatHistory
+          ? [{ role: 'user', parts: [{ text: systemPrompt }] } as any,
+             { role: 'model', parts: [{ text: 'Understood. I have access to MCP tools and will help you with your queries.' }] } as any]
+          : this.chatHistory as any
       });
 
       // Send the initial message and handle the response
@@ -121,8 +121,7 @@ export class GeminiProvider implements LLMProvider {
               // Yield tool result event
               yield {
                 type: 'tool_result',
-                content: JSON.stringify(toolResult),
-                toolId
+                content: JSON.stringify(toolResult)
               };
 
               // Store the function response to send back to Gemini
@@ -137,8 +136,7 @@ export class GeminiProvider implements LLMProvider {
 
               yield {
                 type: 'tool_result',
-                content: `Error executing ${call.name}: ${error}`,
-                toolId
+                content: `Error executing ${call.name}: ${error}`
               };
 
               functionResponses.push({
@@ -151,8 +149,7 @@ export class GeminiProvider implements LLMProvider {
           } else {
             yield {
               type: 'tool_result',
-              content: `Tool ${call.name} would be executed (no executor provided)`,
-              toolId
+              content: `Tool ${call.name} would be executed (no executor provided)`
             };
           }
         }

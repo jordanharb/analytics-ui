@@ -146,7 +146,7 @@ export const ChatView: React.FC = () => {
             }
             return updated;
           });
-        } else if (chunk.type === 'tool_start') {
+        } else if (chunk.type === 'tool_start' && chunk.tool) {
           setMessages(prev => {
             const updated = [...prev];
             const lastMessage = updated[updated.length - 1];
@@ -155,13 +155,13 @@ export const ChatView: React.FC = () => {
                 lastMessage.tools = [];
               }
               // Prevent duplicate tool entries with the same id
-              const existing = lastMessage.tools.find(t => t.id === chunk.tool.id);
+              const existing = lastMessage.tools.find(t => t.id === chunk.tool!.id);
               if (existing) {
                 existing.status = 'running';
               } else {
                 lastMessage.tools.push({
-                  id: chunk.tool.id,
-                  name: chunk.tool.name,
+                  id: chunk.tool!.id,
+                  name: chunk.tool!.name,
                   status: 'running'
                 });
               }
@@ -173,11 +173,8 @@ export const ChatView: React.FC = () => {
             const updated = [...prev];
             const lastMessage = updated[updated.length - 1];
             if (lastMessage && lastMessage.role === 'assistant' && lastMessage.tools) {
-              // Prefer matching by toolId if present; fallback to last
-              const idx = (chunk as any).toolId
-                ? lastMessage.tools.findIndex(t => t.id === (chunk as any).toolId)
-                : lastMessage.tools.length - 1;
-              const tool = lastMessage.tools[idx] || lastMessage.tools[lastMessage.tools.length - 1];
+              // Get the last tool in the array (most recently added)
+              const tool = lastMessage.tools[lastMessage.tools.length - 1];
               if (tool) {
                 tool.status = 'completed';
                 tool.result = chunk.content;
