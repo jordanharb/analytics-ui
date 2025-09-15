@@ -1,0 +1,337 @@
+"""
+Enhanced geocoding utility with database-backed caching and improved error handling
+"""
+import json
+import requests
+import time
+from pathlib import Path
+from typing import Optional, Tuple
+from utils.database import get_supabase
+
+# Keep the JSON cache as fallback
+CACHE_FILE = Path(__file__).resolve().parent.parent / 'data' / 'geo_cache.json'
+CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+try:
+    with open(CACHE_FILE, 'r') as f:
+        GEO_CACHE = json.load(f)
+except Exception:
+    GEO_CACHE = {}
+
+def save_json_cache():
+    """Save to JSON cache as fallback."""
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(GEO_CACHE, f)
+    except Exception:
+        pass
+
+def get_from_db_cache(city: str, state: str) -> Optional[Tuple[float, float]]:
+    """Get coordinates from database cache."""
+    try:
+        supabase = get_supabase()
+        result = supabase.table('city_coordinates_cache')\
+            .select('latitude, longitude, is_valid')\
+            .eq('city', city.strip())\
+            .eq('state', state.strip())\
+            .eq('is_valid', True)\
+            .execute()
+        
+        if result.data:
+            data = result.data[0]
+            if data['latitude'] and data['longitude']:
+                return float(data['latitude']), float(data['longitude'])
+    except Exception as e:
+        print(f"Database cache error: {e}")
+    return None
+
+def save_to_db_cache(city: str, state: str, lat: Optional[float], lon: Optional[float], success: bool = True):
+    """Save coordinates to database cache."""
+    try:
+        supabase = get_supabase()
+        
+        # Check if entry already exists
+        existing = supabase.table('city_coordinates_cache')\
+            .select('id')\
+            .eq('city', city.strip())\
+            .eq('state', state.strip())\
+            .execute()
+        
+        if existing.data:
+            # Update existing entry
+            supabase.table('city_coordinates_cache')\
+                .update({
+                    'latitude': lat,
+                    'longitude': lon,
+                    'is_valid': success,
+                    'geocoded_at': 'now()',
+                    'last_attempt_at': 'now()',
+                    'failed_attempts': 0 if success else 1,
+                    'updated_at': 'now()'
+                })\
+                .eq('id', existing.data[0]['id'])\
+                .execute()
+        else:
+            # Insert new entry
+            supabase.table('city_coordinates_cache')\
+                .insert({
+                    'city': city.strip(),
+                    'state': state.strip(),
+                    'latitude': lat,
+                    'longitude': lon,
+                    'is_valid': success,
+                    'geocoded_at': 'now()' if success else None,
+                    'failed_attempts': 0 if success else 1,
+                    'geocoding_source': 'nominatim'
+                })\
+                .execute()
+                
+    except Exception as e:
+        print(f"Database cache save error: {e}")
+
+def geocode_with_nominatim(city: str, state: str) -> Optional[Tuple[float, float]]:
+    """Geocode using Nominatim API with multiple fallback strategies."""
+    
+    # Handle state-only geocoding (when city is empty or state name is passed as city)
+    if not city or city.strip() == "" or state == "United States":
+        # This is state-only geocoding
+        strategies = [
+            # Strategy 1: State name only
+            {"q": f"{city if city and city != state else state}, USA", "type": "state"},
+            # Strategy 2: State with United States
+            {"q": f"{city if city and city != state else state}, United States", "type": "state"},
+            # Strategy 3: Administrative boundary search
+            {"q": f"{city if city and city != state else state}", "type": "state", "featureType": "state"}
+        ]
+    else:
+        # Regular city + state geocoding
+        strategies = [
+            # Strategy 1: City + State
+            {"city": city, "state": state},
+            # Strategy 2: Query string format
+            {"q": f"{city}, {state}, USA"},
+            # Strategy 3: More specific US format
+            {"q": f"{city}, {state}, United States"}
+        ]
+    
+    headers = {
+        "Accept": "application/json", 
+        "User-Agent": "TPUSA-Social-Monitoring/1.0"
+    }
+    
+    for i, params in enumerate(strategies):
+        try:
+            params.update({
+                "format": "json",
+                "limit": 1,
+                "countrycodes": "us"  # Restrict to US
+            })
+            
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params=params,
+                headers=headers,
+                timeout=15
+            )
+            resp.raise_for_status()
+            
+            data = resp.json()
+            if data:
+                lat = float(data[0]["lat"])
+                lon = float(data[0]["lon"])
+                print(f"✅ Strategy {i+1} success: {city}, {state} → {lat}, {lon}")
+                return lat, lon
+            else:
+                print(f"⚠️  Strategy {i+1} no results: {city}, {state}")
+                
+        except Exception as e:
+            print(f"❌ Strategy {i+1} failed for {city}, {state}: {e}")
+        
+        # Be nice to the API
+        time.sleep(0.5)
+    
+    return None
+
+def get_state_center_coordinates(state: str) -> Optional[Tuple[float, float]]:
+    """Get approximate center coordinates for US states."""
+    # State centers (approximate geographic centers)
+    state_centers = {
+        'AL': (32.7794, -86.8287), 'AK': (64.0685, -152.2782), 'AZ': (34.2744, -111.2847),
+        'AR': (34.9513, -92.3809), 'CA': (36.7783, -119.4179), 'CO': (39.0646, -105.3272),
+        'CT': (41.5834, -72.7622), 'DE': (39.3498, -75.5148), 'FL': (27.8333, -81.717),
+        'GA': (32.9866, -83.6487), 'HI': (21.1098, -157.5311), 'ID': (44.2394, -114.5103),
+        'IL': (40.3363, -89.0022), 'IN': (39.8647, -86.2604), 'IA': (42.0046, -93.214),
+        'KS': (38.5111, -96.8005), 'KY': (37.669, -84.6514), 'LA': (31.1801, -91.8749),
+        'ME': (44.323, -69.765), 'MD': (39.0724, -76.7902), 'MA': (42.2373, -71.5314),
+        'MI': (43.3504, -84.5603), 'MN': (45.7326, -93.9196), 'MS': (32.7673, -89.6812),
+        'MO': (38.4623, -92.302), 'MT': (47.0527, -110.2148), 'NE': (41.1289, -98.2883),
+        'NV': (39.3289, -116.6312), 'NH': (43.4108, -71.5653), 'NJ': (40.314, -74.5089),
+        'NM': (34.8375, -106.2371), 'NY': (42.9538, -75.5268), 'NC': (35.6411, -79.8431),
+        'ND': (47.2517, -100.4659), 'OH': (40.3736, -82.7755), 'OK': (35.5376, -96.9247),
+        'OR': (44.5672, -122.1269), 'PA': (40.5773, -77.264), 'RI': (41.6772, -71.5101),
+        'SC': (33.8191, -80.9066), 'SD': (44.2853, -100.2263), 'TN': (35.7449, -86.7489),
+        'TX': (31.106, -97.6475), 'UT': (39.419, -111.9501), 'VT': (44.0407, -72.7093),
+        'VA': (37.768, -78.2057), 'WA': (47.3826, -121.0652), 'WV': (38.468, -80.9696),
+        'WI': (44.2563, -89.6385), 'WY': (42.7475, -107.2085)
+    }
+    
+    return state_centers.get(state.upper())
+
+def normalize_city_state(city: str, state: str) -> Tuple[str, str]:
+    """Normalize city and state names for consistent caching."""
+    city = city.strip().title()
+    state = state.strip().upper()
+    
+    # Handle common state abbreviations
+    state_mapping = {
+        'ARIZONA': 'AZ', 'CALIFORNIA': 'CA', 'TEXAS': 'TX', 'FLORIDA': 'FL',
+        'NEW YORK': 'NY', 'PENNSYLVANIA': 'PA', 'OHIO': 'OH', 'MICHIGAN': 'MI',
+        'NEW HAMPSHIRE': 'NH', 'MAINE': 'ME', 'VERMONT': 'VT', 'MASSACHUSETTS': 'MA',
+        'RHODE ISLAND': 'RI', 'CONNECTICUT': 'CT', 'NEW JERSEY': 'NJ', 'DELAWARE': 'DE',
+        'MARYLAND': 'MD', 'VIRGINIA': 'VA', 'WEST VIRGINIA': 'WV', 'NORTH CAROLINA': 'NC',
+        'SOUTH CAROLINA': 'SC', 'GEORGIA': 'GA', 'TENNESSEE': 'TN', 'KENTUCKY': 'KY',
+        'ALABAMA': 'AL', 'MISSISSIPPI': 'MS', 'LOUISIANA': 'LA', 'ARKANSAS': 'AR',
+        'MISSOURI': 'MO', 'ILLINOIS': 'IL', 'INDIANA': 'IN', 'WISCONSIN': 'WI',
+        'MICHIGAN': 'MI', 'MINNESOTA': 'MN', 'IOWA': 'IA', 'NORTH DAKOTA': 'ND',
+        'SOUTH DAKOTA': 'SD', 'NEBRASKA': 'NE', 'KANSAS': 'KS', 'OKLAHOMA': 'OK',
+        'MONTANA': 'MT', 'WYOMING': 'WY', 'COLORADO': 'CO', 'NEW MEXICO': 'NM',
+        'UTAH': 'UT', 'NEVADA': 'NV', 'IDAHO': 'ID', 'WASHINGTON': 'WA',
+        'OREGON': 'OR', 'HAWAII': 'HI', 'ALASKA': 'AK'
+    }
+    
+    state = state_mapping.get(state, state)
+    
+    return city, state
+
+def geocode_city_state(city: str, state: str) -> Optional[Tuple[float, float]]:
+    """
+    Enhanced geocode function with database caching and multiple fallback strategies.
+    
+    Args:
+        city: City name (can be empty for state-only geocoding)
+        state: State name or abbreviation
+        
+    Returns:
+        Tuple of (latitude, longitude) or None if geocoding fails
+    """
+    if not state:
+        return None
+    
+    # Handle state-only geocoding
+    if not city or city.strip() == "":
+        print(f"🏛️  State-only geocoding for: {state}")
+        # Use state name as city for caching purposes
+        city_for_cache = state
+        state_for_cache = "USA"
+    else:
+        city_for_cache = city
+        state_for_cache = state
+    
+    # Normalize inputs
+    city_norm, state_norm = normalize_city_state(city_for_cache, state_for_cache)
+    
+    # Check JSON cache first (fastest)
+    json_key = f"{city_norm},{state_norm}"
+    if json_key in GEO_CACHE:
+        result = GEO_CACHE[json_key]
+        if result:  # Don't return cached failures immediately
+            return tuple(result)
+    
+    # Check database cache
+    db_result = get_from_db_cache(city_norm, state_norm)
+    if db_result:
+        # Update JSON cache
+        GEO_CACHE[json_key] = list(db_result)
+        save_json_cache()
+        return db_result
+    
+    # Try geocoding with API
+    if not city or city.strip() == "":
+        print(f"🌍 Geocoding state: {state}")
+        coords = geocode_with_nominatim("", state)
+        
+        # If API geocoding fails for state, try our hardcoded state centers
+        if not coords:
+            print(f"🗺️  Trying state center coordinates for {state}")
+            coords = get_state_center_coordinates(state)
+            if coords:
+                print(f"✅ Using state center coordinates: {coords[0]:.4f}, {coords[1]:.4f}")
+    else:
+        print(f"🌍 Geocoding: {city}, {state}")
+        coords = geocode_with_nominatim(city, state)
+    
+    if coords:
+        lat, lon = coords
+        # Save to both caches
+        GEO_CACHE[json_key] = [lat, lon]
+        save_json_cache()
+        save_to_db_cache(city_norm, state_norm, lat, lon, success=True)
+        return coords
+    else:
+        # Cache the failure
+        if not city or city.strip() == "":
+            print(f"❌ Geocoding failed for state: {state}")
+        else:
+            print(f"❌ Geocoding failed: {city}, {state}")
+        GEO_CACHE[json_key] = None
+        save_json_cache()
+        save_to_db_cache(city_norm, state_norm, None, None, success=False)
+        return None
+
+def get_cache_stats() -> dict:
+    """Get statistics about the geocoding cache."""
+    try:
+        supabase = get_supabase()
+        
+        total_result = supabase.table('city_coordinates_cache')\
+            .select('id', count='exact')\
+            .execute()
+        total = total_result.count or 0
+        
+        valid_result = supabase.table('city_coordinates_cache')\
+            .select('id', count='exact')\
+            .eq('is_valid', True)\
+            .execute()
+        valid = valid_result.count or 0
+        
+        failed_result = supabase.table('city_coordinates_cache')\
+            .select('id', count='exact')\
+            .eq('is_valid', False)\
+            .execute()
+        failed = failed_result.count or 0
+        
+        return {
+            'total_cached': total,
+            'successful': valid,
+            'failed': failed,
+            'json_cache_size': len(GEO_CACHE)
+        }
+    except Exception:
+        return {
+            'total_cached': 0,
+            'successful': 0,
+            'failed': 0,
+            'json_cache_size': len(GEO_CACHE)
+        }
+
+if __name__ == "__main__":
+    # Test the geocoding
+    test_cities = [
+        ("Yuma", "AZ"),
+        ("York", "PA"),
+        ("Zanesville", "OH"),
+        ("Mesa", "AZ"),
+        ("Phoenix", "AZ")
+    ]
+    
+    print("🧪 Testing enhanced geocoding...")
+    for city, state in test_cities:
+        result = geocode_city_state(city, state)
+        if result:
+            print(f"✅ {city}, {state} → {result[0]:.4f}, {result[1]:.4f}")
+        else:
+            print(f"❌ {city}, {state} → Failed")
+        time.sleep(1)
+    
+    stats = get_cache_stats()
+    print(f"\n📊 Cache Stats: {stats}")

@@ -27,6 +27,14 @@ export const Header: React.FC = () => {
         >
           List View
         </NavLink>
+        <NavLink
+          to="/chat"
+          className={({ isActive }) =>
+            `nav-tab ${isActive ? 'active' : ''}`
+          }
+        >
+          AI Assistant
+        </NavLink>
       </div>
       
       <div className="nav-actions">

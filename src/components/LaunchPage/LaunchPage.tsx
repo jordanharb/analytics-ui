@@ -8,6 +8,8 @@ export const LaunchPage: React.FC = () => {
   const launchApp = (appName: string) => {
     if (appName === 'woke-palantir') {
       navigate('/map');
+    } else if (appName === 'legislature') {
+      navigate('/legislature');
     }
   };
 
@@ -83,16 +85,25 @@ export const LaunchPage: React.FC = () => {
           </div>
 
           {/* Legislature & Campaign Finance Widget */}
-          <div className="app-widget" style={{ animationDelay: '0.2s' }}>
+          <div className="app-widget" onClick={() => launchApp('legislature')} style={{ animationDelay: '0.2s' }}>
             <div className="app-header">
-              <div className="app-title" style={{ color: '#6b7280' }}>📊 LEGISLATURE & CAMPAIGN</div>
+              <div className="live-indicator"></div>
+              <span className="app-title">LEGISLATURE & CAMPAIGN</span>
             </div>
             <div className="app-description">
               Comprehensive tracking of legislative activities and campaign finance data. Monitor bill progress, voting records, and financial contributions across Arizona politics.
             </div>
             <div className="app-status">
-              <span className="status-badge coming-soon">COMING SOON</span>
-              <button className="desert-btn" disabled>Launching Q1 2025</button>
+              <span className="status-badge">ACTIVE</span>
+              <button 
+                className="desert-btn" 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  launchApp('legislature');
+                }}
+              >
+                Launch App →
+              </button>
             </div>
           </div>
         </div>

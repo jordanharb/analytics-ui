@@ -1,0 +1,779 @@
+-- Canonical people + link tables
+create table if not exists public.rs_people (
+  person_id bigserial primary key,
+  display_name text,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.rs_person_legislators (
+  person_id bigint references public.rs_people(person_id) on delete cascade,
+  legislator_id int references public.legislators(legislator_id) on delete cascade,
+  primary key (person_id, legislator_id)
+);
+
+create table if not exists public.rs_person_cf_entities (
+  person_id bigint references public.rs_people(person_id) on delete cascade,
+  entity_id int references public.cf_entities(entity_id) on delete cascade,
+  primary key (person_id, entity_id)
+);
+
+-- Optional: link to donor/vendor “transaction entities” if you want donor histories by person
+create table if not exists public.rs_person_tx_entities (
+  person_id bigint references public.rs_people(person_id) on delete cascade,
+  transaction_entity_id int,
+  primary key (person_id, transaction_entity_id)
+);
+
+
+-- 12) RTS positions for a bill (fixed: quote "position")
+create or replace function public.rs_bill_rts_positions(p_bill_id int)
+returns table (
+  bill_id int,
+  representing text,
+  entity_name text,
+  "position" text,
+  user_id int,
+  submitted_date timestamptz
+) language sql stable as $$
+  select
+    r.bill_id,
+    r.representing,
+    r.entity_name,
+    r.position as "position",
+    r.user_id,
+    r.submitted_date
+  from rts_positions r
+  where r.bill_id = p_bill_id
+  order by r.submitted_date nulls last, r.position_id;
+$$;
+
+create or replace function public.rs_entity_overview(p_entity_id int)
+returns table (
+  entity_id int,
+  display_name text,
+  party_name text,
+  office_name text,
+  total_raised numeric,
+  total_spent numeric,
+  tx_count bigint,
+  contrib_count bigint,
+  expense_count bigint,
+  activity_start date,
+  activity_end date
+) language sql stable as $$
+  with primary_rec as (
+    select r.*
+    from cf_entity_records r
+    where r.entity_id = p_entity_id
+    order by r.is_primary_record desc nulls last, coalesce(r.record_date, r.registration_date) desc nulls last
+    limit 1
+  ),
+  tx as (
+    select
+      count(*) as tx_count,
+      count(*) filter (where t.transaction_type_disposition_id = 1) as contrib_count,
+      count(*) filter (where t.transaction_type_disposition_id = 2) as expense_count,
+      min(t.transaction_date) as activity_start,
+      max(t.transaction_date) as activity_end
+    from cf_transactions t
+    where t.entity_id = p_entity_id
+  )
+  select
+    e.entity_id,
+    coalesce(e.primary_candidate_name, e.primary_committee_name) as display_name,
+    pr.party_name,
+    pr.office_name,
+    e.total_income_all_records as total_raised,
+    e.total_expense_all_records as total_spent,
+    tx.tx_count, tx.contrib_count, tx.expense_count,
+    tx.activity_start, tx.activity_end
+  from cf_entities e
+  left join primary_rec pr on true
+  left join tx on true
+  where e.entity_id = p_entity_id;
+$$;
+
+create or replace function public.rs_entity_transactions(
+  p_entity_id int,
+  p_limit int default 50,
+  p_offset int default 0
+)
+returns table (
+  transaction_date date,
+  amount numeric,
+  transaction_type text,
+  disposition_id int,
+  name text,
+  occupation text,
+  city text,
+  state text,
+  report_id int
+) language sql stable as $$
+  select
+    t.transaction_date,
+    t.amount,
+    t.transaction_type,
+    t.transaction_type_disposition_id,
+    coalesce(nullif(t.received_from_or_paid_to, ''), nullif(trim(both ' ' from concat_ws(', ', t.transaction_last_name, t.transaction_first_name)), '')) as name,
+    t.transaction_occupation,
+    t.transaction_city,
+    t.transaction_state,
+    t.report_id
+  from cf_transactions t
+  where t.entity_id = p_entity_id
+  order by t.transaction_date desc, t.public_transaction_id desc
+  limit p_limit offset p_offset;
+$$;
+
+create or replace function public.rs_entity_reports(p_entity_id int)
+returns table (
+  report_id int,
+  report_name text,
+  filing_date date,
+  period text,
+  donations_total numeric,
+  donation_items int,
+  pdf_url text
+) language sql stable as $$
+  select
+    r.report_id,
+    r.rpt_name as report_name,
+    r.rpt_file_date as filing_date,
+    r.rpt_period as period,
+    r.total_donations as donations_total,
+    r.donation_count as donation_items,
+    p.pdf_url
+  from cf_reports r
+  left join cf_report_pdfs p on p.pdf_id = r.pdf_id
+  where r.entity_id = p_entity_id
+  order by r.rpt_file_date desc nulls last, r.report_id desc;
+$$;
+
+
+create or replace function public.rs_report_donations(
+  p_report_id int,
+  p_limit int default 100,
+  p_offset int default 0
+)
+returns table (
+  report_id int,
+  donation_date date,
+  amount numeric,
+  donor_name text,
+  donor_type text,
+  occupation text,
+  city text,
+  state text
+) language sql stable as $$
+  select
+    d.report_id,
+    d.donation_date,
+    d.donation_amt as amount,
+    d.donor_name,
+    case
+      when d.is_pac then 'PAC'
+      when d.is_corporate then 'Business'
+      else 'Individual'
+    end as donor_type,
+    d.donor_occupation as occupation,
+    d.donor_city as city,
+    d.donor_state as state
+  from cf_donations d
+  where d.report_id = p_report_id
+  order by d.donation_date desc, d.donation_id desc
+  limit p_limit offset p_offset;
+$$;
+
+
+create or replace function public.rs_entity_donations(
+  p_entity_id int,
+  p_limit int default 100,
+  p_offset int default 0
+)
+returns table (
+  report_id int,
+  report_name text,
+  donation_date date,
+  amount numeric,
+  donor_name text,
+  donor_type text,
+  occupation text,
+  city text,
+  state text
+) language sql stable as $$
+  select
+    d.report_id,
+    r.rpt_name as report_name,
+    d.donation_date,
+    d.donation_amt as amount,
+    d.donor_name,
+    case
+      when d.is_pac then 'PAC'
+      when d.is_corporate then 'Business'
+      else 'Individual'
+    end as donor_type,
+    d.donor_occupation as occupation,
+    d.donor_city as city,
+    d.donor_state as state
+  from cf_donations d
+  join cf_reports r on r.report_id = d.report_id
+  where d.entity_id = p_entity_id
+  order by d.donation_date desc, d.donation_id desc
+  limit p_limit offset p_offset;
+$$;
+
+
+-- Transactions export
+create or replace function public.rs_queue_transactions_export(
+  p_entity_ids int[],
+  p_filters jsonb default '{}'::jsonb
+) returns table (job_id uuid, status text, created_at timestamptz) language sql volatile as $$
+  insert into export_jobs(kind, entity_ids, filters)
+  values ('transactions', p_entity_ids, p_filters)
+  returning id, status, created_at;
+$$;
+
+-- Report donations export
+create or replace function public.rs_queue_reports_export(
+  p_entity_ids int[],
+  p_filters jsonb default '{}'::jsonb
+) returns table (job_id uuid, status text, created_at timestamptz) language sql volatile as $$
+  insert into export_jobs(kind, entity_ids, filters)
+  values ('reports', p_entity_ids, p_filters)
+  returning id, status, created_at;
+$$;
+
+
+create or replace function public.rs_legislator_overview(p_legislator_id int)
+returns table (
+  legislator_id int,
+  full_name text,
+  party text,
+  body text,
+  district int,
+  first_seen_session int,
+  last_seen_session int,
+  vote_count bigint,
+  sponsored_count bigint
+) language sql stable as $$
+  with v as (select count(*) as c from votes where legislator_id = p_legislator_id),
+       s as (select count(*) as c from bill_sponsors where legislator_id = p_legislator_id)
+  select
+    l.legislator_id, l.full_name, l.party, l.body, l.district,
+    l.first_seen_session, l.last_seen_session,
+    v.c as vote_count, s.c as sponsored_count
+  from legislators l, v, s
+  where l.legislator_id = p_legislator_id;
+$$;
+
+
+create or replace function public.rs_legislator_votes(
+  p_legislator_id int,
+  p_session_id int default null,
+  p_limit int default 100,
+  p_offset int default 0
+)
+returns table (
+  vote_date date,
+  vote text,
+  venue text,
+  bill_id int,
+  bill_number text,
+  short_title text,
+  final_disposition text
+) language sql stable as $$
+  select
+    v.vote_date,
+    v.vote,
+    v.venue,
+    b.bill_id,
+    b.bill_number,
+    b.short_title,
+    b.final_disposition
+  from votes v
+  join bills b on b.bill_id = v.bill_id
+  where v.legislator_id = p_legislator_id
+    and (p_session_id is null or b.session_id = p_session_id)
+  order by v.vote_date desc nulls last, v.vote_id desc
+  limit p_limit offset p_offset;
+$$;
+
+
+create or replace function public.rs_legislator_sponsorships(
+  p_legislator_id int,
+  p_session_id int default null
+)
+returns table (
+  bill_id int,
+  bill_number text,
+  short_title text,
+  sponsor_type text,
+  display_order int
+) language sql stable as $$
+  select
+    b.bill_id, b.bill_number, b.short_title,
+    s.sponsor_type, s.display_order
+  from bill_sponsors s
+  join bills b on b.bill_id = s.bill_id
+  where s.legislator_id = p_legislator_id
+    and (p_session_id is null or b.session_id = p_session_id)
+  order by b.bill_number, s.display_order;
+$$;
+
+
+create or replace function public.rs_bill_overview(p_bill_id int)
+returns table (
+  bill_id int,
+  session_id int,
+  bill_number text,
+  short_title text,
+  description text,
+  now_title text,
+  date_introduced date,
+  final_disposition text,
+  governor_action text,
+  governor_action_date date
+) language sql stable as $$
+  select
+    b.bill_id, b.session_id, b.bill_number, b.short_title, b.description,
+    b.now_title, b.date_introduced, b.final_disposition,
+    b.governor_action, b.governor_action_date
+  from bills b
+  where b.bill_id = p_bill_id;
+$$;
+
+
+create or replace function public.rs_bill_vote_timeline(p_bill_id int)
+returns table (
+  vote_date date,
+  venue text,
+  venue_type text,
+  committee_name text,
+  yes_votes int,
+  no_votes int,
+  other_votes int
+) language sql stable as $$
+  select
+    v.vote_date,
+    v.venue,
+    v.venue_type,
+    c.committee_name,
+    sum(case when v.vote in ('Y','Yes','Aye') then 1 else 0 end) over (partition by v.vote_date, v.venue, v.committee_id) as yes_votes,
+    sum(case when v.vote in ('N','No','Nay') then 1 else 0 end)  over (partition by v.vote_date, v.venue, v.committee_id) as no_votes,
+    sum(case when v.vote not in ('Y','Yes','Aye','N','No','Nay') then 1 else 0 end) over (partition by v.vote_date, v.venue, v.committee_id) as other_votes
+  from votes v
+  left join committees c on c.committee_id = v.committee_id
+  where v.bill_id = p_bill_id
+  order by v.vote_date, v.venue, c.committee_name nulls last;
+$$;
+
+
+
+-- 13) Session overview
+create or replace function public.rs_session_overview(p_session_id int)
+returns table (
+  session_id int,
+  session_name text,
+  year int,
+  start_date date,
+  end_date date,
+  bill_count bigint,
+  active_legislators bigint
+) language sql stable as $$
+  with b as (select count(*) c from bills where session_id = p_session_id),
+       m as (
+         select count(*) c
+         from legislators l
+         where (l.first_seen_session is null or l.first_seen_session <= p_session_id)
+           and (l.last_seen_session  is null or l.last_seen_session  >= p_session_id)
+       )
+  select
+    s.session_id, s.session_name, s.year, s.start_date, s.end_date,
+    b.c as bill_count,
+    m.c as active_legislators
+  from sessions s, b, m
+  where s.session_id = p_session_id;
+$$;
+
+-- 14) Session roster
+create or replace function public.rs_session_roster(p_session_id int)
+returns table (
+  legislator_id int,
+  full_name text,
+  party text,
+  body text,
+  district int
+) language sql stable as $$
+  select
+    l.legislator_id, l.full_name, l.party, l.body, l.district
+  from legislators l
+  where (l.first_seen_session is null or l.first_seen_session <= p_session_id)
+    and (l.last_seen_session  is null or l.last_seen_session  >= p_session_id)
+  order by l.body, l.party, l.full_name;
+$$;
+
+-- 15) Session bills (paged)
+create or replace function public.rs_session_bills(
+  p_session_id int,
+  p_limit int default 200,
+  p_offset int default 0
+)
+returns table (
+  bill_id int,
+  bill_number text,
+  short_title text,
+  final_disposition text,
+  date_introduced date
+) language sql stable as $$
+  select
+    b.bill_id, b.bill_number, b.short_title, b.final_disposition, b.date_introduced
+  from bills b
+  where b.session_id = p_session_id
+  order by b.bill_number
+  limit p_limit offset p_offset;
+$$;
+
+-- 16) RTS user history
+create or replace function public.rs_rts_user_history(p_user_id int)
+returns table (
+  bill_id int,
+  representing text,
+  entity_name text,
+  "position" text,
+  submitted_date timestamptz
+) language sql stable as $$
+  select
+    r.bill_id,
+    r.representing,
+    r.entity_name,
+    r.position as "position",
+    r.submitted_date
+  from rts_positions r
+  where r.user_id = p_user_id
+  order by r.submitted_date nulls last, r.bill_id;
+$$;
+
+-- 17) Person overview (unified finance + legislative)
+create or replace function public.rs_person_overview(p_person_id bigint)
+returns table (
+  person_id bigint,
+  display_name text,
+  legislator_ids int[],
+  entity_ids int[],
+  total_votes bigint,
+  total_sponsored bigint,
+  total_raised numeric,
+  total_spent numeric
+) language sql stable as $$
+  with l as (
+    select array_agg(pl.legislator_id order by pl.legislator_id) as ids,
+           count(v.vote_id) as vote_cnt,
+           count(distinct bs.id) as sponsor_cnt
+    from rs_person_legislators pl
+    left join votes v on v.legislator_id = pl.legislator_id
+    left join bill_sponsors bs on bs.legislator_id = pl.legislator_id
+    where pl.person_id = p_person_id
+  ),
+  e as (
+    select array_agg(pe.entity_id order by pe.entity_id) as ids,
+           coalesce(sum(ei.total_income_all_records),0) as raised,
+           coalesce(sum(ei.total_expense_all_records),0) as spent
+    from rs_person_cf_entities pe
+    join cf_entities ei on ei.entity_id = pe.entity_id
+    where pe.person_id = p_person_id
+  )
+  select
+    p.person_id,
+    p.display_name,
+    l.ids as legislator_ids,
+    e.ids as entity_ids,
+    l.vote_cnt as total_votes,
+    l.sponsor_cnt as total_sponsored,
+    e.raised as total_raised,
+    e.spent as total_spent
+  from rs_people p, l, e
+  where p.person_id = p_person_id;
+$$;
+
+-- 18) Person votes (unified)
+create or replace function public.rs_person_votes(
+  p_person_id bigint,
+  p_session_id int default null,
+  p_limit int default 200,
+  p_offset int default 0
+)
+returns table (
+  vote_date date,
+  vote text,
+  venue text,
+  bill_id int,
+  bill_number text,
+  short_title text
+) language sql stable as $$
+  select
+    v.vote_date, v.vote, v.venue,
+    b.bill_id, b.bill_number, b.short_title
+  from rs_person_legislators pl
+  join votes v on v.legislator_id = pl.legislator_id
+  join bills b on b.bill_id = v.bill_id
+  where pl.person_id = p_person_id
+    and (p_session_id is null or b.session_id = p_session_id)
+  order by v.vote_date desc nulls last, v.vote_id desc
+  limit p_limit offset p_offset;
+$$;
+
+-- 19) Person donations (all linked entities)
+create or replace function public.rs_person_donations(
+  p_person_id bigint,
+  p_limit int default 200,
+  p_offset int default 0
+)
+returns table (
+  entity_id int,
+  report_id int,
+  report_name text,
+  donation_date date,
+  amount numeric,
+  donor_name text,
+  donation_type text,
+  occupation text,
+  city text,
+  state text
+) language sql stable as $$
+  select
+    pe.entity_id,
+    d.report_id,
+    r.rpt_name as report_name,
+    d.donation_date,
+    d.donation_amt as amount,
+    d.donor_name,
+    case
+      when d.is_pac then 'PAC'
+      when d.is_corporate then 'Business'
+      else 'Individual'
+    end as donation_type,
+    d.donor_occupation as occupation,
+    d.donor_city as city,
+    d.donor_state as state
+  from rs_person_cf_entities pe
+  join cf_donations d on d.entity_id = pe.entity_id
+  join cf_reports r on r.report_id = d.report_id
+  where pe.person_id = p_person_id
+  order by d.donation_date desc, d.donation_id desc
+  limit p_limit offset p_offset;
+$$;
+
+-- 20) Simple cross-entity search
+create or replace function public.rs_search_all(q text)
+returns table (
+  kind text,           -- 'entity' | 'legislator' | 'bill'
+  id int,
+  label text,
+  extra text
+) language sql stable as $$
+  (
+    select 'entity'::text as kind, e.entity_id as id,
+           coalesce(e.primary_candidate_name, e.primary_committee_name) as label,
+           null::text as extra
+    from cf_entities e
+    where q <> '' and (
+      coalesce(e.primary_candidate_name,'') ilike '%'||q||'%' or
+      coalesce(e.primary_committee_name,'') ilike '%'||q||'%'
+    )
+    limit 25
+  )
+  union all
+  (
+    select 'legislator', l.legislator_id,
+           l.full_name,
+           concat_ws(' • ', l.party, l.body, coalesce(l.district::text,'')) as extra
+    from legislators l
+    where q <> '' and l.full_name ilike '%'||q||'%'
+    limit 25
+  )
+  union all
+  (
+    select 'bill', b.bill_id,
+           b.bill_number,
+           b.short_title
+    from bills b
+    where q <> '' and (b.bill_number ilike '%'||q||'%' or coalesce(b.short_title,'') ilike '%'||q||'%')
+    limit 25
+  );
+$$;
+
+-- =========================
+-- MATERIALIZED VIEWS & IDX
+-- =========================
+
+-- (Optional) trigram for fuzzy name search
+create extension if not exists pg_trgm;
+
+-- 1) Entity finance summary MV
+create materialized view rs_mv_entity_financial_summary as
+with tx as (
+  select
+    t.entity_id,
+    sum(t.amount) filter (where t.transaction_type_disposition_id = 1) as income_total,
+    sum(t.amount) filter (where t.transaction_type_disposition_id = 2) as expense_total,
+    count(*) as tx_count,
+    count(*) filter (where t.transaction_type_disposition_id = 1) as contrib_count,
+    count(*) filter (where t.transaction_type_disposition_id = 2) as expense_count,
+    min(t.transaction_date) as activity_start,
+    max(t.transaction_date) as activity_end
+  from cf_transactions t
+  group by t.entity_id
+),
+primary_rec as (
+  select distinct on (r.entity_id)
+    r.entity_id,
+    r.party_name,
+    r.office_name
+  from cf_entity_records r
+  order by r.entity_id, r.is_primary_record desc nulls last,
+           coalesce(r.record_date, r.registration_date) desc nulls last
+)
+select
+  e.entity_id,
+  coalesce(e.primary_candidate_name, e.primary_committee_name) as display_name,
+  pr.party_name,
+  pr.office_name,
+  coalesce(tx.income_total,0)::numeric as total_raised,
+  coalesce(tx.expense_total,0)::numeric as total_spent,
+  coalesce(tx.tx_count,0)::bigint as tx_count,
+  coalesce(tx.contrib_count,0)::bigint as contrib_count,
+  coalesce(tx.expense_count,0)::bigint as expense_count,
+  tx.activity_start,
+  tx.activity_end
+from cf_entities e
+left join tx on tx.entity_id = e.entity_id
+left join primary_rec pr on pr.entity_id = e.entity_id;
+
+create unique index if not exists rs_mv_entity_financial_summary_pk
+  on rs_mv_entity_financial_summary (entity_id);
+
+create index if not exists rs_mv_entity_financial_summary_name_trgm
+  on rs_mv_entity_financial_summary using gin (display_name gin_trgm_ops);
+
+-- 2) Legislator activity MV
+create materialized view rs_mv_legislator_activity as
+with v as (
+  select legislator_id, count(*) as vote_count
+  from votes group by legislator_id
+),
+s as (
+  select legislator_id, count(*) as sponsored_count
+  from bill_sponsors group by legislator_id
+)
+select
+  l.legislator_id,
+  l.full_name,
+  l.party,
+  l.body,
+  l.district,
+  coalesce(v.vote_count,0) as vote_count,
+  coalesce(s.sponsored_count,0) as sponsored_count
+from legislators l
+left join v on v.legislator_id = l.legislator_id
+left join s on s.legislator_id = l.legislator_id;
+
+create unique index if not exists rs_mv_legislator_activity_pk
+  on rs_mv_legislator_activity (legislator_id);
+
+create index if not exists rs_mv_legislator_activity_name_trgm
+  on rs_mv_legislator_activity using gin (full_name gin_trgm_ops);
+
+-- 3) Bill vote buckets MV (timeline tallies)
+create materialized view rs_mv_bill_vote_buckets as
+select
+  v.bill_id,
+  v.vote_date,
+  v.venue,
+  v.venue_type,
+  v.committee_id,
+  sum(case when v.vote in ('Y','Yes','Aye') then 1 else 0 end) as yes_votes,
+  sum(case when v.vote in ('N','No','Nay') then 1 else 0 end)  as no_votes,
+  sum(case when v.vote not in ('Y','Yes','Aye','N','No','Nay') then 1 else 0 end) as other_votes
+from votes v
+group by v.bill_id, v.vote_date, v.venue, v.venue_type, v.committee_id;
+
+create unique index if not exists rs_mv_bill_vote_buckets_pk
+  on rs_mv_bill_vote_buckets (bill_id, vote_date, venue, venue_type, committee_id);
+
+create index if not exists rs_mv_bill_vote_buckets_bill_date
+  on rs_mv_bill_vote_buckets (bill_id, vote_date);
+
+-- 4) RTS counts by bill MV
+create materialized view rs_mv_rts_counts_by_bill as
+select
+  r.bill_id,
+  count(*) filter (where r.position ilike 'for')     as for_count,
+  count(*) filter (where r.position ilike 'against') as against_count,
+  count(*) filter (where r.position ilike 'neutral') as neutral_count
+from rts_positions r
+group by r.bill_id;
+
+create unique index if not exists rs_mv_rts_counts_by_bill_pk
+  on rs_mv_rts_counts_by_bill (bill_id);
+
+-- Hot-path indexes
+create index if not exists idx_cf_transactions_entity_date
+  on cf_transactions (entity_id, transaction_date desc);
+
+create index if not exists idx_cf_transactions_entity_disposition_date
+  on cf_transactions (entity_id, transaction_type_disposition_id, transaction_date desc);
+
+create index if not exists idx_cf_donations_entity_date
+  on cf_donations (entity_id, donation_date);
+
+create index if not exists idx_cf_donations_report_date
+  on cf_donations (report_id, donation_date);
+
+create index if not exists idx_cf_reports_entity_filedate
+  on cf_reports (entity_id, rpt_file_date desc);
+
+create index if not exists idx_votes_legislator_date
+  on votes (legislator_id, vote_date desc);
+
+create index if not exists idx_votes_bill_date
+  on votes (bill_id, vote_date);
+
+create index if not exists idx_bills_session_number
+  on bills (session_id, bill_number);
+
+create index if not exists idx_bills_number_trgm
+  on bills using gin (bill_number gin_trgm_ops);
+
+create index if not exists idx_bills_short_title_trgm
+  on bills using gin (short_title gin_trgm_ops);
+
+create index if not exists idx_rts_positions_bill
+  on rts_positions (bill_id);
+
+create index if not exists idx_rts_positions_user
+  on rts_positions (user_id);
+
+create index if not exists idx_cf_entities_name_trgm
+  on cf_entities using gin (coalesce(primary_candidate_name, primary_committee_name) gin_trgm_ops);
+
+-- MV refresh helpers
+create or replace function rs_refresh_finance_views()
+returns void language plpgsql as $$
+begin
+  refresh materialized view concurrently rs_mv_entity_financial_summary;
+  refresh materialized view concurrently rs_mv_rts_counts_by_bill;
+end $$;
+
+create or replace function rs_refresh_legislative_views()
+returns void language plpgsql as $$
+begin
+  refresh materialized view concurrently rs_mv_legislator_activity;
+  refresh materialized view concurrently rs_mv_bill_vote_buckets;
+end $$;
+
+create or replace function rs_refresh_all_views()
+returns void language plpgsql as $$
+begin
+  perform rs_refresh_finance_views();
+  perform rs_refresh_legislative_views();
+end $$;

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 
 interface ChatMessageProps {
   message: {
@@ -46,7 +46,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
     const lines = content.split('\n');
     const elements: React.ReactNode[] = [];
     let inList = false;
-    let listItems: string[] = [];
+    let listItems: React.ReactNode[] = [];
     let currentIndent = 0;
 
     const processInlineFormatting = (text: string): React.ReactNode => {

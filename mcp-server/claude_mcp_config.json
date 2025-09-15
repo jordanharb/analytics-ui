@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "woke-palantir": {
+      "command": "node",
+      "args": [
+        "/Users/jordanharb/Documents/tpusa-social-monitoring/web/analytics-ui/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "SUPABASE_URL": "your_supabase_url",
+        "SUPABASE_SERVICE_KEY": "your_supabase_service_key",
+        "OPENAI_API_KEY": "your_openai_api_key"
+      }
+    }
+  }
+}

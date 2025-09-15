@@ -1,0 +1,102 @@
+{
+  "timestamp": "2025-09-07T01:04:29.918506",
+  "source": "web/analytics-ui/src",
+  "summary": {
+    "total_functions": 13,
+    "exists": 13,
+    "callable_without_params": 2,
+    "requires_params": 11,
+    "not_found": 0
+  },
+  "functions": [
+    {
+      "function_name": "actor_entity_stats",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "analytics_city_events_keyset",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "dyn_tag_entity_stats",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "export_events_rows",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "get_entity_details",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "get_entity_timeseries",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "get_event_details",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "get_filter_options_optimized",
+      "status": "exists",
+      "callable": true,
+      "data_sample": "{'actor_types': [{'actor_type': 'chapter'}, {'actor_type': 'organization'}, {'actor_type': 'person'}"
+    },
+    {
+      "function_name": "get_map_points",
+      "status": "exists",
+      "callable": true,
+      "data_sample": "{'map_points': [{'lat': 33.4484, 'lon': -112.074, 'city': 'Phoenix', 'count': 823, 'state': 'AZ'}, {"
+    },
+    {
+      "function_name": "get_network_actor_ids",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "list_directory_events",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "list_entity_events",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    },
+    {
+      "function_name": "tag_entity_stats",
+      "status": "exists",
+      "callable": false,
+      "requires_params": true,
+      "hint": null
+    }
+  ]
+}

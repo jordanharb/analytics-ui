@@ -4,12 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:mcp\"",
+    "dev:vite": "vite",
+    "dev:mcp": "cd mcp-server && npm run dev:http",
+    "build": "npm run build:mcp && tsc -b && vite build",
+    "build:mcp": "cd mcp-server && npm run build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "vercel-build": "npm run build"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.62.0",
+    "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.18.0",
     "@supabase/supabase-js": "^2.57.0",
     "@tailwindcss/postcss": "^4.1.12",
     "@tanstack/react-query": "^5.86.0",
@@ -18,6 +25,7 @@
     "@types/mapbox-gl": "^3.4.1",
     "@types/react-router-dom": "^5.3.3",
     "axios": "^1.11.0",
+    "dotenv": "^17.2.2",
     "lodash": "^4.17.21",
     "lodash-es": "^4.17.21",
     "mapbox-gl": "^3.14.0",
@@ -34,6 +42,7 @@
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.1",
     "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",

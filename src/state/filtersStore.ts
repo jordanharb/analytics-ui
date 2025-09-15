@@ -73,6 +73,8 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
     const { pendingFilters } = get();
     console.log('Applying filters:', pendingFilters);
     console.log('Has search in pending filters?', pendingFilters.search ? 'Yes' : 'No');
+    console.log('Period in pending filters:', pendingFilters.period);
+    console.log('Date range in pending filters:', pendingFilters.date_range);
     
     set({ 
       filters: pendingFilters, 

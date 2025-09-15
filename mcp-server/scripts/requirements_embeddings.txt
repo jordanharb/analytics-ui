@@ -1,0 +1,27 @@
+# Requirements for Optimized Embedding Generator
+# Install with: pip install -r requirements_embeddings.txt
+
+# Core dependencies
+openai>=1.12.0
+supabase>=2.3.0
+python-dotenv>=1.0.0
+numpy>=1.24.0
+
+# Async processing
+aiohttp>=3.9.0
+asyncio-throttle>=1.0.2
+
+# Database optimization
+psycopg2-binary>=2.9.9
+psycopg2-pool>=1.1
+
+# Supabase vector client
+vecs>=0.4.0
+
+# Monitoring and logging
+tqdm>=4.66.0
+rich>=13.7.0
+
+# Optional: For batch file handling
+jsonlines>=4.0.0
+pandas>=2.1.0

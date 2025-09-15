@@ -16,8 +16,11 @@ class AnalyticsClient {
   private convertFiltersForBackend(filters: T.Filters): any {
     const converted: any = { ...filters };
     
+    // ✅ PRESERVE period and date_range in the converted object for debugging
+    // These will be converted to min_date/max_date but kept for reference
+    
     // Convert period to min_date/max_date
-    if (filters.period) {
+    if (filters.period && filters.period !== 'all') {
       const today = new Date();
       let minDate: Date;
       
@@ -34,16 +37,13 @@ class AnalyticsClient {
           minDate = new Date(today);
           minDate.setFullYear(today.getFullYear() - 1);
           break;
-        case 'all':
         default:
-          // Don't set min_date for 'all'
-          delete converted.period;
+          // For 'all', don't set date constraints
           return converted;
       }
       
       converted.min_date = minDate.toISOString();
       converted.max_date = today.toISOString();
-      delete converted.period;
     }
     
     // Convert date_range to min_date/max_date
@@ -54,7 +54,6 @@ class AnalyticsClient {
       if (filters.date_range.end_date) {
         converted.max_date = new Date(filters.date_range.end_date).toISOString();
       }
-      delete converted.date_range;
     }
     
     // Keep search parameters separate for vector search
@@ -126,22 +125,20 @@ class AnalyticsClient {
       console.log('Embedding length:', filters.search.embedding.length);
       console.log('Min similarity:', filters.search.min_similarity);
       
-      // Format embedding as pgvector string for the backend
-      const queryVecLiteral = embeddingService.formatForPgVector(filters.search.embedding);
-      console.log('Formatted vector (first 100 chars):', queryVecLiteral.substring(0, 100) + '...');
-      
-      // Add vector search parameters to filters
-      convertedFilters.search_vec = queryVecLiteral;
+      // ✅ Send embedding as JS array, not pgvector string
+      convertedFilters.search_vec = Array.from(filters.search.embedding);
       convertedFilters.min_similarity = filters.search.min_similarity || 0.30;
       
-      console.log('Added search_vec to filters');
+      console.log('Added search_vec to filters as array');
     } else {
       console.log('No embedding in search, using regular filters');
     }
     
-    console.log('Final converted filters:', {
+    console.log('Final converted filters for map:', {
       ...convertedFilters,
-      search_vec: convertedFilters.search_vec ? '[vector data]' : undefined
+      search_vec: convertedFilters.search_vec ? '[vector data]' : undefined,
+      period: filters.period,
+      date_range: filters.date_range
     });
     
     return this.rpc<T.MapPointsResponse>(
@@ -177,22 +174,20 @@ class AnalyticsClient {
       console.log('Embedding length:', filters.search.embedding.length);
       console.log('Min similarity:', filters.search.min_similarity);
       
-      // Format embedding as pgvector string for the backend
-      const queryVecLiteral = embeddingService.formatForPgVector(filters.search.embedding);
-      console.log('Formatted vector (first 100 chars):', queryVecLiteral.substring(0, 100) + '...');
-      
-      // Add vector search parameters to filters (same as Map view)
-      convertedFilters.search_vec = queryVecLiteral;
+      // ✅ Send embedding as JS array, not pgvector string
+      convertedFilters.search_vec = Array.from(filters.search.embedding);
       convertedFilters.min_similarity = filters.search.min_similarity || 0.30;
       
-      console.log('Added search_vec to filters for directory');
+      console.log('Added search_vec to filters for directory as array');
     } else {
       console.log('No embedding in search, using regular filters');
     }
     
     console.log('Final converted filters for directory:', {
       ...convertedFilters,
-      search_vec: convertedFilters.search_vec ? '[vector data]' : undefined
+      search_vec: convertedFilters.search_vec ? '[vector data]' : undefined,
+      period: filters.period,
+      date_range: filters.date_range
     });
     
     // Use list_directory_events which now supports vector search

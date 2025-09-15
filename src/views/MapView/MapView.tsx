@@ -75,7 +75,12 @@ export const MapView: React.FC = () => {
           const expanded = await analyticsClient.getNetworkActorIds(filters.actor_ids);
           console.log('Expanded to include:', expanded);
           setExpandedActorIds(expanded);
-          effectiveFilters = { ...filters, actor_ids: expanded };
+          // ✅ PRESERVE period/date_range during network expansion
+          effectiveFilters = { 
+            ...filters, 
+            actor_ids: expanded
+            // Keep period and date_range from original filters
+          };
         } catch (err) {
           console.error('Failed to expand network:', err);
           // Fall back to original filters

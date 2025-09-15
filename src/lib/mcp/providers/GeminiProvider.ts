@@ -8,7 +8,8 @@ export class GeminiProvider implements LLMProvider {
   private model: GenerativeModel;
   private currentModelId: string = 'gemini-2.5-flash';
   private chatHistory: Array<{ role: string; parts: Array<{ text?: string; functionCall?: any; functionResponse?: any }> }> = [];
-  private processedToolIds = new Set<string>();
+  private processedCallKeys = new Set<string>();
+  private toolCounter = 0;
 
   constructor(apiKey: string) {
     if (!apiKey) {
@@ -23,8 +24,8 @@ export class GeminiProvider implements LLMProvider {
     try {
       console.log('Using Gemini model:', this.currentModelId);
 
-      // Reset processed tool IDs for each query
-      this.processedToolIds.clear();
+      // Reset processed call keys per query
+      this.processedCallKeys.clear();
 
       // Convert MCP tools to Gemini function declarations
       const functionDeclarations = tools?.map(tool => ({
@@ -91,15 +92,15 @@ export class GeminiProvider implements LLMProvider {
 
         for (let i = 0; i < functionCalls.length; i++) {
           const call = functionCalls[i];
-          // Generate a completely random ID
-          const toolId = `tool-${Math.random().toString(36).substring(2, 15)}`;
+          const callKey = JSON.stringify({ name: call.name, args: call.args });
+          const toolId = `tool-${++this.toolCounter}`;
 
-          // Skip if already processed
-          if (this.processedToolIds.has(toolId)) {
-            console.warn('Skipping duplicate tool ID:', toolId);
+          // Skip if this exact call was already processed
+          if (this.processedCallKeys.has(callKey)) {
+            console.warn('Skipping duplicate function call:', call.name);
             continue;
           }
-          this.processedToolIds.add(toolId);
+          this.processedCallKeys.add(callKey);
 
           // Yield tool start event
           yield {
@@ -120,7 +121,8 @@ export class GeminiProvider implements LLMProvider {
               // Yield tool result event
               yield {
                 type: 'tool_result',
-                content: JSON.stringify(toolResult)
+                content: JSON.stringify(toolResult),
+                toolId
               };
 
               // Store the function response to send back to Gemini
@@ -135,7 +137,8 @@ export class GeminiProvider implements LLMProvider {
 
               yield {
                 type: 'tool_result',
-                content: `Error executing ${call.name}: ${error}`
+                content: `Error executing ${call.name}: ${error}`,
+                toolId
               };
 
               functionResponses.push({
@@ -148,7 +151,8 @@ export class GeminiProvider implements LLMProvider {
           } else {
             yield {
               type: 'tool_result',
-              content: `Tool ${call.name} would be executed (no executor provided)`
+              content: `Tool ${call.name} would be executed (no executor provided)`,
+              toolId
             };
           }
         }
@@ -185,7 +189,7 @@ export class GeminiProvider implements LLMProvider {
             // Update history with the complete exchange
             this.chatHistory.push(
               { role: 'user', parts: [{ text: query }] },
-              { role: 'model', parts: functionCalls.map(fc => ({ functionCall: fc })) },
+              { role: 'model', parts: functionCalls.map((fc: any) => ({ functionCall: fc })) },
               { role: 'user', parts: functionResponses },
               { role: 'model', parts: [{ text: finalText || 'Processed successfully' }] }
             );
@@ -356,6 +360,6 @@ export class GeminiProvider implements LLMProvider {
 
   clearHistory(): void {
     this.chatHistory = [];
-    this.processedToolIds.clear();
+    this.processedCallKeys.clear();
   }
 }
