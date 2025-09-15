@@ -7,9 +7,17 @@ from pathlib import Path
 import time
 from datetime import datetime
 
-# Add parent directory to path for imports
-BASE_DIR = Path(__file__).parent
-sys.path.insert(0, str(BASE_DIR))
+# Ensure imports work when run from repo root
+CURR = Path(__file__).resolve()
+SCRIPTS_DIR = CURR.parent
+ANALYTICS_UI_DIR = SCRIPTS_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+# Prefer repo root, then web/, then analytics-ui/, then scripts/
+for p in [str(REPO_ROOT), str(WEB_DIR), str(ANALYTICS_UI_DIR), str(SCRIPTS_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from utils.database import get_supabase, fetch_all_rows
 from utils.geocoding import geocode_city_state

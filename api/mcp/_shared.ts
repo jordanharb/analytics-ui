@@ -17,10 +17,15 @@ try {
 }
 
 export function getSupabase() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_SERVICE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY;
   if (!url || !key) {
-    throw new Error('Supabase env not configured: SUPABASE_URL and SUPABASE_SERVICE_KEY required');
+    throw new Error('Supabase env not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY (or their VITE_ equivalents).');
   }
   return createClient(url, key);
 }
@@ -36,4 +41,3 @@ export function json(res: VercelResponse, status: number, body: any) {
   res.status(status).setHeader('Content-Type', 'application/json');
   res.send(JSON.stringify(body));
 }
-

@@ -14,13 +14,13 @@ export class ContextManager {
 
   private async loadProjectContext() {
     try {
-      // Try to load CLAUDE.md if it exists
-      const response = await fetch('/CLAUDE.md');
-      if (response.ok) {
-        this.projectContext = await response.text();
-      }
+      // Optionally load a project context file if configured
+      const url = (import.meta as any).env?.VITE_PROJECT_CONTEXT_URL;
+      if (!url) return;
+      const response = await fetch(url);
+      if (response.ok) this.projectContext = await response.text();
     } catch (error) {
-      console.log('No project context file found');
+      // Silent: optional context
     }
   }
 
