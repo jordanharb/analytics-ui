@@ -1,37 +1,38 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { json } from './_shared';
 import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-export default function handler(req: VercelRequest, res: VercelResponse) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method === 'GET') {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'GET') return json(res, 405, { error: 'Method Not Allowed' });
+  try {
+    // Try to read local context
+    let context = '';
     try {
-      // Read the QUERY_CONTEXT.md file from MCP server
-      const contextPath = join(__dirname, '../../mcp-server/QUERY_CONTEXT.md');
-      const context = readFileSync(contextPath, 'utf-8');
-      return res.status(200).json({
-        context,
-        instructions: 'Use the provided tools to query the database. Follow the context guidelines for optimal results.'
-      });
-    } catch (error) {
-      // Fallback if file not found
-      return res.status(200).json({
-        context: '',
-        instructions: 'MCP tools are available for querying the database.'
-      });
-    }
-  }
+      context = readFileSync(join(process.cwd(), 'mcp-server', 'QUERY_CONTEXT.md'), 'utf-8');
+    } catch {}
 
-  return res.status(405).json({ error: 'Method not allowed' });
+    let schemaText = '';
+    try {
+      // Prefer repo root copy if present in this project
+      schemaText = readFileSync(join(process.cwd(), 'woke_palantir_schema.md'), 'utf-8');
+    } catch {
+      try {
+        schemaText = readFileSync(join(process.cwd(), 'mcp-server', '..', 'woke_palantir_schema.md'), 'utf-8');
+      } catch {}
+    }
+
+    const combined = `${context}\n\n---\nIMPORTANT: Before writing any SQL, review the database schema below and use only read-only queries (SELECT/CTE).\n\n${schemaText ? `Database Schema (for context only):\n${schemaText}` : ''}`.trim();
+
+    return json(res, 200, {
+      context: combined,
+      instructions: 'Use the provided tools. Always consult the schema in context before crafting SQL.'
+    });
+  } catch (e: any) {
+    return json(res, 200, {
+      context: '',
+      instructions: 'MCP tools are available for querying the database.'
+    });
+  }
 }
+

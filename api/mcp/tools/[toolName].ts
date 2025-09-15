@@ -1,40 +1,21 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { executeTool } from '../../../mcp-server/dist/http-adapter.js';
+import { ensureServerExports, json } from '../_shared';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const toolName = req.query.toolName as string;
+  if (!toolName) return json(res, 400, { success: false, error: 'Missing toolName' });
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  if (req.method !== 'POST') {
+    return json(res, 405, { success: false, error: 'Method Not Allowed' });
   }
 
-  if (req.method === 'POST') {
-    const { toolName } = req.query;
-
-    if (!toolName || typeof toolName !== 'string') {
-      return res.status(400).json({
-        success: false,
-        error: 'Tool name is required'
-      });
-    }
-
-    try {
-      const result = await executeTool(toolName, req.body);
-      return res.status(200).json({
-        success: true,
-        result
-      });
-    } catch (error: any) {
-      console.error(`Tool execution error for ${toolName}:`, error);
-      return res.status(500).json({
-        success: false,
-        error: error.message || 'Failed to execute tool'
-      });
-    }
+  try {
+    const { executeTool } = ensureServerExports();
+    const args = req.body || {};
+    const result = await executeTool(toolName, args);
+    return json(res, 200, { success: true, result });
+  } catch (e: any) {
+    return json(res, 500, { success: false, error: e?.message || 'Tool execution failed' });
   }
-
-  return res.status(405).json({ error: 'Method not allowed' });
 }
+

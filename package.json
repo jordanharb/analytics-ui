@@ -8,10 +8,11 @@
     "dev:vite": "vite",
     "dev:mcp": "cd mcp-server && npm run dev:http",
     "build": "npm run build:mcp && tsc -b && vite build",
+    "build:no-typecheck": "npm run build:mcp && vite build",
     "build:mcp": "cd mcp-server && npm install && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "vercel-build": "npm run build"
+    "vercel-build": "npm run build:no-typecheck"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.62.0",

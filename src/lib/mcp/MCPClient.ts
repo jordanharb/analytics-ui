@@ -10,7 +10,9 @@ export class MCPClient {
   private apiBaseUrl: string;
 
   constructor(apiBaseUrl: string = '') {
-    this.apiBaseUrl = apiBaseUrl;
+    // Prefer explicit arg, else env var, else same-origin
+    const envBase = (import.meta as any).env?.VITE_MCP_API_BASE_URL || '';
+    this.apiBaseUrl = apiBaseUrl || envBase || '';
     this.initializeProviders();
   }
 
