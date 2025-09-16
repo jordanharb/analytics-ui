@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MCPClient } from '../../lib/mcp/MCPClient';
 import { ChatMessage } from './components/ChatMessage';
 import { ChatInput } from './components/ChatInput';
+import { ChatHistoryManager, type ChatSession } from '../../lib/chat/ChatHistoryManager';
 import type { ProviderType, ModelInfo } from '../../lib/mcp/providers/types';
 
 interface Message {
@@ -21,10 +22,27 @@ export const ChatView: React.FC = () => {
   const [availableProviders, setAvailableProviders] = useState<ProviderType[]>([]);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
+  const [showSessionList, setShowSessionList] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mcpClientRef = useRef<MCPClient | null>(null);
+  const historyManagerRef = useRef<ChatHistoryManager | null>(null);
 
   useEffect(() => {
+    // Initialize history manager
+    if (!historyManagerRef.current) {
+      historyManagerRef.current = new ChatHistoryManager();
+
+      // Load sessions and current session
+      const allSessions = historyManagerRef.current.getAllSessions();
+      setSessions(allSessions);
+
+      const current = historyManagerRef.current.getCurrentSession();
+      setCurrentSession(current);
+      setMessages(current.messages);
+    }
+
     // Initialize MCP client
     const initClient = async () => {
       // Prevent double initialization
@@ -119,6 +137,10 @@ export const ChatView: React.FC = () => {
       timestamp: new Date().toISOString()
     };
     setMessages(prev => [...prev, userMessage]);
+
+    // Save to history
+    historyManagerRef.current?.addMessage(userMessage);
+
     setIsStreaming(true);
 
     // Create assistant message placeholder
@@ -196,6 +218,68 @@ export const ChatView: React.FC = () => {
       });
     } finally {
       setIsStreaming(false);
+
+      // Save assistant message to history
+      setMessages(prev => {
+        const lastMessage = prev[prev.length - 1];
+        if (lastMessage && lastMessage.role === 'assistant') {
+          historyManagerRef.current?.addMessage(lastMessage);
+        }
+        return prev;
+      });
+    }
+  };
+
+  const handleNewChat = () => {
+    const session = historyManagerRef.current?.createSession();
+    if (session) {
+      setCurrentSession(session);
+      setMessages([]);
+      setSessions(historyManagerRef.current?.getAllSessions() || []);
+
+      // Clear provider history
+      mcpClientRef.current?.clearHistory();
+    }
+  };
+
+  const handleSelectSession = (sessionId: string) => {
+    if (historyManagerRef.current?.setCurrentSession(sessionId)) {
+      const session = historyManagerRef.current.getSession(sessionId);
+      if (session) {
+        setCurrentSession(session);
+        setMessages(session.messages);
+        setShowSessionList(false);
+
+        // Clear provider history and rebuild
+        mcpClientRef.current?.clearHistory();
+      }
+    }
+  };
+
+  const handleDeleteSession = (sessionId: string) => {
+    if (historyManagerRef.current?.deleteSession(sessionId)) {
+      setSessions(historyManagerRef.current.getAllSessions());
+
+      // If we deleted current session, it auto-creates a new one
+      const newCurrent = historyManagerRef.current.getCurrentSession();
+      setCurrentSession(newCurrent);
+      setMessages(newCurrent.messages);
+    }
+  };
+
+  const handleClearAllSessions = () => {
+    if (confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
+      historyManagerRef.current?.clearAllSessions();
+
+      const newSession = historyManagerRef.current?.getCurrentSession();
+      if (newSession) {
+        setCurrentSession(newSession);
+        setMessages([]);
+        setSessions([newSession]);
+      }
+
+      // Clear provider history
+      mcpClientRef.current?.clearHistory();
     }
   };
 
@@ -205,11 +289,104 @@ export const ChatView: React.FC = () => {
         {/* Header */}
         <div className="flex-shrink-0 border-b border-gray-200 px-6 py-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900">AI Assistant</h2>
-              <p className="text-sm text-gray-600 mt-1">
-                Chat with AI about your data using MCP tools
-              </p>
+            <div className="flex items-center gap-4">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {currentSession?.title || 'AI Assistant'}
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Chat with AI about your data using MCP tools
+                </p>
+              </div>
+
+              {/* Session Management Buttons */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleNewChat}
+                  className="btn btn-sm btn-ghost"
+                  title="New Chat"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  New Chat
+                </button>
+
+                <div className="relative">
+                  <button
+                    onClick={() => setShowSessionList(!showSessionList)}
+                    className="btn btn-sm btn-ghost"
+                    title="Chat History"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    History ({sessions.length})
+                  </button>
+
+                  {/* Session List Dropdown */}
+                  {showSessionList && (
+                    <div className="absolute top-full mt-1 right-0 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-y-auto">
+                      <div className="p-2 border-b border-gray-200">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-semibold text-gray-700">Chat History</span>
+                          <button
+                            onClick={handleClearAllSessions}
+                            className="text-xs text-red-600 hover:text-red-700"
+                          >
+                            Clear All
+                          </button>
+                        </div>
+                      </div>
+                      <div className="divide-y divide-gray-100">
+                        {sessions.map((session) => (
+                          <div
+                            key={session.id}
+                            className={`p-3 hover:bg-gray-50 cursor-pointer transition-colors ${
+                              session.id === currentSession?.id ? 'bg-blue-50' : ''
+                            }`}
+                          >
+                            <div className="flex justify-between items-start">
+                              <div
+                                className="flex-1 min-w-0"
+                                onClick={() => handleSelectSession(session.id)}
+                              >
+                                <p className="text-sm font-medium text-gray-900 truncate">
+                                  {session.title}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {new Date(session.updatedAt).toLocaleDateString()} {new Date(session.updatedAt).toLocaleTimeString()}
+                                  {' · '}
+                                  {session.messages.length} messages
+                                </p>
+                              </div>
+                              {session.id !== currentSession?.id && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteSession(session.id);
+                                  }}
+                                  className="ml-2 p-1 text-gray-400 hover:text-red-600"
+                                  title="Delete"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {sessions.length === 0 && (
+                          <div className="p-4 text-center text-sm text-gray-500">
+                            No chat history yet
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               {/* Provider Selector */}
