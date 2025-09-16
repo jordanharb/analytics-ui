@@ -159,9 +159,10 @@ export class GeminiProvider implements LLMProvider {
           console.log('Sending function responses back to Gemini for final answer');
 
           try {
-            // Gemini requires functionResponse parts be sent from the 'tool' role
-            const toolContent = [{ role: 'tool', parts: functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse })) }];
-            const finalResult = await this.sendMessageWithRetry(chat, toolContent);
+            // Send function responses back to get final answer
+            // Just send the parts array, not wrapped in role/parts structure
+            const toolParts = functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse }));
+            const finalResult = await this.sendMessageWithRetry(chat, toolParts);
             const finalResponse = finalResult.response;
 
             // Get the final text response
@@ -184,11 +185,14 @@ export class GeminiProvider implements LLMProvider {
               };
             }
 
-            // Update history with the complete exchange; functionResponses belong to 'tool' role
+            // Update history with the complete exchange
+            // Gemini doesn't support 'tool' role - function responses must be in model parts
             this.chatHistory.push(
               { role: 'user', parts: [{ text: query }] },
-              { role: 'model', parts: functionCalls.map((fc: any) => ({ functionCall: fc })) },
-              { role: 'tool', parts: functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse })) },
+              { role: 'model', parts: [
+                ...functionCalls.map((fc: any) => ({ functionCall: fc })),
+                ...functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse }))
+              ]},
               { role: 'model', parts: [{ text: finalText || 'Processed successfully' }] }
             );
           } catch (error) {
