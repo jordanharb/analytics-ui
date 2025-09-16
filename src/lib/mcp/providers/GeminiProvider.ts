@@ -159,8 +159,9 @@ export class GeminiProvider implements LLMProvider {
           console.log('Sending function responses back to Gemini for final answer');
 
           try {
-            // Send all function responses back to Gemini
-            const finalResult = await this.sendMessageWithRetry(chat, functionResponses);
+            // Gemini requires functionResponse parts be sent from the 'tool' role
+            const toolContent = [{ role: 'tool', parts: functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse })) }];
+            const finalResult = await this.sendMessageWithRetry(chat, toolContent);
             const finalResponse = finalResult.response;
 
             // Get the final text response
@@ -183,11 +184,11 @@ export class GeminiProvider implements LLMProvider {
               };
             }
 
-            // Update history with the complete exchange
+            // Update history with the complete exchange; functionResponses belong to 'tool' role
             this.chatHistory.push(
               { role: 'user', parts: [{ text: query }] },
               { role: 'model', parts: functionCalls.map((fc: any) => ({ functionCall: fc })) },
-              { role: 'user', parts: functionResponses },
+              { role: 'tool', parts: functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse })) },
               { role: 'model', parts: [{ text: finalText || 'Processed successfully' }] }
             );
           } catch (error) {

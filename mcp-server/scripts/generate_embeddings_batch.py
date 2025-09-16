@@ -53,7 +53,12 @@ DB_PASSWORD = os.getenv('DB_PASSWORD')
 
 # Initialize clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+openai_client = openai.OpenAI(
+    api_key=OPENAI_API_KEY,
+    # Allow tuning via env; sensible defaults for flaky networks
+    max_retries=int(os.getenv('OPENAI_MAX_RETRIES', '10')),
+    timeout=float(os.getenv('OPENAI_TIMEOUT', '60')),
+)
 
 # Batch job tracking directory
 BATCH_DIR = Path(tempfile.gettempdir()) / "embedding_batches"
@@ -307,6 +312,86 @@ def check_batch_status():
     else:
         print("\n⏳ Batches still processing. Check again later.")
 
+def _download_file_text_with_retry(file_id: str, max_retries: int = None, base_delay: float = None) -> str:
+    """Download an OpenAI file's text content with retries on transient errors (e.g. 5xx/Cloudflare)."""
+    try:
+        max_retries = int(os.getenv('OPENAI_DOWNLOAD_MAX_RETRIES', str(max_retries or 5)))
+    except Exception:
+        max_retries = 5
+    try:
+        base_delay = float(os.getenv('OPENAI_DOWNLOAD_BASE_DELAY', str(base_delay or 2.0)))
+    except Exception:
+        base_delay = 2.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Small wait for file readiness before attempting download
+            try:
+                _wait_for_file_ready(file_id)
+            except Exception:
+                pass
+            resp = openai_client.files.content(file_id)
+            # New SDK may expose streaming helpers; fall back to attributes
+            text = None
+            # Try common attributes in order
+            if hasattr(resp, 'text') and isinstance(resp.text, str):
+                text = resp.text
+            elif hasattr(resp, 'content'):
+                data = resp.content
+                if isinstance(data, (bytes, bytearray)):
+                    text = data.decode('utf-8', errors='replace')
+                elif isinstance(data, str):
+                    text = data
+            # Some SDKs expose write_to_file
+            if text is None and hasattr(resp, 'write_to_file'):
+                tmp = BATCH_DIR / f"tmp_{file_id}.jsonl"
+                try:
+                    resp.write_to_file(tmp)
+                    text = tmp.read_text(encoding='utf-8')
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            if text is None:
+                raise RuntimeError("Could not read file content from OpenAI response")
+
+            # Detect HTML error pages (Cloudflare 5xx) and retry
+            leading = text.strip()[:256].lower()
+            if leading.startswith('<!doctype html') or 'bad gateway' in leading or 'cloudflare' in leading:
+                raise RuntimeError("Received HTML error page when downloading batch results (likely 5xx).")
+
+            return text
+        except Exception as e:
+            if attempt >= max_retries:
+                raise
+            # Exponential backoff with jitter
+            delay = base_delay * (2 ** (attempt - 1))
+            jitter = min(5.0, delay * 0.1)
+            delay = delay + (jitter)
+            print(f"    ⚠️  Download attempt {attempt}/{max_retries} failed: {e}. Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+
+
+def _wait_for_file_ready(file_id: str, attempts: int = None, delay: float = None) -> None:
+    """Poll file metadata briefly to allow replication after batch completion."""
+    try:
+        attempts = int(os.getenv('OPENAI_FILE_READY_ATTEMPTS', str(attempts or 5)))
+    except Exception:
+        attempts = 5
+    try:
+        delay = float(os.getenv('OPENAI_FILE_READY_DELAY', str(delay or 1.5)))
+    except Exception:
+        delay = 1.5
+    for i in range(attempts):
+        try:
+            meta = openai_client.files.retrieve(file_id)
+            # If SDK provides bytes/size > 0, assume ready
+            size = getattr(meta, 'bytes', None) or getattr(meta, 'size', None)
+            if size and int(size) > 0:
+                return
+        except Exception:
+            pass
+        time.sleep(delay)
+
+
 def process_batch_results():
     """Download results and update database with embeddings"""
     if not BATCH_STATUS_FILE.exists():
@@ -327,8 +412,7 @@ def process_batch_results():
 
     conn = get_db_connection()
     if not conn:
-        print("❌ Could not connect to database")
-        return
+        print("⚠️  Falling back to Supabase REST updates (no direct DB connection)")
 
     total_updated = 0
 
@@ -340,12 +424,12 @@ def process_batch_results():
         print(f"\n📥 Downloading results for {job['table_name']} file {job['file_index'] + 1}...")
 
         try:
-            # Download result file
-            result_content = openai_client.files.content(job['output_file_id'])
+            # Download result file with retry handling for 5xx/Cloudflare errors
+            text = _download_file_text_with_retry(job['output_file_id'])
 
             # Parse results and prepare updates
             updates = []
-            for line in result_content.text.split('\n'):
+            for line in text.split('\n'):
                 if not line.strip():
                     continue
 
@@ -367,20 +451,42 @@ def process_batch_results():
             # Bulk update database
             if updates:
                 print(f"  💾 Updating {len(updates):,} embeddings in database...")
-                cursor = conn.cursor()
+                if conn:
+                    cursor = conn.cursor()
+                    query = f"""
+                        UPDATE {job['table_name']}
+                        SET embedding = data.embedding::vector
+                        FROM (VALUES %s) AS data(id, embedding)
+                        WHERE {job['table_name']}.id = data.id::uuid
+                    """
+                    execute_values(cursor, query, updates, page_size=1000)
+                    conn.commit()
+                    total_updated += len(updates)
+                    print(f"  ✓ Updated {len(updates):,} embeddings (SQL)")
+                else:
+                    # REST fallback: upsert in chunks
+                    # Convert stringified embedding back to list[float]
+                    def parse_vec(s: str):
+                        try:
+                            # s like "[0.1,0.2]"
+                            return json.loads(s)
+                        except Exception:
+                            return []
 
-                query = f"""
-                    UPDATE {job['table_name']}
-                    SET embedding = data.embedding::vector
-                    FROM (VALUES %s) AS data(id, embedding)
-                    WHERE {job['table_name']}.id = data.id::uuid
-                """
-
-                execute_values(cursor, query, updates, page_size=1000)
-                conn.commit()
-
-                total_updated += len(updates)
-                print(f"  ✓ Updated {len(updates):,} embeddings")
+                    chunk = []
+                    chunk_size = 500
+                    for (item_id, emb_str) in updates:
+                        vec = parse_vec(emb_str)
+                        chunk.append({'id': item_id, 'embedding': vec})
+                        if len(chunk) >= chunk_size:
+                            supabase.table(job['table_name']).upsert(chunk, on_conflict='id').execute()
+                            total_updated += len(chunk)
+                            print(f"    ✓ Upserted {len(chunk)} via REST")
+                            chunk = []
+                    if chunk:
+                        supabase.table(job['table_name']).upsert(chunk, on_conflict='id').execute()
+                        total_updated += len(chunk)
+                        print(f"    ✓ Upserted {len(chunk)} via REST")
 
                 # Mark as processed
                 job['processed'] = True
@@ -388,13 +494,15 @@ def process_batch_results():
 
         except Exception as e:
             print(f"  ❌ Error processing batch: {e}")
-            conn.rollback()
+            if conn:
+                conn.rollback()
 
     # Save updated status
     with open(BATCH_STATUS_FILE, 'w') as f:
         json.dump(batch_jobs, f, indent=2)
 
-    conn.close()
+    if conn:
+        conn.close()
 
     print("\n" + "=" * 50)
     print(f"✅ Successfully updated {total_updated:,} embeddings!")

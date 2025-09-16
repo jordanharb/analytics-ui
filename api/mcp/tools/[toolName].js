@@ -331,11 +331,23 @@ export default async function handler(req, res) {
       case 'search_posts':
         result = await searchPosts(supabase, args)
         break
+      case 'search_events':
+        result = await searchEvents(supabase, args)
+        break
+      case 'find_similar_content':
+        result = await findSimilarContent(supabase, args)
+        break
       case 'analyze_trends':
         result = await analyzeTrends(supabase, args)
         break
+      case 'get_analytics':
+        result = await getAnalytics(supabase, args)
+        break
       case 'get_actor_info':
         result = await getActorInfo(supabase, args)
+        break
+      case 'resolve_unknown_actors':
+        result = await resolveUnknownActors(supabase, args)
         break
       default:
         res.status(404).json({ success: false, error: `Unknown tool: ${toolName}` })
@@ -347,3 +359,179 @@ export default async function handler(req, res) {
   }
 }
 
+// --------- VectorSearch.searchEvents with fallback ---------
+async function searchEvents(supabase, args = {}) {
+  const { query, limit = 50, similarity_threshold = 0.7, filters = {} } = args
+  try {
+    const { data, error } = await supabase.rpc('search_events_by_embedding', {
+      query_embedding: null,
+      similarity_threshold,
+      match_limit: limit,
+      filter_start_date: filters.date_range?.start_date || null,
+      filter_end_date: filters.date_range?.end_date || null,
+      filter_states: filters.states || null,
+      query_text: query || null,
+    })
+    if (error) throw error
+    const events = (data || []).map((ev) => ({
+      id: ev.id,
+      name: ev.event_name,
+      date: ev.event_date,
+      location: { venue: ev.location, city: ev.city, state: ev.state },
+      description: ev.event_description,
+      similarity_score: ev.similarity,
+      tags: ev.category_tags || [],
+      confidence: ev.confidence_score,
+    }))
+    return { query, total_results: events.length, similarity_threshold, filters_applied: filters, events }
+  } catch (_) {
+    // Fallback text search across name/description
+    let q = supabase
+      .from('v2_events')
+      .select('*')
+      .or(`event_name.ilike.%${query || ''}%,event_description.ilike.%${query || ''}%`)
+    if (filters.date_range?.start_date) q = q.gte('event_date', filters.date_range.start_date)
+    if (filters.date_range?.end_date) q = q.lte('event_date', filters.date_range.end_date)
+    if (filters.states?.length) q = q.in('state', filters.states)
+    if (filters.tags?.length) for (const tag of filters.tags) q = q.contains('category_tags', [tag])
+    const { data, error } = await q.order('event_date', { ascending: false }).limit(limit)
+    if (error) throw error
+    const events = (data || []).map((ev) => ({
+      id: ev.id,
+      name: ev.event_name,
+      date: ev.event_date,
+      location: { venue: ev.location, city: ev.city, state: ev.state },
+      description: ev.event_description,
+      tags: ev.category_tags || [],
+      confidence: ev.confidence_score,
+    }))
+    return { query, search_type: 'text_search', total_results: events.length, filters_applied: filters, events }
+  }
+}
+
+// --------- VectorSearch.findSimilarContent ---------
+async function findSimilarContent(supabase, args = {}) {
+  const { content_id, content_type = 'post', limit = 20 } = args
+  const table = content_type === 'event' ? 'v2_events' : 'v2_social_media_posts'
+  const { data: content, error: err } = await supabase.from(table).select('*').eq('id', content_id).single()
+  if (err || !content) throw new Error('Content not found')
+  const rpc = content_type === 'event' ? 'find_similar_events' : 'find_similar_posts'
+  const { data, error } = await supabase.rpc(rpc, { target_id: content_id, match_limit: limit })
+  if (error) throw error
+  return { content_id, content_type, total: (data || []).length, items: data || [] }
+}
+
+// --------- AnalyticsEngine.getAnalytics dispatcher ---------
+async function getAnalytics(supabase, params = {}) {
+  const { metric_type, date_range, grouping, filters } = params
+  switch (metric_type) {
+    case 'event_trends':
+      return analyzeTrends(supabase, { date_range, grouping, filters })
+    case 'actor_activity':
+      return actorActivity(supabase, { date_range, filters })
+    case 'geographic_distribution':
+      return geographicDistribution(supabase, { date_range, filters })
+    case 'tag_frequency':
+      return tagFrequency(supabase, { date_range, filters })
+    case 'network_analysis':
+      return networkAnalysis(supabase, { date_range, filters })
+    default:
+      throw new Error(`Unknown metric type: ${metric_type}`)
+  }
+}
+
+async function actorActivity(supabase, { date_range, filters = {} }) {
+  // Get links with joined actors and events to compute activity
+  let q = supabase
+    .from('v2_event_actor_links')
+    .select('actor_id, actor_handle, actor_type, event_id, v2_events(id, state)')
+  if (date_range?.start_date) q = q.gte('created_at', date_range.start_date)
+  if (date_range?.end_date) q = q.lte('created_at', date_range.end_date)
+  const { data, error } = await q
+  if (error) throw error
+  const map = {}
+  for (const row of data || []) {
+    const key = `${row.actor_id}`
+    if (!map[key]) map[key] = { actor_id: row.actor_id, handle: row.actor_handle, type: row.actor_type, event_count: 0, states: new Set(), events: [] }
+    map[key].event_count++
+    map[key].events.push(row.event_id)
+    const state = row.v2_events?.state
+    if (state) map[key].states.add(state)
+  }
+  const top = Object.values(map).map((a) => ({ ...a, states_active: Array.from(a.states), state_count: a.states.size }))
+    .sort((a, b) => b.event_count - a.event_count).slice(0, 50)
+  return { metric_type: 'actor_activity', period: date_range, total_actors: Object.keys(map).length, top_actors: top }
+}
+
+async function geographicDistribution(supabase, { date_range, filters = {} }) {
+  const { data, error } = await supabase.rpc('get_map_points', {
+    p_filters: { start_date: date_range?.start_date, end_date: date_range?.end_date, tags: filters.tags || [], states: filters.states || [] }
+  })
+  if (error) throw error
+  const stateDistribution = {}
+  const cityDistribution = {}
+  for (const p of data?.map_points || []) {
+    const s = p.state || 'unknown'
+    const c = `${p.city}, ${p.state}`
+    stateDistribution[s] = (stateDistribution[s] || 0) + p.count
+    cityDistribution[c] = p.count
+  }
+  const top_cities = Object.entries(cityDistribution).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([city, count]) => ({ city, count }))
+  return { metric_type: 'geographic_distribution', period: date_range, total_events: data?.total_events || 0, virtual_events: data?.virtual_bucket?.count || 0, state_distribution: stateDistribution, top_cities, map_points: (data?.map_points || []).slice(0, 100) }
+}
+
+async function tagFrequency(supabase, { date_range, filters = {} }) {
+  let q = supabase.from('v2_events').select('category_tags, event_date')
+  if (date_range?.start_date) q = q.gte('event_date', date_range.start_date)
+  if (date_range?.end_date) q = q.lte('event_date', date_range.end_date)
+  if (filters?.states?.length) q = q.in('state', filters.states)
+  const { data: events, error } = await q
+  if (error) throw error
+  const counts = {}
+  const co = {}
+  for (const ev of events || []) {
+    const tags = ev.category_tags || []
+    for (const t of tags) {
+      counts[t] = (counts[t] || 0) + 1
+      for (const o of tags) if (o !== t) { if (!co[t]) co[t] = {}; co[t][o] = (co[t][o] || 0) + 1 }
+    }
+  }
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 100).map(([tag, count]) => ({ tag, count }))
+  return { metric_type: 'tag_frequency', period: date_range, top_tags: top, cooccurrence: co }
+}
+
+async function networkAnalysis(supabase, { date_range, filters = {} }) {
+  // Basic network derived from actor links
+  const { data, error } = await supabase
+    .from('v2_actor_links')
+    .select('from_actor_id, to_actor_id, role, relationship, start_date, end_date')
+  if (error) throw error
+  return { metric_type: 'network_analysis', edges: data || [] }
+}
+
+// --------- ActorResolver.resolveUnknownActors ---------
+async function resolveUnknownActors(supabase, params = {}) {
+  const limit = params.limit || 100
+  const { data: unknowns, error } = await supabase
+    .from('v2_unknown_actors')
+    .select('*')
+    .eq('review_status', 'pending')
+    .order('mention_count', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+
+  const suggestions = []
+  for (const unk of unknowns || []) {
+    const name = unk.detected_username || ''
+    const { data: matches } = await supabase
+      .from('v2_actors')
+      .select('id, name, actor_type, city, state')
+      .ilike('name', `%${name}%`)
+      .limit(10)
+    suggestions.push({
+      unknown_actor: { id: unk.id, username: unk.detected_username, platform: unk.platform, mention_count: unk.mention_count },
+      suggested_matches: matches || []
+    })
+  }
+  return { total: suggestions.length, items: suggestions }
+}
