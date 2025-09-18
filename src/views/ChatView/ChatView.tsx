@@ -287,41 +287,36 @@ export const ChatView: React.FC = () => {
     <div className="flex flex-col h-full bg-white">
       <div className="flex-1 flex flex-col max-w-6xl mx-auto w-full h-full overflow-hidden">
         {/* Header */}
-        <div className="flex-shrink-0 border-b border-gray-200 px-6 py-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900">
-                  {currentSession?.title || 'AI Assistant'}
-                </h2>
-                <p className="text-sm text-gray-600 mt-1">
-                  Chat with AI about your data using MCP tools
-                </p>
-              </div>
+        <div className="flex-shrink-0 border-b border-gray-200 px-6 py-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-medium text-gray-700">
+                {currentSession?.title || 'New Chat'}
+              </h2>
 
               {/* Session Management Buttons */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <button
                   onClick={handleNewChat}
-                  className="btn btn-sm btn-ghost"
+                  className="btn btn-xs btn-ghost"
                   title="New Chat"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
-                  New Chat
+                  <span className="hidden sm:inline ml-1">New</span>
                 </button>
 
                 <div className="relative">
                   <button
                     onClick={() => setShowSessionList(!showSessionList)}
-                    className="btn btn-sm btn-ghost"
+                    className="btn btn-xs btn-ghost"
                     title="Chat History"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    History ({sessions.length})
+                    <span className="ml-1">({sessions.length})</span>
                   </button>
 
                   {/* Session List Dropdown */}

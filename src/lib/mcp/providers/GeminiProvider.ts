@@ -20,6 +20,28 @@ export class GeminiProvider implements LLMProvider {
     this.model = this.genAI.getGenerativeModel({ model: this.currentModelId });
   }
 
+  /**
+   * Sanitize chat history to remove any function calls/responses that Gemini doesn't support
+   */
+  private sanitizeHistory(history: any[]): any[] {
+    return history.filter(entry => {
+      // Only keep user and model messages with text content
+      if (entry.role === 'user' || entry.role === 'model') {
+        // Check if parts contain only text (no function calls/responses)
+        const hasOnlyText = entry.parts.every((part: any) =>
+          part.text !== undefined &&
+          part.functionCall === undefined &&
+          part.functionResponse === undefined
+        );
+        return hasOnlyText;
+      }
+      return false;
+    }).map(entry => ({
+      role: entry.role,
+      parts: entry.parts.filter((part: any) => part.text !== undefined)
+    }));
+  }
+
   async *processQuery(query: string, tools?: MCPTool[], toolExecutor?: (name: string, args: any) => Promise<any>): AsyncIterable<StreamChunk> {
     try {
       console.log('Using Gemini model:', this.currentModelId);
@@ -69,12 +91,15 @@ export class GeminiProvider implements LLMProvider {
       // Initialize with system context if this is the first message
       const systemPrompt = contextManager.getSystemPrompt();
 
-      // Start chat session with history
+      // Sanitize history before starting chat
+      const sanitizedHistory = this.sanitizeHistory(this.chatHistory);
+
+      // Start chat session with sanitized history
       const chat = this.model.startChat({
-        history: this.chatHistory.length === 0
+        history: sanitizedHistory.length === 0
           ? [{ role: 'user', parts: [{ text: systemPrompt }] } as any,
              { role: 'model', parts: [{ text: 'Understood. I have access to MCP tools and will help you with your queries.' }] } as any]
-          : this.chatHistory as any
+          : sanitizedHistory as any
       });
 
       // Send the initial message and handle the response
@@ -186,14 +211,39 @@ export class GeminiProvider implements LLMProvider {
             }
 
             // Update history with the complete exchange
-            // Gemini doesn't support 'tool' role - function responses must be in model parts
+            // Include function calls and results as text so Gemini can see what was done
+            let fullResponse = '';
+
+            // Build a comprehensive response including tool usage
+            if (functionCalls.length > 0) {
+              const toolDescriptions = functionCalls.map((fc: any, idx: number) => {
+                const response = functionResponses[idx];
+                let toolInfo = `Used tool: ${fc.name}`;
+
+                if (fc.args && Object.keys(fc.args).length > 0) {
+                  toolInfo += ` with parameters: ${JSON.stringify(fc.args)}`;
+                }
+
+                if (response && response.functionResponse && response.functionResponse.response) {
+                  const resultStr = JSON.stringify(response.functionResponse.response, null, 2);
+                  // Truncate very long results but keep them readable
+                  const truncatedResult = resultStr.length > 1000
+                    ? resultStr.substring(0, 1000) + '... (truncated)'
+                    : resultStr;
+                  toolInfo += `\nResult: ${truncatedResult}`;
+                }
+
+                return toolInfo;
+              }).join('\n\n');
+
+              fullResponse = `[Tool Usage]\n${toolDescriptions}\n\n[Response]\n${finalText || 'Analysis complete'}`;
+            } else {
+              fullResponse = finalText || 'Processed successfully';
+            }
+
             this.chatHistory.push(
               { role: 'user', parts: [{ text: query }] },
-              { role: 'model', parts: [
-                ...functionCalls.map((fc: any) => ({ functionCall: fc })),
-                ...functionResponses.map((fr: any) => ({ functionResponse: fr.functionResponse }))
-              ]},
-              { role: 'model', parts: [{ text: finalText || 'Processed successfully' }] }
+              { role: 'model', parts: [{ text: fullResponse }] }
             );
           } catch (error) {
             console.error('Failed to get final response after function execution:', error);
