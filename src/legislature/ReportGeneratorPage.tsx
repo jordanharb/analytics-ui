@@ -53,10 +53,109 @@ const ReportGeneratorPage: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results'>('search');
   const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall'>('twoPhase');
 
-  const baseGenerationConfig = {
-    temperature: 0.6,
-    maxOutputTokens: 8192,
+const baseGenerationConfig = {
+  temperature: 0.6,
+  maxOutputTokens: 8192,
+};
+
+const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+const runWithTimeout = async <T,>(executor: (signal: AbortSignal) => Promise<T>, timeoutMs = TEN_MINUTES_MS) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await executor(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const parseJsonLoose = (raw: string) => {
+  const cleaned = raw.trim();
+  const variants: string[] = [];
+
+  const balanceDelimiters = (input: string) => {
+    let result = input;
+    const stack: string[] = [];
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < result.length; i += 1) {
+      const char = result[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (char === '\\') {
+        escape = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (char === '{' || char === '[') {
+        stack.push(char);
+      } else if (char === '}' || char === ']') {
+        stack.pop();
+      }
+    }
+
+    while (stack.length) {
+      const open = stack.pop();
+      result += open === '{' ? '}' : ']';
+    }
+    return result;
   };
+
+  const addVariant = (str: string) => {
+    const balanced = balanceDelimiters(str);
+    if (!variants.includes(balanced)) {
+      variants.push(balanced);
+    }
+    return balanced;
+  };
+
+  const withoutComments = cleaned
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+
+  const noTrailingCommas = withoutComments.replace(/,\s*([}\]])/g, '$1');
+  const withObjectCommas = noTrailingCommas.replace(/}(?=\s*"|\s*{)/g, '},');
+  const withArrayCommas = withObjectCommas.replace(/](?=\s*"|\s*{)/g, '],');
+
+  const withKeyQuotes = withArrayCommas.replace(/([,{\[]\s*)([A-Za-z0-9_]+)(?=\s*:)/g, (_, prefix, key) => `${prefix}"${key}"`);
+
+  addVariant(cleaned);
+  addVariant(withoutComments);
+  addVariant(noTrailingCommas);
+  addVariant(withObjectCommas);
+  addVariant(withArrayCommas);
+  addVariant(withKeyQuotes);
+
+  let lastError: unknown = null;
+
+  for (const candidate of variants) {
+    try {
+      return JSON.parse(candidate);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  for (const candidate of variants) {
+    try {
+      // eslint-disable-next-line no-new-func
+      return Function(`"use strict"; return (${candidate});`)();
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError ?? new Error('Unable to parse JSON');
+};
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -470,20 +569,20 @@ const ReportGeneratorPage: React.FC = () => {
           summary_stats: summaryStats
         }, null, 2);
 
-        const phase1Prompt = `${customBlock}Phase 1 Prompt Template
+const phase1Prompt = `${customBlock}Phase 1 Prompt Template
 This prompt is designed to generate a broad list of potential connections using metadata only.
 
 You are an investigative journalist analyzing potential conflicts of interest between campaign donations and legislative activity. Work only with the structured metadata provided. DO NOT call any other tools or read full bill text during Phase 1.
 
 PHASE 1 OUTPUT REQUIREMENTS:
 
-Create a STRUCTURED JSON output with ALL potential donor-bill pairs:
+Create a STRUCTURED JSON output with ALL potential donor-bill groups (each bill appears once with every relevant donor nested beneath it):
 
 \`\`\`json
 {
   "session_info": ${JSON.stringify(sessionInfo, null, 2)},
   "legislator_info": ${JSON.stringify(legislatorInfo, null, 2)},
-  "potential_pairs": [
+  "potential_groups": [
     {
       "bill_id": 12345,
       "bill_number": "HB1234",
@@ -504,7 +603,7 @@ Create a STRUCTURED JSON output with ALL potential donor-bill pairs:
           "days_from_session": 64
         }
       ],
-      "connection_reason": "Why this donor might care about this bill",
+      "group_reason": "Why this collection of donors might care about this bill",
       "confidence_score": 0.0-1.0
     }
   ],
@@ -518,7 +617,7 @@ SCORING GUIDELINES:
 - Low confidence (0.1-0.39): Weak connection but worth investigating
 
 IMPORTANT:
-- Create pairs for EVERY significant donor (>$100) and EVERY vote/sponsorship
+- Create groups for EVERY significant donor (>$100) and EVERY vote/sponsorship
 - Pay SPECIAL attention to lobbyist donors regardless of amount
 - Flag all PAC/Organization donations for scrutiny
 - Don't filter yet - include low confidence pairs
@@ -534,7 +633,7 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
         let phase1Result, phase1Response;
         try {
           console.log('Calling Gemini API for Phase 1 analysis...');
-          phase1Result = await model.generateContent(phase1Prompt);
+          phase1Result = await runWithTimeout((signal) => model.generateContent(phase1Prompt, { signal }));
 
           if (!phase1Result || !phase1Result.response) {
             throw new Error('No response from Gemini API');
@@ -542,6 +641,7 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
 
           phase1Response = phase1Result.response.text();
           console.log('Phase 1 response received, length:', phase1Response.length);
+          console.log('[Phase 1 Raw Response]', phase1Response);
 
           if (!phase1Response) {
             throw new Error('Empty response from Gemini API');
@@ -574,7 +674,7 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
           }
 
           const jsonSlice = sanitized.slice(firstBrace, lastBrace + 1);
-          phase1Data = JSON.parse(jsonSlice);
+          phase1Data = parseJsonLoose(jsonSlice);
         } catch (e) {
           throw new Error(`Failed to parse Phase 1 results: ${e}`);
         }
@@ -583,43 +683,90 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
         setProgressPercent(30 + (i * 40));
 
         // Phase 2: Deep dive on high-confidence matches
-        const potentialPairs: any[] = Array.isArray(phase1Data.potential_pairs) ? phase1Data.potential_pairs : [];
-        console.log('Phase 1 potential pairs parsed:', potentialPairs.length);
-        const highConfidencePairs = potentialPairs
-          .filter((p: any) => Number(p.confidence_score ?? 0) >= 0.5)
+        const rawGroups: any[] = Array.isArray(phase1Data.potential_groups)
+          ? phase1Data.potential_groups
+          : Array.isArray(phase1Data.potential_pairs)
+            ? phase1Data.potential_pairs
+            : [];
+
+        const mergedGroupsMap = new Map<number, any>();
+        rawGroups.forEach((group: any) => {
+          const billId = group.bill_id;
+          if (billId == null) return;
+
+          const existing = mergedGroupsMap.get(billId) || {
+            ...group,
+            donors: [],
+            group_reasons: [] as string[],
+            confidence_score: Number(group.confidence_score ?? 0),
+          };
+
+          const donors = Array.isArray(existing.donors) ? existing.donors : [];
+          const newDonors = Array.isArray(group.donors) ? group.donors : [];
+          const seen = new Set<string>(
+            donors.map((d: any) => String(d.donation_id ?? `${d.name}-${d.amount}-${d.transaction_date}`))
+          );
+
+          newDonors.forEach((donor: any) => {
+            const dedupeKey = String(donor.donation_id ?? `${donor.name}-${donor.amount}-${donor.transaction_date}`);
+            if (!seen.has(dedupeKey)) {
+              donors.push(donor);
+              seen.add(dedupeKey);
+            }
+          });
+
+          const reason = group.group_reason ?? group.connection_reason ?? '';
+          if (reason && !existing.group_reasons.includes(reason)) {
+            existing.group_reasons.push(reason);
+          }
+
+          existing.connection_reason = existing.group_reasons.join('; ');
+          existing.confidence_score = Math.max(Number(existing.confidence_score ?? 0), Number(group.confidence_score ?? 0));
+          existing.donors = donors;
+          existing.vote_or_sponsorship = existing.vote_or_sponsorship ?? group.vote_or_sponsorship;
+          existing.vote_value = existing.vote_value ?? group.vote_value ?? group.vote;
+
+          mergedGroupsMap.set(billId, existing);
+        });
+
+        const potentialGroups = Array.from(mergedGroupsMap.values());
+        console.log('Phase 1 potential groups parsed:', potentialGroups.length);
+
+        const highConfidenceGroups = potentialGroups
+          .filter((group: any) => Number(group.confidence_score ?? 0) >= 0.5)
           .slice(0, 10); // Limit to top 10
-        console.log('Phase 2 candidates (confidence >= 0.5):', highConfidencePairs.length);
+        console.log('Phase 2 candidates (confidence >= 0.5):', highConfidenceGroups.length);
 
         let confirmedConnections: any[] = [];
         let rejectedConnections: any[] = [];
 
-        if (highConfidencePairs.length > 0) {
+        if (highConfidenceGroups.length > 0) {
           // Get full bill details for high-confidence matches
-          const billDetailsPromises = highConfidencePairs.map((pair: any) =>
-            supabase.rpc('get_bill_details', { p_bill_id: pair.bill_id })
+          const billDetailsPromises = highConfidenceGroups.map((group: any) =>
+            supabase.rpc('get_bill_details', { p_bill_id: group.bill_id })
           );
 
           const billDetailsResults = await Promise.all(billDetailsPromises);
 
-          for (let j = 0; j < highConfidencePairs.length; j++) {
-            const pair = highConfidencePairs[j];
+          for (let j = 0; j < highConfidenceGroups.length; j++) {
+            const group = highConfidenceGroups[j];
             const billDetailResult = billDetailsResults[j];
 
-            console.log('Phase 2 analyzing pair:', {
-              bill_id: pair.bill_id,
-              bill_number: pair.bill_number,
-              confidence: pair.confidence_score,
+            console.log('Phase 2 analyzing group:', {
+              bill_id: group.bill_id,
+              bill_number: group.bill_number,
+              confidence: group.confidence_score,
             });
 
             if (billDetailResult.error) {
-              console.warn(`Failed to get details for bill ${pair.bill_id}:`, billDetailResult.error);
+              console.warn(`Failed to get details for bill ${group.bill_id}:`, billDetailResult.error);
               continue;
             }
 
             const billDetails = billDetailResult.data?.[0];
             if (!billDetails) continue;
 
-            const donorsForPhase2 = pair.donors?.map((d: any) => ({
+            const donorsForPhase2 = group.donors?.map((d: any) => ({
               name: d.name,
               employer: d.employer ?? null,
               occupation: d.occupation ?? null,
@@ -628,12 +775,16 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
               donation_id: d.donation_id ?? null
             })) ?? [];
 
-            const voteOrSponsorship = pair.vote_or_sponsorship || (pair.is_sponsor ? 'sponsor' : 'vote');
-            const voteValue = pair.vote_value ?? pair.vote ?? null;
+            const groupReasons = Array.isArray(group.group_reasons) && group.group_reasons.length > 0
+              ? group.group_reasons
+              : [group.connection_reason ?? group.group_reason ?? ''].filter(Boolean);
 
-        const phase2Prompt = `${customBlock}You are an investigative journalist doing a DEEP DIVE analysis of potential donor-bill connections.
+            const voteOrSponsorship = group.vote_or_sponsorship || (group.is_sponsor ? 'sponsor' : 'vote');
+            const voteValue = group.vote_value ?? group.vote ?? null;
 
-You have been given a list of ${highConfidencePairs.length} potential connections to investigate.
+            const phase2Prompt = `${customBlock}You are an investigative journalist doing a DEEP DIVE analysis of potential donor-bill connections.
+
+You have been given a list of ${highConfidenceGroups.length} potential groups to investigate (each group contains one bill with all associated donors).
 
 PRIORITY DONORS TO SCRUTINIZE:
 - Lobbyists and lobbying firms (check occupation field)
@@ -645,16 +796,16 @@ PRIORITY DONORS TO SCRUTINIZE:
 
 YOUR MISSION: Validate or reject each connection by examining the actual bill text.
 
-FOR EACH HIGH/MEDIUM CONFIDENCE PAIR:
-1. Call get_bill_details with bill_id=<the numeric bill_id from the pairing>
+FOR EACH HIGH/MEDIUM CONFIDENCE GROUP:
+1. Call get_bill_details with bill_id=<the numeric bill_id from the group>
    - Example: get_bill_details with bill_id=69612
 2. Analyze if the bill content ACTUALLY benefits the identified donors
 3. Look for specific provisions that align with donor interests
 4. Confirm or reject the connection based on evidence
 5. CRITICAL: Include the bill_id field in your output for each confirmed connection
 
-PAIRING DATA TO ANALYZE:
-${JSON.stringify(highConfidencePairs, null, 2)}
+GROUP DATA TO ANALYZE:
+${JSON.stringify(highConfidenceGroups, null, 2)}
 
 OUTPUT FORMAT:
 \`\`\`json
@@ -718,47 +869,45 @@ REMEMBER: When analyzing bill text, pay EXTRA attention to provisions that benef
 
 For lobbyist donors: even indirect benefits count (e.g., rules that make their job easier).
 
-${process.env.CUSTOM_INSTRUCTIONS ? `================================
-CUSTOM CRITICAL INSTRUCTIONS AND CONTEXT - These Override all other rules:
-${process.env.CUSTOM_INSTRUCTIONS}
-================================` : ''}`;
+GROUP RATIONALES:
+${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: ${reason}`).join('\n') : '- No explicit rationale provided from Phase 1.'}`;
 
-            const phase2Result = await model.generateContent(phase2Prompt);
+            const phase2Result = await runWithTimeout((signal) => model.generateContent(phase2Prompt, { signal }));
             const phase2Response = phase2Result.response.text();
 
             try {
               const cleanResponse = phase2Response.replace(/```json\s*|\s*```/g, '').trim();
-              const analysis = JSON.parse(cleanResponse);
+              const analysis = parseJsonLoose(cleanResponse);
 
               const confirmedList = Array.isArray(analysis.confirmed_connections) ? analysis.confirmed_connections : [];
               const rejectedList = Array.isArray(analysis.rejected_connections) ? analysis.rejected_connections : [];
 
               if (confirmedList.length > 0) {
                 confirmedConnections.push({
-                  ...pair,
+                  ...group,
                   analysis: confirmedList[0]
                 });
               }
 
               if (rejectedList.length > 0) {
                 rejectedConnections.push({
-                  ...pair,
+                  ...group,
                   analysis: rejectedList[0]
                 });
               }
             } catch (e) {
-              console.warn(`Failed to parse Phase 2 analysis for bill ${pair.bill_id}:`, e);
+              console.warn(`Failed to parse Phase 2 analysis for bill ${group.bill_id}:`, e);
             }
           }
         }
 
         // Compile final report
-        const autoHigh = potentialPairs.filter((p: any) => Number(p.confidence_score ?? 0) >= 0.7).length;
-        const autoMedium = potentialPairs.filter((p: any) => {
-          const score = Number(p.confidence_score ?? 0);
+        const autoHigh = potentialGroups.filter((group: any) => Number(group.confidence_score ?? 0) >= 0.7).length;
+        const autoMedium = potentialGroups.filter((group: any) => {
+          const score = Number(group.confidence_score ?? 0);
           return score >= 0.4 && score < 0.7;
         }).length;
-        const autoLow = potentialPairs.filter((p: any) => Number(p.confidence_score ?? 0) > 0 && Number(p.confidence_score ?? 0) < 0.4).length;
+        const autoLow = potentialGroups.filter((group: any) => Number(group.confidence_score ?? 0) > 0 && Number(group.confidence_score ?? 0) < 0.4).length;
 
         const phase1Summary = {
           total_donations: Number(phase1Data.summary_stats?.total_donations ?? summaryStats.total_donations) || 0,
@@ -788,7 +937,7 @@ ${process.env.CUSTOM_INSTRUCTIONS}
           billCount: bills.length,
           donationCount: donations.length,
           totalDonations: donations.reduce((sum: number, d: any) => sum + (Number(d.amount ?? d.donation_amt ?? 0)), 0),
-          phase1Matches: potentialPairs.length,
+          phase1Matches: potentialGroups.length,
           confirmedConnections,
           rejectedConnections,
           summaryStats: phase1Summary,
@@ -1224,6 +1373,7 @@ ${process.env.CUSTOM_INSTRUCTIONS}
       `Always cite evidence directly from bill details and RTS positions when making claims.\n` +
       `Focus on identifying THEMES tying donors to bills, rather than individual donor-bill pairs.\n` +
       `For each theme, list every relevant bill and every related donor exhaustively.\n` +
+      `Each bill must appear only once with every relevant donor nested under that bill entry.\n` +
       `Selected sessions: ${JSON.stringify(sessionMetadata)}. Combined range: ${combinedSessionRange.start || 'unknown'} to ${combinedSessionRange.end || 'unknown'}.\n` +
       `Baseline dataset for reference (metadata only):\n\`\`\`json\n${datasetJson}\n\`\`\`\n` +
       `If you need additional data, call the appropriate tool. Once confident, produce the final structured report.\n\n` +
@@ -1307,18 +1457,21 @@ ${process.env.CUSTOM_INSTRUCTIONS}
         },
       };
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+      return runWithTimeout(async (signal) => {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Gemini error: ${res.status} ${text}`);
+        }
+
+        return res.json();
       });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`Gemini error: ${res.status} ${text}`);
-      }
-
-      return res.json();
     };
 
     let data = await sendToGemini();
@@ -1381,7 +1534,7 @@ ${process.env.CUSTOM_INSTRUCTIONS}
     }
 
     const jsonSlice = sanitized.slice(firstBrace, lastBrace + 1);
-    const report = JSON.parse(jsonSlice);
+    const report = parseJsonLoose(jsonSlice);
 
     const summaryName = analysisMode === 'singleCall' && selectedSessions.length > 1
       ? 'Combined Single-Pass Analysis'
