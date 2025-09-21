@@ -5,17 +5,7 @@ import { EntityView } from './views/EntityView/EntityView';
 import { ChatView } from './views/ChatView/ChatView';
 import { Header } from './components/Header/Header';
 import { LaunchPage } from './components/LaunchPage/LaunchPage';
-import { LegislatureLanding } from './views/LegislatureView/LegislatureLanding';
-import { CandidatePage } from './views/LegislatureView/CandidatePage';
-import { LegislatorPage } from './views/LegislatureView/LegislatorPage';
-import { BillPage } from './views/LegislatureView/BillPage';
-import { CandidatesListPage } from './views/LegislatureView/CandidatesListPage';
-import { LegislatorsListPage } from './views/LegislatureView/LegislatorsListPage';
-import { BillsListPage } from './views/LegislatureView/BillsListPage';
-import { SessionsListPage } from './views/LegislatureView/SessionsListPage';
-import { TestConnection } from './views/LegislatureView/TestConnection';
-import { PeopleListPage } from './views/LegislatureView/PeopleListPage';
-import { PersonPage } from './views/LegislatureView/PersonPage';
+import LegislatureApp from './legislature/LegislatureApp';
 
 function AppContent() {
   const location = useLocation();
@@ -38,24 +28,7 @@ function AppContent() {
             <Route path="/entity/:entityType/:entityId" element={<EntityView />} />
             
             {/* Legislature & Campaign Finance Routes */}
-            <Route path="/legislature" element={<LegislatureLanding />} />
-            <Route path="/legislature/test" element={<TestConnection />} />
-            
-            {/* People-Centric Routes */}
-            <Route path="/legislature/people" element={<PeopleListPage />} />
-            <Route path="/legislature/person/:personId" element={<PersonPage />} />
-            
-            {/* List Pages */}
-            <Route path="/legislature/candidates" element={<CandidatesListPage />} />
-            <Route path="/legislature/legislators" element={<PeopleListPage />} /> {/* Redirect to people */}
-            <Route path="/legislature/bills" element={<BillsListPage />} />
-            <Route path="/legislature/sessions" element={<SessionsListPage />} />
-            
-            {/* Detail Pages */}
-            <Route path="/legislature/candidate/:entityId" element={<CandidatePage />} />
-            <Route path="/legislature/legislator/:legislatorId" element={<LegislatorPage />} />
-            <Route path="/legislature/bill/:billId" element={<BillPage />} />
-            <Route path="/legislature/session/:sessionId" element={<SessionsListPage />} />
+            <Route path="/legislature/*" element={<LegislatureApp />} />
           </Routes>
         </main>
       </div>
