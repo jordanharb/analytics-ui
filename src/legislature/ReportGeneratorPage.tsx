@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { supabase2 as supabase } from '../lib/supabase2';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, type Tool } from '@google/generative-ai';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
 
@@ -51,6 +51,12 @@ const ReportGeneratorPage: React.FC = () => {
   const [progressPercent, setProgressPercent] = useState(0);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[] | null>(null);
   const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results'>('search');
+  const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall'>('twoPhase');
+
+  const baseGenerationConfig = {
+    temperature: 0.6,
+    maxOutputTokens: 8192,
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -160,13 +166,59 @@ const ReportGeneratorPage: React.FC = () => {
       let personId: number | null = null;
       if (selectedPerson?.person_id) {
         personId = selectedPerson.person_id;
-        const { data: sessionData, error: sessionError } = await supabase.rpc('get_person_sessions', { p_person_id: personId });
-        if (sessionError) throw sessionError;
+
+        let sessionRows: any[] = [];
+        try {
+          const { data: sessionData, error: sessionError } = await supabase.rpc('get_person_sessions', { p_person_id: personId });
+          if (sessionError) throw sessionError;
+          sessionRows = sessionData || [];
+        } catch (sessionError) {
+          console.warn('get_person_sessions RPC failed, attempting fallback', sessionError);
+          try {
+            const { data: altData, error: altError } = await supabase.rpc('get_person_sessions_simple', { p_person_id: personId });
+            if (altError) throw altError;
+            sessionRows = altData || [];
+          } catch (fallbackError) {
+            console.warn('Fallback get_person_sessions_simple failed, attempting direct query', fallbackError);
+            try {
+              const { data: legislatorSessions, error: lsError } = await supabase
+                .from('rs_person_legislators')
+                .select('session_id')
+                .eq('person_id', personId);
+              if (lsError) throw lsError;
+
+              const sessionIds = (legislatorSessions || [])
+                .map((row: any) => row.session_id)
+                .filter((id: any) => typeof id === 'number');
+
+              if (sessionIds.length) {
+                const { data: directSessions, error: directError } = await supabase
+                  .from('mv_sessions_with_dates')
+                  .select('session_id, session_name, year, calculated_start, calculated_end, total_votes, date_range_display')
+                  .in('session_id', sessionIds);
+                if (directError) throw directError;
+                sessionRows = directSessions || [];
+              } else {
+                sessionRows = [];
+              }
+            } catch (finalError) {
+              console.error('Failed to load sessions for person via all paths', finalError);
+              throw finalError;
+            }
+          }
+        }
 
         const sessionMap = new Map();
-        (sessionData || []).forEach((s: any) => {
+        (sessionRows || []).forEach((s: any) => {
           if (!sessionMap.has(s.session_id)) {
-            sessionMap.set(s.session_id, { id: s.session_id, name: s.session_name, dateRange: s.date_range_display, vote_count: s.vote_count, start_date: s.start_date, end_date: s.end_date });
+            sessionMap.set(s.session_id, {
+              id: s.session_id,
+              name: s.session_name,
+              dateRange: s.date_range_display,
+              vote_count: s.vote_count ?? s.total_votes,
+              start_date: s.start_date ?? s.calculated_start,
+              end_date: s.end_date ?? s.calculated_end
+            });
           }
         });
         sessions = Array.from(sessionMap.values());
@@ -226,39 +278,22 @@ const ReportGeneratorPage: React.FC = () => {
     });
   };
 
-  const startAnalysis = async () => {
-    if (selectedSessions.length === 0) {
-      alert('Please select at least one session or the combined option');
-      return;
-    }
-
-    if (!GEMINI_API_KEY) {
-      setError('Missing Gemini API key. Please set VITE_GOOGLE_API_KEY or VITE_GEMINI_API_KEY in environment variables.');
-      return;
-    }
-
-    if (!currentPersonId) {
-      setError('No person selected for analysis');
-      return;
-    }
-
-    setCurrentStep('progress');
-    setAnalyzing(true);
-    setProgressText('Starting analysis...');
-    setProgressPercent(5);
-    setError(null);
-
+  const runTwoPhaseAnalysisInternal = async () => {
     try {
       const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
       const model = genAI.getGenerativeModel({
         model: 'gemini-2.5-pro',
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 32768
-        }
+        generationConfig: baseGenerationConfig,
+        systemInstruction: {
+          role: 'system',
+          parts: [{ text: 'You are an investigative journalist. Think exhaustively before replying and use the maximum internal reasoning budget available.' }],
+        },
       });
 
       const results: AnalysisResult[] = [];
+      const customBlock = customInstructions.trim()
+        ? `================================\nCUSTOM CRITICAL INSTRUCTIONS AND CONTEXT - These Override all other rules:\n${customInstructions}\n================================\n\n`
+        : '';
 
       // Process each selected session
       for (let i = 0; i < selectedSessions.length; i++) {
@@ -435,7 +470,7 @@ const ReportGeneratorPage: React.FC = () => {
           summary_stats: summaryStats
         }, null, 2);
 
-        const phase1Prompt = `Phase 1 Prompt Template
+        const phase1Prompt = `${customBlock}Phase 1 Prompt Template
 This prompt is designed to generate a broad list of potential connections using metadata only.
 
 You are an investigative journalist analyzing potential conflicts of interest between campaign donations and legislative activity. Work only with the structured metadata provided. DO NOT call any other tools or read full bill text during Phase 1.
@@ -596,42 +631,52 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
             const voteOrSponsorship = pair.vote_or_sponsorship || (pair.is_sponsor ? 'sponsor' : 'vote');
             const voteValue = pair.vote_value ?? pair.vote ?? null;
 
-            const totalDonorAmount = donorsForPhase2.reduce((sum: number, donor: any) => sum + (Number(donor.amount) || 0), 0);
+        const phase2Prompt = `${customBlock}You are an investigative journalist doing a DEEP DIVE analysis of potential donor-bill connections.
 
-            const phase2Prompt = `Phase 2 Deep Dive Analysis
+You have been given a list of ${highConfidencePairs.length} potential connections to investigate.
 
-You are conducting a DEEP DIVE investigation into a potential conflict of interest. You now have access to bill details. Carefully read the provided context and decide whether the potential connection is CONFIRMED or REJECTED.
+PRIORITY DONORS TO SCRUTINIZE:
+- Lobbyists and lobbying firms (check occupation field)
+- Political Action Committees (PACs) and organizations
+- Major corporate executives, CEOs, presidents (check occupation field)
+- High-dollar donors ($500+ for individuals, $1000+ for organizations)
+- Interest groups and trade associations
+- Donors employed by companies with legislative interests
 
-BILL DETAILS:
-- Bill: ${billDetails.bill_number} - ${billDetails.short_title}
-- Vote or Sponsorship: ${voteOrSponsorship}
-- Vote Value: ${voteValue}
-- Is Party Outlier: ${pair.is_outlier}
+YOUR MISSION: Validate or reject each connection by examining the actual bill text.
 
-FULL BILL TEXT (truncated if necessary):
-${billDetails.bill_text || billDetails.description || 'No full text available'}
+FOR EACH HIGH/MEDIUM CONFIDENCE PAIR:
+1. Call get_bill_details with bill_id=<the numeric bill_id from the pairing>
+   - Example: get_bill_details with bill_id=69612
+2. Analyze if the bill content ACTUALLY benefits the identified donors
+3. Look for specific provisions that align with donor interests
+4. Confirm or reject the connection based on evidence
+5. CRITICAL: Include the bill_id field in your output for each confirmed connection
 
-BILL SUMMARY:
-${billDetails.bill_summary || 'No summary available'}
-
-DONORS IN QUESTION (JSON):
-${JSON.stringify(donorsForPhase2, null, 2)}
-
-INITIAL CONNECTION FROM PHASE 1:
-${pair.connection_reason}
+PAIRING DATA TO ANALYZE:
+${JSON.stringify(highConfidencePairs, null, 2)}
 
 OUTPUT FORMAT:
 \`\`\`json
 {
   "confirmed_connections": [
     {
-      "bill_id": ${pair.bill_id},
-      "bill_number": "${pair.bill_number}",
-      "bill_title": "${billDetails.short_title ?? billDetails.title ?? ''}",
-      "donors": ${JSON.stringify(donorsForPhase2, null, 2)},
-      "total_donor_amount": ${totalDonorAmount},
-      "vote_or_sponsorship": "${voteOrSponsorship}",
-      "vote_value": "${voteValue}",
+      "bill_id": 12345,
+      "bill_number": "HB1234",
+      "bill_title": "...",
+      "donors": [
+        {
+          "name": "string",
+          "employer": "string or null",
+          "occupation": "string or null",
+          "type": "string (Individuals, PACs, etc)",
+          "amount": number,
+          "donation_id": "string (preserve from input)"
+        }
+      ],
+      "total_donor_amount": 0,
+      "vote_or_sponsorship": "vote/sponsor",
+      "vote_value": "Y/N",
       "key_provisions": [
         "Specific provision that benefits donor"
       ],
@@ -639,10 +684,20 @@ OUTPUT FORMAT:
       "confidence": 0.9,
       "severity": "high/medium/low"
     }
+    /* SEVERITY GUIDELINES:
+    - HIGH: Direct quid pro quo appearance, outlier votes against party, major financial benefits to high-dollar/lobbyist donors
+    - MEDIUM: Clear benefit to donors but with some public benefit as well
+    - LOW: Indirect benefits or benefits that align with stated policy positions
+
+    Pay special attention to:
+    - Lobbyists voting on transparency/disclosure bills
+    - Organizations/PACs getting regulatory relief
+    - High-dollar donors ($1000+) receiving tax benefits
+    - Corporate executives getting industry advantages */
   ],
   "rejected_connections": [
     {
-      "bill_number": "${pair.bill_number}",
+      "bill_number": "HB5678",
       "reason_rejected": "Bill text shows no clear benefit to donor interests"
     }
   ],
@@ -653,12 +708,20 @@ OUTPUT FORMAT:
 }
 \`\`\`
 
-SEVERITY GUIDELINES:
-- HIGH: Direct quid pro quo appearance, outlier votes against party, major financial benefits to high-dollar/lobbyist donors
-- MEDIUM: Clear benefit to donors but with some public benefit as well
-- LOW: Indirect benefits or benefits that align with stated policy positions
+Be thorough but focus on the most suspicious connections.
 
-Return ONLY the JSON object that matches this schema. If the connection is not confirmed, include it in "rejected_connections" with a clear explanation.`;
+REMEMBER: When analyzing bill text, pay EXTRA attention to provisions that benefit:
+- Lobbyists (transparency rules, access rules, reporting requirements)
+- Organizations/PACs that donated
+- Industries where high-dollar individual donors work
+- Companies led by executive donors
+
+For lobbyist donors: even indirect benefits count (e.g., rules that make their job easier).
+
+${process.env.CUSTOM_INSTRUCTIONS ? `================================
+CUSTOM CRITICAL INSTRUCTIONS AND CONTEXT - These Override all other rules:
+${process.env.CUSTOM_INSTRUCTIONS}
+================================` : ''}`;
 
             const phase2Result = await model.generateContent(phase2Prompt);
             const phase2Response = phase2Result.response.text();
@@ -747,6 +810,619 @@ Return ONLY the JSON object that matches this schema. If the connection is not c
       setCurrentStep('results');
     } catch (analysisError: any) {
       console.error('Analysis error:', analysisError);
+      throw analysisError;
+    }
+  };
+
+  const runSingleCallAnalysis = async (generationConfig: typeof baseGenerationConfig) => {
+    if (!GEMINI_API_KEY) throw new Error('Missing Gemini API key');
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+    const availableFunctions: Record<string, {
+      description: string;
+      parameters: any;
+      handler: (args: any) => Promise<any>;
+    }> = {
+      resolve_legislator: {
+        description: 'Resolve a legislator name to their internal IDs and associated entities.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            name: { type: SchemaType.STRING, description: 'Full legislator name' }
+          },
+          required: ['name']
+        },
+        handler: async (args: any) => {
+          const { data, error } = await supabase.rpc('resolve_lawmaker_with_entities', { p_name: args.name });
+          if (error) throw error;
+          return data || [];
+        }
+      },
+      get_sessions: {
+        description: 'Fetch all legislative sessions with calculated date ranges.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {},
+          required: []
+        },
+        handler: async () => {
+          const { data, error } = await supabase.rpc('get_session_dates_calculated');
+          if (error) throw error;
+          return data || [];
+        }
+      },
+      get_votes: {
+        description: 'Retrieve voting records for given legislator IDs and optional session IDs.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            legislator_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER },
+              description: 'Array of legislator IDs'
+            },
+            session_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER },
+              description: 'Optional array of session IDs',
+              nullable: true
+            }
+          },
+          required: ['legislator_ids']
+        },
+        handler: async (args: any) => {
+          const payload: any = {
+            p_legislator_ids: args.legislator_ids,
+            p_session_ids: args.session_ids ?? null
+          };
+          const { data, error } = await supabase.rpc('votes_with_party_outliers', payload);
+          if (error) throw error;
+          return data || [];
+        }
+      },
+      get_donations: {
+        description: 'Retrieve donations for campaign entities, optionally scoped to sessions.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            entity_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER },
+              description: 'Array of entity IDs'
+            },
+            session_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER },
+              description: 'Optional session IDs for filtering',
+              nullable: true
+            }
+          },
+          required: ['entity_ids']
+        },
+        handler: async (args: any) => {
+          const { data, error } = await supabase.rpc('get_donations_with_relevance', {
+            p_entity_ids: args.entity_ids,
+            p_session_ids: args.session_ids ?? null
+          });
+          if (error) throw error;
+          return data || [];
+        }
+      },
+      get_sponsorships: {
+        description: 'Retrieve bill sponsorships for legislators.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            legislator_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER }
+            },
+            session_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER },
+              nullable: true
+            }
+          },
+          required: ['legislator_ids']
+        },
+        handler: async (args: any) => {
+          const { data, error } = await supabase.rpc('bill_sponsorships_for_legislator', {
+            p_legislator_ids: args.legislator_ids,
+            p_session_ids: args.session_ids ?? null
+          });
+          if (error) throw error;
+          return data || [];
+        }
+      },
+      get_bill_details: {
+        description: 'Fetch full bill text and summary for a given bill ID.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            bill_id: { type: SchemaType.NUMBER }
+          },
+          required: ['bill_id']
+        },
+        handler: async (args: any) => {
+          const { data, error } = await supabase.rpc('get_bill_details', { p_bill_id: args.bill_id });
+          if (error) throw error;
+          return data?.[0] || null;
+        }
+      },
+      get_bill_rts: {
+        description: 'Request-to-Speak positions for a bill.',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            bill_id: { type: SchemaType.NUMBER }
+          },
+          required: ['bill_id']
+        },
+        handler: async (args: any) => {
+          try {
+            const { data, error } = await supabase.rpc('get_bill_rts', { p_bill_id: args.bill_id });
+            if (error) throw error;
+            return data || [];
+          } catch (rpcError: any) {
+            console.warn('get_bill_rts RPC failed, attempting direct table query', rpcError);
+            try {
+              const { data: directData, error: directError } = await supabase
+                .from('rts_positions')
+                .select('position_id, entity_name, representing, "position", submitted_date')
+                .eq('bill_id', args.bill_id)
+                .order('submitted_date', { ascending: false });
+              if (directError) throw directError;
+              return directData || [];
+            } catch (tableError) {
+              console.error('Failed to load RTS positions for bill', args.bill_id, tableError);
+              return [];
+            }
+          }
+        }
+      }
+    };
+
+    const toolDeclarations: Tool[] = [{
+      functionDeclarations: Object.entries(availableFunctions).map(([name, config]) => ({
+        name,
+        description: config.description,
+        parameters: config.parameters
+      }))
+    }];
+
+    let numericSessions = selectedSessions.filter((s): s is number => typeof s === 'number');
+    if (!numericSessions.length && selectedSessions.includes('combined')) {
+      numericSessions = availableSessions.map(s => s.id);
+    }
+    const sessionMetadata = availableSessions
+      .filter(s => numericSessions.includes(s.id))
+      .map(s => ({
+        id: s.id,
+        name: s.name,
+        start_date: s.start_date,
+        end_date: s.end_date,
+        vote_count: s.vote_count
+      }));
+
+    const combinedSessionRange = sessionMetadata.reduce<{ start?: string; end?: string }>((acc, session) => {
+      if (session.start_date && (!acc.start || session.start_date < acc.start)) acc.start = session.start_date;
+      if (session.end_date && (!acc.end || session.end_date > acc.end)) acc.end = session.end_date;
+      return acc;
+    }, {});
+
+    setProgressText('Single-pass analysis: compiling baseline dataset...');
+    setProgressPercent(10);
+
+    const legislatorInfo = {
+      name: currentLegislator || 'Unknown legislator',
+      legislator_ids: currentLegislatorIds,
+      entity_ids: currentEntityIds
+    };
+
+    const baselineSessions: any[] = [];
+    const sessionCache = new Map<number, Session>();
+    availableSessions.forEach((s) => {
+      if (typeof s.id === 'number') {
+        sessionCache.set(s.id, s);
+      }
+    });
+
+    const fetchSessionMeta = async (sessionId: number): Promise<Session | null> => {
+      if (sessionCache.has(sessionId)) {
+        return sessionCache.get(sessionId) || null;
+      }
+
+      const { data, error } = await supabase
+        .from('mv_sessions_with_dates')
+        .select('session_id, session_name, calculated_start, calculated_end, total_votes, date_range_display')
+        .eq('session_id', sessionId)
+        .maybeSingle();
+
+      if (error) {
+        console.warn('Unable to fetch metadata for session', sessionId, error);
+        return null;
+      }
+
+      if (!data) return null;
+
+      const meta: Session = {
+        id: data.session_id,
+        name: data.session_name,
+        dateRange: data.date_range_display,
+        vote_count: data.total_votes,
+        start_date: data.calculated_start,
+        end_date: data.calculated_end,
+      };
+
+      sessionCache.set(sessionId, meta);
+      return meta;
+    };
+
+    for (let i = 0; i < selectedSessions.length; i++) {
+      const selection = selectedSessions[i];
+      const isCombined = typeof selection === 'string';
+
+      let sessionName: string;
+      let startDate: string;
+      let endDate: string;
+      let sessionIdsForQuery: number[] = [];
+
+      if (isCombined) {
+        const combinedNumeric = selectedSessions.filter((s): s is number => typeof s === 'number');
+        const combinedSessions = (await Promise.all(combinedNumeric.map(fetchSessionMeta))).filter((s): s is Session => !!s);
+
+        if (combinedSessions.length === 0) {
+          throw new Error('No sessions selected for combined analysis');
+        }
+
+        sessionName = 'Combined Sessions';
+        startDate = combinedSessions.reduce((earliest, s) =>
+          s.start_date && (!earliest || s.start_date < earliest) ? s.start_date : earliest, '');
+        endDate = combinedSessions.reduce((latest, s) =>
+          s.end_date && (!latest || s.end_date > latest) ? s.end_date : latest, '');
+        sessionIdsForQuery = Array.from(new Set(combinedSessions.map(s => s.id)));
+      } else {
+        const session = await fetchSessionMeta(selection);
+        if (!session) {
+          throw new Error(`Session ${selection} not found`);
+        }
+        sessionName = session.name;
+        startDate = session.start_date || '';
+        endDate = session.end_date || '';
+        sessionIdsForQuery = [session.id];
+      }
+
+      if (isCombined) {
+        const combinedNumeric = selectedSessions.filter((s): s is number => typeof s === 'number');
+        sessionIdsForQuery = Array.from(new Set(
+          await Promise.all(combinedNumeric.map(async (id) => {
+            const session = await fetchSessionMeta(id);
+            return session?.id;
+          }))
+        )).filter((id): id is number => typeof id === 'number');
+
+        if (!sessionIdsForQuery.length) {
+          // fallback to all known sessions
+          sessionIdsForQuery = Array.from(sessionCache.keys());
+        }
+      }
+
+      if (!startDate || !endDate) {
+        throw new Error(`Missing date information for ${sessionName}`);
+      }
+
+      if (!sessionIdsForQuery.length) {
+        throw new Error('No valid session IDs selected for analysis');
+      }
+
+      const donationStartDate = new Date(new Date(startDate).getTime() - (100 * 24 * 60 * 60 * 1000));
+      const donationEndDate = new Date(new Date(endDate).getTime() + (100 * 24 * 60 * 60 * 1000));
+
+      setProgressText(`Single-pass baseline: ${sessionName}`);
+      setProgressPercent((prev) => Math.min(55, prev + 8));
+
+      let bills: any[] = [];
+      let donations: any[] = [];
+
+      try {
+        const billsData = await supabase.rpc('get_session_bills', {
+          p_person_id: currentPersonId,
+          p_session_ids: sessionIdsForQuery
+        });
+        if (billsData.error) throw billsData.error;
+        bills = (billsData.data || []).map((bill: any) => ({
+          ...bill,
+          bill_title: bill.bill_title || bill.short_title || bill.description || '',
+          vote_value: bill.vote_value || bill.vote,
+          is_sponsor: bill.is_sponsor ?? false,
+          session_id: bill.session_id ?? sessionIdsForQuery[0],
+          is_outlier: bill.is_outlier ?? false,
+          party_breakdown: bill.party_breakdown ?? null,
+        }));
+      } catch (billError: any) {
+        throw new Error(`Failed to fetch bills for ${sessionName}: ${billError.message || billError}`);
+      }
+
+      try {
+        const donationsData = await supabase.rpc('get_legislator_donations', {
+          p_person_id: currentPersonId,
+          p_start_date: donationStartDate.toISOString().split('T')[0],
+          p_end_date: donationEndDate.toISOString().split('T')[0]
+        });
+        if (donationsData.error) throw donationsData.error;
+        donations = donationsData.data || [];
+      } catch (donationError: any) {
+        throw new Error(`Failed to fetch donations for ${sessionName}: ${donationError.message || donationError}`);
+      }
+
+      const baselineVotes = bills.map((bill: any) => ({
+        bill_id: bill.bill_id ?? bill.id,
+        bill_number: bill.bill_number,
+        bill_title: bill.bill_title,
+        vote_or_sponsorship: bill.is_sponsor ? 'sponsor' : 'vote',
+        vote_value: bill.vote_value ?? bill.vote,
+        vote_date: bill.vote_date,
+        is_party_outlier: bill.is_outlier ?? false,
+        party_breakdown: bill.party_breakdown ?? null,
+        session_id: bill.session_id
+      }));
+
+      const sessionStartDateObj = new Date(startDate);
+      const baselineDonations = (donations || []).map((donation: any) => {
+        const transactionDate = donation.transaction_date || donation.donation_date;
+        const amountNumber = Number(donation.amount ?? donation.donation_amt ?? 0);
+        const daysFromSession = transactionDate && !Number.isNaN(sessionStartDateObj.getTime())
+          ? Math.round((new Date(transactionDate).getTime() - sessionStartDateObj.getTime()) / (1000 * 60 * 60 * 24))
+          : null;
+        return {
+          name: donation.clean_donor_name || donation.donor_name || donation.received_from_or_paid_to || 'Unknown Donor',
+          employer: donation.transaction_employer || donation.donor_employer || null,
+          occupation: donation.transaction_occupation || donation.donor_occupation || null,
+          type: donation.donor_type || donation.entity_type || donation.entity_description || 'Unknown',
+          amount: amountNumber,
+          donation_id: donation.donation_id || donation.transaction_id || donation.id || null,
+          transaction_date: transactionDate,
+          days_from_session: daysFromSession,
+        };
+      });
+
+      const summaryStats = {
+        total_bills: bills.length,
+        total_donations: donations.length,
+        total_sponsorships: bills.filter((bill: any) => bill.is_sponsor).length,
+        outlier_votes: bills.filter((bill: any) => bill.is_outlier).length,
+      };
+
+      const sessionInfo = {
+        session_id: isCombined ? 'combined' : sessionIdsForQuery[0],
+        session_name: sessionName,
+        date_range: `${startDate} to ${endDate}`,
+        ...(isCombined ? { all_session_ids: sessionIdsForQuery } : {})
+      };
+
+      baselineSessions.push({ session_info: sessionInfo, votes: baselineVotes, donations: baselineDonations, summary: summaryStats });
+    }
+
+    const initialDataset = {
+      legislator_info: legislatorInfo,
+      sessions: baselineSessions,
+    };
+
+    const datasetJson = JSON.stringify(initialDataset, null, 2);
+
+    setProgressText('Single-pass analysis: instructing Gemini to gather data...');
+    setProgressPercent(60);
+
+    const customBlockSingle = customInstructions.trim()
+      ? `================================\nCUSTOM CRITICAL INSTRUCTIONS AND CONTEXT - These Override all other rules:\n${customInstructions}\n================================\n\n`
+      : '';
+
+    const singlePrompt = `${customBlockSingle}Single-Pass Investigative Analysis\n\n` +
+      `You are an investigative journalist investigating links between campaign donors and legislative activity for ${currentLegislator}.\n` +
+      `You may call the provided tools (resolve_legislator, get_sessions, get_votes, get_donations, get_sponsorships, get_bill_details, get_bill_rts).\n` +
+      `Always cite evidence directly from bill details and RTS positions when making claims.\n` +
+      `Focus on identifying THEMES tying donors to bills, rather than individual donor-bill pairs.\n` +
+      `For each theme, list every relevant bill and every related donor exhaustively.\n` +
+      `Selected sessions: ${JSON.stringify(sessionMetadata)}. Combined range: ${combinedSessionRange.start || 'unknown'} to ${combinedSessionRange.end || 'unknown'}.\n` +
+      `Baseline dataset for reference (metadata only):\n\`\`\`json\n${datasetJson}\n\`\`\`\n` +
+      `If you need additional data, call the appropriate tool. Once confident, produce the final structured report.\n\n` +
+      `OUTPUT FORMAT (JSON):\n` +
+      `\`\`\`json\n` +
+      `{
+  "session_info": {
+    "selected_session_ids": ${JSON.stringify(numericSessions)},
+    "combined_range": "${(combinedSessionRange.start || 'unknown')} to ${(combinedSessionRange.end || 'unknown')}"
+  },
+  "overall_summary": "Concise overview of the most important findings.",
+  "themes": [
+    {
+      "theme": "Short label for the theme",
+      "description": "Explain how this theme ties donors to legislation.",
+      "confidence": 0.0,
+      "evidence_summary": "Narrative citing key points.",
+      "bills": [
+        {
+          "bill_id": 0,
+          "bill_number": "HB1234",
+          "bill_title": "...",
+          "vote_value": "Y/N",
+          "is_outlier": false,
+          "citations": ["Quoted passage or section from the bill text"],
+          "rts_positions": ["Summaries of relevant RTS testimonies"],
+          "analysis": "Explain why this bill matters for the theme."
+        }
+      ],
+      "donors": [
+        {
+          "name": "Donor name",
+          "employer": "Employer",
+          "occupation": "Occupation",
+          "type": "Individual/PAC/etc",
+          "total_amount": 0,
+          "donation_ids": ["..."],
+          "notes": "Why this donor aligns with the theme"
+        }
+      ]
+    }
+  ],
+  "data_sources": [
+    "List every tool output you relied on"
+  ]
+}
+\`\`\`\n` +
+      `Return ONLY that JSON object.`;
+
+    setProgressText('Single-pass analysis: instructing Gemini to gather data...');
+    setProgressPercent((prev) => Math.max(prev, 65));
+
+    const executeTool = async (name: string, args: any) => {
+      const fn = availableFunctions[name];
+      if (!fn) {
+        throw new Error(`Unknown tool: ${name}`);
+      }
+      return fn.handler(args || {});
+    };
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+    const contents: any[] = [
+      {
+        role: 'user',
+        parts: [{ text: singlePrompt }]
+      }
+    ];
+
+    const sendToGemini = async () => {
+      const body = {
+        contents,
+        systemInstruction: {
+          role: 'system',
+          parts: [{ text: 'You are an investigative journalist. Use the maximum available thinking budget before delivering conclusions.' }]
+        },
+        tools: toolDeclarations,
+        generationConfig: {
+          temperature: baseGenerationConfig.temperature,
+          maxOutputTokens: baseGenerationConfig.maxOutputTokens,
+        },
+      };
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Gemini error: ${res.status} ${text}`);
+      }
+
+      return res.json();
+    };
+
+    let data = await sendToGemini();
+    let candidate = data?.candidates?.[0];
+    if (!candidate?.content?.parts) {
+      throw new Error('Gemini returned no content for single-pass analysis.');
+    }
+
+    let parts = candidate.content.parts;
+    contents.push({ role: 'model', parts });
+
+    let functionCalls = parts.filter((part: any) => part.functionCall).map((part: any) => part.functionCall);
+
+    while (true) {
+      if (!functionCalls || functionCalls.length === 0) {
+        break;
+      }
+
+      for (const call of functionCalls) {
+        setProgressText(`Executing tool: ${call.name}`);
+        setProgressPercent((prev) => Math.min(90, prev + 3));
+        try {
+          const toolResult = await executeTool(call.name, call.args || {});
+          contents.push({
+            role: 'user',
+            parts: [{ text: `TOOL_RESPONSE ${call.name} ${JSON.stringify(toolResult)}` }]
+          });
+        } catch (toolError: any) {
+          contents.push({
+            role: 'user',
+            parts: [{ text: `TOOL_RESPONSE ${call.name} {"error": ${JSON.stringify(String(toolError))}}` }]
+          });
+        }
+      }
+
+      data = await sendToGemini();
+      candidate = data?.candidates?.[0];
+      if (!candidate?.content?.parts) {
+        throw new Error('Gemini returned no content after tool execution.');
+      }
+
+      parts = candidate.content.parts;
+      contents.push({ role: 'model', parts });
+      functionCalls = parts.filter((part: any) => part.functionCall).map((part: any) => part.functionCall);
+    }
+
+    let finalText = '';
+    const textParts = parts.filter((part: any) => part.text).map((part: any) => part.text);
+    finalText = textParts.join('\n').trim();
+
+    if (!finalText) {
+      throw new Error('Single-call analysis did not return any content.');
+    }
+
+    const sanitized = finalText.replace(/```json\s*|```/g, '').trim();
+    const firstBrace = sanitized.indexOf('{');
+    const lastBrace = sanitized.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+      throw new Error('Single-call response did not contain a JSON object.');
+    }
+
+    const jsonSlice = sanitized.slice(firstBrace, lastBrace + 1);
+    const report = JSON.parse(jsonSlice);
+
+    const summaryName = analysisMode === 'singleCall' && selectedSessions.length > 1
+      ? 'Combined Single-Pass Analysis'
+      : (availableSessions.find(s => s.id === selectedSessions[0])?.name || 'Single-Pass Analysis');
+
+    setAnalysisResults([{ sessionName: summaryName, report }]);
+    setProgressPercent(100);
+    setProgressText('Single-pass analysis complete');
+    setCurrentStep('results');
+  };
+
+  const startAnalysis = async () => {
+    if (selectedSessions.length === 0) {
+      alert('Please select at least one session or the combined option');
+      return;
+    }
+
+    if (!GEMINI_API_KEY) {
+      setError('Missing Gemini API key. Please set VITE_GOOGLE_API_KEY or VITE_GEMINI_API_KEY in environment variables.');
+      return;
+    }
+
+    if (!currentPersonId) {
+      setError('No person selected for analysis');
+      return;
+    }
+
+    setCurrentStep('progress');
+    setAnalyzing(true);
+    setProgressText('Starting analysis...');
+    setProgressPercent(5);
+    setError(null);
+
+    try {
+      if (analysisMode === 'singleCall') {
+        await runSingleCallAnalysis(baseGenerationConfig);
+      } else {
+        await runTwoPhaseAnalysisInternal();
+      }
+    } catch (analysisError: any) {
+      console.error('Analysis error:', analysisError);
       setError(analysisError.message || 'Analysis failed. Please try again.');
     } finally {
       setAnalyzing(false);
@@ -815,7 +1491,7 @@ Return ONLY the JSON object that matches this schema. If the connection is not c
       {/* Sessions selection */}
       {currentStep === 'sessions' && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 16, flexWrap: 'wrap' }}>
             <div style={{ fontWeight: 600 }}>Available Sessions {currentLegislator ? `for ${currentLegislator}` : ''}</div>
             <button
               onClick={() => setCurrentStep('search')}
@@ -823,6 +1499,24 @@ Return ONLY the JSON object that matches this schema. If the connection is not c
             >
               ← Change Person
             </button>
+          </div>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="radio"
+                checked={analysisMode === 'twoPhase'}
+                onChange={() => setAnalysisMode('twoPhase')}
+              />
+              <span>Two-Phase (pairs + deep dives)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="radio"
+                checked={analysisMode === 'singleCall'}
+                onChange={() => setAnalysisMode('singleCall')}
+              />
+              <span>Single Call (themes & bill evidence)</span>
+            </label>
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
             {availableSessions.map((s) => (
@@ -911,77 +1605,156 @@ Return ONLY the JSON object that matches this schema. If the connection is not c
               <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{result.sessionName}</h3>
 
               {typeof result.report === 'object' && result.report ? (
-                <>
-                  {/* Summary Stats */}
-                  <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}>
-                    <div><strong>Period:</strong> {result.report.dateRange}</div>
-                    <div><strong>Donations Period:</strong> {result.report.donationPeriod}</div>
-                    <div><strong>Bills Analyzed:</strong> {result.report.billCount}</div>
-                    <div><strong>Donations:</strong> {result.report.donationCount} totaling ${result.report.totalDonations?.toLocaleString()}</div>
-                    <div><strong>Phase 1 Matches:</strong> {result.report.phase1Matches}</div>
-                    {result.report.summaryStats && (
-                      <>
-                        <div><strong>Total Donations Considered:</strong> {result.report.summaryStats.total_donations}</div>
-                        <div><strong>Total Votes:</strong> {result.report.summaryStats.total_votes}</div>
-                        <div><strong>Total Sponsorships:</strong> {result.report.summaryStats.total_sponsorships}</div>
-                        <div><strong>High Confidence Pairs:</strong> {result.report.summaryStats.high_confidence_pairs}</div>
-                        <div><strong>Medium Confidence Pairs:</strong> {result.report.summaryStats.medium_confidence_pairs}</div>
-                        <div><strong>Low Confidence Pairs:</strong> {result.report.summaryStats.low_confidence_pairs}</div>
-                      </>
+                Array.isArray(result.report?.themes) ? (
+                  <>
+                    <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}>
+                      {result.report.overall_summary && (
+                        <div><strong>Overall Summary:</strong> {result.report.overall_summary}</div>
+                      )}
+                      {result.report.session_info && (
+                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                          <strong>Session Info:</strong> {JSON.stringify(result.report.session_info)}
+                        </div>
+                      )}
+                    </div>
+
+                    {(result.report.themes || []).map((theme: any, themeIdx: number) => (
+                      <div key={themeIdx} style={{ marginBottom: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 6 }}>
+                        <h4 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{theme.theme}</h4>
+                        {theme.description && <div style={{ color: '#374151', marginBottom: 6 }}>{theme.description}</div>}
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Confidence: {(Number(theme.confidence ?? 0) * 100).toFixed(0)}%</div>
+
+                        <div style={{ marginBottom: 8 }}>
+                          <strong>Bills ({theme.bills?.length || 0}):</strong>
+                          <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
+                            {(theme.bills || []).map((bill: any, billIdx: number) => (
+                              <li key={billIdx} style={{ marginBottom: 6 }}>
+                                <div><strong>{bill.bill_number}</strong> — {bill.bill_title}</div>
+                                {bill.vote_value && (
+                                  <div style={{ fontSize: 12, color: '#6b7280' }}>Vote: {bill.vote_value}{bill.is_outlier ? ' (OUTLIER)' : ''}</div>
+                                )}
+                                {Array.isArray(bill.citations) && bill.citations.length > 0 && (
+                                  <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4 }}>
+                                    <strong>Citations:</strong>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 16 }}>
+                                      {bill.citations.map((cite: string, citeIdx: number) => (
+                                        <li key={citeIdx}>{cite}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {Array.isArray(bill.rts_positions) && bill.rts_positions.length > 0 && (
+                                  <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4 }}>
+                                    <strong>RTS Positions:</strong>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 16 }}>
+                                      {bill.rts_positions.map((pos: string, posIdx: number) => (
+                                        <li key={posIdx}>{pos}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {bill.analysis && (
+                                  <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4 }}>{bill.analysis}</div>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        <div>
+                          <strong>Donors ({theme.donors?.length || 0}):</strong>
+                          <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
+                            {(theme.donors || []).map((donor: any, donorIdx: number) => (
+                              <li key={donorIdx}>
+                                <div><strong>{donor.name}</strong> — ${Number(donor.total_amount ?? donor.amount ?? 0).toLocaleString()}</div>
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                  {donor.type || 'Unknown type'} • {donor.employer || 'Unknown employer'} • {donor.occupation || 'Unknown occupation'}
+                                </div>
+                                {donor.notes && (
+                                  <div style={{ fontSize: 12, color: '#4b5563' }}>{donor.notes}</div>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    ))}
+
+                    {Array.isArray(result.report.data_sources) && result.report.data_sources.length > 0 && (
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                        <strong>Data Sources:</strong> {result.report.data_sources.join('; ')}
+                      </div>
                     )}
-                  </div>
-
-                  {/* Confirmed Connections */}
-                  {result.report.confirmedConnections?.length > 0 && (
-                    <div style={{ marginBottom: 12 }}>
-                      <h4 style={{ fontSize: 14, fontWeight: 600, color: '#dc2626', marginBottom: 8 }}>
-                        ⚠️ Confirmed Conflicts of Interest ({result.report.confirmedConnections.length})
-                      </h4>
-                      {result.report.confirmedConnections.map((connection: any, connIdx: number) => (
-                        <div key={connIdx} style={{ padding: 8, border: '1px solid #fca5a5', borderRadius: 4, marginBottom: 8, backgroundColor: '#fef2f2' }}>
-                          <div style={{ fontWeight: 600 }}>{connection.bill_number}: {connection.bill_title}</div>
-                          <div><strong>Vote:</strong> {connection.vote_value ?? connection.vote} {connection.is_outlier && <span style={{ color: '#dc2626' }}>(OUTLIER)</span>}</div>
-                          <div><strong>Donors:</strong> {connection.donors?.map((d: any) => `${d.name} ($${d.amount})`).join(', ')}</div>
-                          <div><strong>Confidence:</strong> {(connection.confidence_score * 100).toFixed(0)}%</div>
-                          <div style={{ marginTop: 4 }}><strong>Analysis:</strong> {connection.analysis?.explanation}</div>
-                          {connection.analysis?.key_provisions && (
-                            <div style={{ marginTop: 4 }}>
-                              <strong>Key Provisions:</strong>
-                              <ul style={{ margin: '4px 0', paddingLeft: 16 }}>
-                                {connection.analysis.key_provisions.map((provision: string, provIdx: number) => (
-                                  <li key={provIdx}>{provision}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                  </>
+                ) : (
+                  <>
+                    <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}>
+                      <div><strong>Period:</strong> {result.report.dateRange}</div>
+                      <div><strong>Donations Period:</strong> {result.report.donationPeriod}</div>
+                      <div><strong>Bills Analyzed:</strong> {result.report.billCount}</div>
+                      <div><strong>Donations:</strong> {result.report.donationCount} totaling ${result.report.totalDonations?.toLocaleString()}</div>
+                      <div><strong>Phase 1 Matches:</strong> {result.report.phase1Matches}</div>
+                      {result.report.summaryStats && (
+                        <>
+                          <div><strong>Total Donations Considered:</strong> {result.report.summaryStats.total_donations}</div>
+                          <div><strong>Total Votes:</strong> {result.report.summaryStats.total_votes}</div>
+                          <div><strong>Total Sponsorships:</strong> {result.report.summaryStats.total_sponsorships}</div>
+                          <div><strong>High Confidence Pairs:</strong> {result.report.summaryStats.high_confidence_pairs}</div>
+                          <div><strong>Medium Confidence Pairs:</strong> {result.report.summaryStats.medium_confidence_pairs}</div>
+                          <div><strong>Low Confidence Pairs:</strong> {result.report.summaryStats.low_confidence_pairs}</div>
+                        </>
+                      )}
                     </div>
-                  )}
 
-                  {/* Rejected Connections */}
-                  {result.report.rejectedConnections?.length > 0 && (
-                    <div style={{ marginBottom: 12 }}>
-                      <h4 style={{ fontSize: 14, fontWeight: 600, color: '#16a34a', marginBottom: 8 }}>
-                        ✅ Investigated but Rejected ({result.report.rejectedConnections.length})
-                      </h4>
-                      {result.report.rejectedConnections.map((connection: any, connIdx: number) => (
-                        <div key={connIdx} style={{ padding: 8, border: '1px solid #bbf7d0', borderRadius: 4, marginBottom: 8, backgroundColor: '#f0fdf4' }}>
-                          <div style={{ fontWeight: 600 }}>{connection.bill_number}: {connection.bill_title}</div>
-                          <div><strong>Initial Reason:</strong> {connection.connection_reason}</div>
-                          <div><strong>Why Rejected:</strong> {connection.analysis?.explanation}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                    {result.report.confirmedConnections?.length > 0 && (
+                      <div style={{ marginBottom: 12 }}>
+                        <h4 style={{ fontSize: 14, fontWeight: 600, color: '#dc2626', marginBottom: 8 }}>
+                          ⚠️ Confirmed Conflicts of Interest ({result.report.confirmedConnections.length})
+                        </h4>
+                        {result.report.confirmedConnections.map((connection: any, connIdx: number) => (
+                          <div key={connIdx} style={{ padding: 8, border: '1px solid #fca5a5', borderRadius: 4, marginBottom: 8, backgroundColor: '#fef2f2' }}>
+                            <div style={{ fontWeight: 600 }}>{connection.bill_number}: {connection.bill_title}</div>
+                            <div><strong>Vote:</strong> {connection.vote_value ?? connection.vote} {connection.is_outlier && <span style={{ color: '#dc2626' }}>(OUTLIER)</span>}</div>
+                            <div><strong>Donors:</strong> {connection.donors?.map((d: any) => `${d.name} ($${d.amount})`).join(', ')}</div>
+                            <div><strong>Confidence:</strong> {(connection.confidence_score * 100).toFixed(0)}%</div>
+                            <div style={{ marginTop: 4 }}><strong>Analysis:</strong> {connection.analysis?.explanation}</div>
+                            {connection.analysis?.key_provisions && (
+                              <div style={{ marginTop: 4 }}>
+                                <strong>Key Provisions:</strong>
+                                <ul style={{ margin: '4px 0', paddingLeft: 16 }}>
+                                  {connection.analysis.key_provisions.map((provision: string, provIdx: number) => (
+                                    <li key={provIdx}>{provision}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
-                  {/* No Issues Found */}
-                  {(!result.report.confirmedConnections || result.report.confirmedConnections.length === 0) && (
-                    <div style={{ padding: 8, backgroundColor: '#f0fdf4', borderRadius: 6, color: '#16a34a' }}>
-                      ✅ No conflicts of interest identified for this session.
-                    </div>
-                  )}
-                </>
+                    {result.report.rejectedConnections?.length > 0 && (
+                      <div style={{ marginBottom: 12 }}>
+                        <h4 style={{ fontSize: 14, fontWeight: 600, color: '#16a34a', marginBottom: 8 }}>
+                          ✅ Investigated but Rejected ({result.report.rejectedConnections.length})
+                        </h4>
+                        {result.report.rejectedConnections.map((connection: any, connIdx: number) => (
+                          <div key={connIdx} style={{ padding: 8, border: '1px solid #bbf7d0', borderRadius: 4, marginBottom: 8, backgroundColor: '#f0fdf4' }}>
+                            <div style={{ fontWeight: 600 }}>{connection.bill_number}: {connection.bill_title}</div>
+                            <div><strong>Initial Reason:</strong> {connection.connection_reason}</div>
+                            <div><strong>Why Rejected:</strong> {connection.analysis?.explanation}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {(!result.report.confirmedConnections || result.report.confirmedConnections.length === 0) && (
+                      <div style={{ padding: 8, backgroundColor: '#f0fdf4', borderRadius: 6, color: '#16a34a' }}>
+                        ✅ No conflicts of interest identified for this session.
+                      </div>
+                    )}
+                  </>
+                )
               ) : (
                 <div style={{ color: '#374151' }}>
                   {typeof result.report === 'string' ? result.report : 'Report generated.'}
