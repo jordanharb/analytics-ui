@@ -92,6 +92,40 @@ const parseJsonLoose = (raw: string) => {
   const cleaned = raw.trim();
   const variants: string[] = [];
 
+  // Extract JSON from markdown code blocks if present
+  const extractFromMarkdown = (text: string) => {
+    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      return codeBlockMatch[1].trim();
+    }
+    return text;
+  };
+
+  const fixCommonIssues = (text: string) => {
+    return text
+      // Fix incomplete strings (common Gemini issue)
+      .replace(/"([^"]*?)(?=\s*[}\]])/g, '"$1"')
+      .replace(/"([^"]*?)(?=\s*[,])/g, '"$1"')
+      // Fix unquoted keys
+      .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":')
+      // Fix trailing commas
+      .replace(/,(\s*[}\]])/g, '$1')
+      // Fix missing quotes around string values
+      .replace(/:\s*([a-zA-Z_][a-zA-Z0-9_\s]*?)(?=\s*[,}\]])/g, (match, value) => {
+        const trimmed = value.trim();
+        if (!trimmed.startsWith('"') && !trimmed.startsWith("'") && !trimmed.match(/^[0-9.-]+$/) && trimmed !== 'true' && trimmed !== 'false' && trimmed !== 'null') {
+          return `: "${trimmed}"`;
+        }
+        return match;
+      })
+      // Fix incomplete objects/arrays
+      .replace(/([{\[])([^}\]])*$/, (match, opener) => {
+        if (opener === '{') return match + '}';
+        if (opener === '[') return match + ']';
+        return match;
+      });
+  };
+
   const balanceDelimiters = (input: string) => {
     let result = input;
     const stack: string[] = [];
@@ -136,7 +170,20 @@ const parseJsonLoose = (raw: string) => {
     return balanced;
   };
 
-  const withoutComments = cleaned
+  // Start with the cleaned input
+  addVariant(cleaned);
+
+  // Extract from markdown if present
+  const fromMarkdown = extractFromMarkdown(cleaned);
+  if (fromMarkdown !== cleaned) {
+    addVariant(fromMarkdown);
+  }
+
+  // Fix common issues
+  const fixed = fixCommonIssues(fromMarkdown);
+  addVariant(fixed);
+
+  const withoutComments = fixed
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '');
 
@@ -146,7 +193,6 @@ const parseJsonLoose = (raw: string) => {
 
   const withKeyQuotes = withArrayCommas.replace(/([,{\[]\s*)([A-Za-z0-9_]+)(?=\s*:)/g, (_, prefix, key) => `${prefix}"${key}"`);
 
-  addVariant(cleaned);
   addVariant(withoutComments);
   addVariant(noTrailingCommas);
   addVariant(withObjectCommas);
@@ -155,14 +201,17 @@ const parseJsonLoose = (raw: string) => {
 
   let lastError: unknown = null;
 
+  // Try parsing each variant
   for (const candidate of variants) {
     try {
-      return JSON.parse(candidate);
+      const parsed = JSON.parse(candidate);
+      return parsed;
     } catch (err) {
       lastError = err;
     }
   }
 
+  // If all JSON.parse attempts fail, try Function constructor as last resort
   for (const candidate of variants) {
     try {
       // eslint-disable-next-line no-new-func
@@ -172,7 +221,13 @@ const parseJsonLoose = (raw: string) => {
     }
   }
 
-  throw lastError ?? new Error('Unable to parse JSON');
+  // If everything fails, return a fallback object with the raw text
+  console.warn('Failed to parse JSON, returning fallback object:', lastError);
+  return {
+    error: 'Failed to parse JSON response',
+    raw_text: cleaned.substring(0, 500) + (cleaned.length > 500 ? '...' : ''),
+    parse_error: String(lastError)
+  };
 };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -957,6 +1012,16 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
               }
             } catch (e) {
               console.warn(`Failed to parse Phase 2 analysis for bill ${group.bill_id}:`, e);
+              // Add a fallback analysis for failed parsing
+              rejectedConnections.push({
+                ...group,
+                analysis: {
+                  bill_number: group.bill_number,
+                  reason_rejected: "Analysis failed due to parsing error",
+                  confidence: 0.1,
+                  severity: "low"
+                }
+              });
             }
           }
         }
