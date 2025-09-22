@@ -5,7 +5,6 @@ import { useSearchParams } from 'react-router-dom';
 import type { PersonSearchResult } from './lib/types';
 import { APP_CONFIG } from './lib/constants';
 import { searchPeopleWithSessions } from './lib/search';
-import { testDatabaseConnection } from '../lib/test-db-connection';
 
 const HomePage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -15,11 +14,6 @@ const HomePage: React.FC = () => {
   const queryParam = searchParams.get('q');
 
   console.log('HomePage rendering, queryParam:', queryParam, 'results:', results.length);
-
-  // Temporary debug: test database connection
-  useEffect(() => {
-    testDatabaseConnection();
-  }, []);
 
   useEffect(() => {
     if (queryParam && queryParam.trim().length > 0) {
