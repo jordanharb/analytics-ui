@@ -2,13 +2,13 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { PersonProfile, PersonVote } from '../lib/legislature-types';
+import type { PersonProfile } from '../lib/legislature-types';
 import type { PersonSession, PersonFinanceOverview } from '../lib/legislature-people-types';
 import { fetchPersonOverview, fetchPersonVotes } from '../lib/legislature-api';
 import { fetchPersonSessions, fetchPersonFinanceOverview, fetchPersonVotesInSession } from '../lib/legislature-people-api';
 import type { PersonSearchResult as SearchSummary } from './lib/types';
 import { searchPeopleWithSessions } from './lib/search';
-import EntityDetailView from '../components/finance/EntityDetailView';
+// import EntityDetailView from '../components/finance/EntityDetailView';
 
 const formatCurrency = (amount: number | null | undefined): string => {
   if (!amount || Number.isNaN(amount)) return '$0';
@@ -46,10 +46,10 @@ const PersonPage: React.FC = () => {
   const [overview, setOverview] = useState<PersonProfile | null>(null);
   const [finance, setFinance] = useState<PersonFinanceOverview | null>(null);
   const [sessions, setSessions] = useState<PersonSession[]>([]);
-  const [recentVotes, setRecentVotes] = useState<PersonVote[]>([]);
+  const [recentVotes, setRecentVotes] = useState<any[]>([]);
   const [searchSummary, setSearchSummary] = useState<SearchSummary | null>(null);
   const [expandedSession, setExpandedSession] = useState<number | null>(null);
-  const [sessionVotes, setSessionVotes] = useState<PersonVote[]>([]);
+  const [sessionVotes, setSessionVotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -193,21 +193,9 @@ const PersonPage: React.FC = () => {
                 </div>
               </div>
               <div style={metricStyle}>
-                <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: '#6b7280' }}>Entities</div>
+                <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: '#6b7280' }}>Registered Committees</div>
                 <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#1f2937' }}>
                   {finance?.entity_count ?? 0}
-                </div>
-              </div>
-              <div style={metricStyle}>
-                <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: '#6b7280' }}>Votes Recorded</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#1f2937' }}>
-                  {overview?.total_votes ?? 0}
-                </div>
-              </div>
-              <div style={metricStyle}>
-                <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: '#6b7280' }}>Bills Sponsored</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#1f2937' }}>
-                  {overview?.total_bills_sponsored ?? 0}
                 </div>
               </div>
             </div>

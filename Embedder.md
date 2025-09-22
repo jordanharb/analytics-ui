@@ -410,3 +410,5 @@ supabase functions invoke embed_query --no-verify-jwt --data '{"text":"charter s
 ---
 
 **Go build it.**
+
+access token: sbp_a571c12dd37d5cdae5012d7024a0d1072320401f

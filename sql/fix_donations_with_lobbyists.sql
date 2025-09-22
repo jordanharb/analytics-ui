@@ -70,7 +70,6 @@ AS $$
         UPPER(t.transaction_occupation) ILIKE '%LOBBYIST%'
         OR UPPER(t.transaction_occupation) ILIKE '%LOBBY%'
         OR UPPER(t.transaction_occupation) ILIKE '%GOVERNMENT%RELATIONS%'
-        OR UPPER(t.transaction_occupation) ILIKE '%CONSULTANT%'
         OR UPPER(t.transaction_occupation) ILIKE '%CEO%'
         OR UPPER(t.transaction_occupation) ILIKE '%PRESIDENT%'
         OR UPPER(t.transaction_occupation) ILIKE '%EXECUTIVE%'

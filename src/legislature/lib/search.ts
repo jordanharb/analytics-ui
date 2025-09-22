@@ -80,7 +80,7 @@ const buildSummary = (input: { entityCount: number; legislatorCount: number }): 
 const normalizePeopleRows = (rows: unknown[] | null | undefined): PersonSearchResult[] => {
   if (!Array.isArray(rows)) return [];
 
-  return rows
+  const mapped = rows
     .map((raw) => {
       const row = raw as Record<string, unknown>;
 
@@ -145,26 +145,28 @@ const normalizePeopleRows = (rows: unknown[] | null | undefined): PersonSearchRe
       const entityCount = entityIds.length || toNumber(row.entity_count) || 0;
       const legislatorCount = legislatorIds.length || toNumber(row.legislator_count) || 0;
 
-      return {
+      const mappedRow: PersonSearchResult = {
         person_id: personId,
         display_name: displayName,
-        party,
-        body,
-        district,
-        latest_activity: latestActivity ?? undefined,
-        total_income: totalIncome,
-        total_expense: totalExpense,
+        party: party ?? null,
+        body: body ?? null,
+        district: district ?? null,
+        latest_activity: latestActivity ?? null,
+        total_income: totalIncome ?? null,
+        total_expense: totalExpense ?? null,
         all_session_ids: sessionIds,
         all_legislator_ids: legislatorIds,
         all_entity_ids: entityIds,
-        primary_entity_id: primaryEntityId ?? undefined,
-        primary_entity_name: primaryEntityName ?? undefined,
+        primary_entity_id: primaryEntityId ?? null,
+        primary_entity_name: primaryEntityName ?? null,
         entity_count: entityCount,
         legislator_count: legislatorCount,
         summary: buildSummary({ entityCount, legislatorCount }),
-      } satisfies PersonSearchResult;
+      };
+      return mappedRow;
     })
-    .filter((item): item is PersonSearchResult => Boolean(item));
+    .filter((item): item is PersonSearchResult => (item as PersonSearchResult).person_id !== undefined);
+  return mapped;
 };
 
 export interface SearchPeopleWithSessionsOptions {
@@ -182,7 +184,12 @@ export const searchPeopleWithSessions = async (
 
   // Try the newer search function first, fall back if needed
   const attempts: Array<{ fn: string; payload: Record<string, unknown> }> = [
+    // Newer function name used in some environments
     { fn: 'search_legislators_with_sessions', payload: { p_search_term: query.trim() } },
+    // Alternate name present in SQL folder
+    { fn: 'search_people_with_sessions', payload: { p_search_term: query.trim() } },
+    // Fallback to MV-backed people index when search RPCs are missing
+    { fn: 'rs_legislators_people_index', payload: { p_q: query.trim(), p_limit: limit, p_offset: offset } },
   ];
 
   for (const attempt of attempts) {
@@ -203,6 +210,9 @@ export const searchPeopleWithSessions = async (
 
   // Last resort: fallback to direct table query (limited features)
   try {
+    const start = offset;
+    const end = offset + limit - 1;
+
     const { data, error } = await supabase2
       .from('rs_people')
       .select(
@@ -211,8 +221,7 @@ export const searchPeopleWithSessions = async (
          rs_person_cf_entities(entity_id)`,
       )
       .ilike('display_name', `%${query.trim()}%`)
-      .limit(limit)
-      .offset(offset);
+      .range(start, end);
 
     if (error) {
       console.error('rs_people fallback query failed', error);

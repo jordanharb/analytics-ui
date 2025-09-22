@@ -525,7 +525,7 @@ const EntityDetailView: React.FC<EntityDetailViewProps> = ({ entityId }) => {
     );
   }
 
-  const entityName = entity.primary_candidate_name || entity.primary_committee_name || 'Unknown Entity';
+  // const entityName = entity.primary_candidate_name || entity.primary_committee_name || 'Unknown Entity';
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem' }}>

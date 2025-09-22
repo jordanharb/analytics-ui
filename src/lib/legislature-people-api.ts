@@ -3,7 +3,6 @@ import type {
   PersonIndex,
   PersonSession,
   PersonBillVote,
-  PersonVote,
   PersonVoteHistory,
   BillRollCall,
   RTSPositionWithSearch,
@@ -53,7 +52,44 @@ export async function fetchPersonSessions(personId: number): Promise<PersonSessi
   });
 
   if (error) throw error;
-  return data || [];
+
+  const rows: any[] = data || [];
+
+  // Normalize multiple historical shapes of rs_person_sessions
+  const normalized: PersonSession[] = rows.map((row) => {
+    // Prefer explicit fields when available
+    const sessionId: number = Number(row.session_id ?? row.session ?? 0);
+
+    const sessionName: string =
+      row.session_name ??
+      row.session_label ??
+      (typeof row.session === 'string' ? row.session : `Session ${sessionId || ''}`);
+
+    // Year may come directly or be derivable from first/last vote dates
+    let year: number = Number(row.year ?? 0);
+    if (!Number.isFinite(year) || year <= 0) {
+      const dateStr: string | undefined = row.last_vote_date || row.first_vote_date || row.end_date || row.start_date;
+      if (dateStr) {
+        const d = new Date(dateStr);
+        if (!Number.isNaN(d.getTime())) year = d.getFullYear();
+      }
+    }
+
+    const voteCount: number = Number(row.vote_count ?? row.votes_count ?? 0);
+    const sponsoredCount: number = Number(row.sponsored_count ?? 0);
+
+    return {
+      session_id: sessionId,
+      session_name: sessionName,
+      year: year || 0,
+      vote_count: voteCount,
+      sponsored_count: sponsoredCount,
+    } as PersonSession;
+  });
+
+  // Sort most recent first if year present
+  normalized.sort((a, b) => (b.year || 0) - (a.year || 0) || b.session_id - a.session_id);
+  return normalized;
 }
 
 export async function fetchPersonSessionBillVotes(
@@ -227,7 +263,7 @@ export function getPersonTransactionsCSVUrl(personId: number, entityIds: number[
   return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_queue_transactions_export?${params}`;
 }
 
-export async function fetchPersonVotesInSession(personId: number, sessionId: number): Promise<PersonVote[]> {
+export async function fetchPersonVotesInSession(personId: number, sessionId: number) {
   const { data, error } = await supabase2.rpc('get_person_votes_in_session', {
     p_person_id: personId,
     p_session_id: sessionId

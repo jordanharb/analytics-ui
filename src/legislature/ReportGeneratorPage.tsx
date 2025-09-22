@@ -206,11 +206,11 @@ const parseJsonLoose = (raw: string) => {
     }
   };
 
-  const selectLegislator = (person: Person) => {
-    setSearchTerm(person.display_name);
+  const selectLegislator = (person: Partial<Person>) => {
+    setSearchTerm(person.display_name || '');
     setShowAutocomplete(false);
     setCurrentLegislatorIds(person.all_legislator_ids || []);
-    searchLegislator(person);
+    searchLegislator(person as Person);
   };
 
   const searchLegislator = async (selectedPerson?: Person) => {

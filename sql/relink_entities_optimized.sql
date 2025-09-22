@@ -1,3 +1,4 @@
+
 -- Optimized script to relink missing entities - runs faster to avoid timeouts
 
 -- First, create the name cleaning function if it doesn't exist
