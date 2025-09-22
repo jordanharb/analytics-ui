@@ -22,46 +22,57 @@ export async function fetchPeopleIndex(
   limit: number = 100,
   offset: number = 0
 ): Promise<{ data: PersonIndex[]; total?: number }> {
-  // Try the working function first
-  const { data, error } = await supabase2.rpc('search_legislators_with_sessions', {
-    p_search_term: query || ''
-  });
+  // Try the available functions in order of preference
+  const attempts = [
+    { fn: 'rs_legislators_people_index', payload: { q: query || '', p_limit: limit, p_offset: offset } },
+    { fn: 'search_legislators_with_sessions', payload: { p_search_term: query || '' } },
+    { fn: 'search_people_with_sessions', payload: { p_search_term: query || '' } },
+    { fn: 'rs_people_index_simple', payload: { p_q: query || null, p_limit: limit, p_offset: offset } }
+  ];
 
-  if (error) {
-    console.warn('search_legislators_with_sessions failed, trying fallback:', error);
-    // Fallback to the original function if it exists
-    const { data: fallbackData, error: fallbackError } = await supabase2.rpc('rs_people_index_simple', {
-      p_q: query || null,
-      p_limit: limit,
-      p_offset: offset
-    });
-    
-    if (fallbackError) throw fallbackError;
-    return { data: fallbackData || [] };
+  for (const attempt of attempts) {
+    try {
+      const { data, error } = await supabase2.rpc(attempt.fn, attempt.payload);
+      if (error) {
+        console.warn(`RPC ${attempt.fn} failed:`, error);
+        continue;
+      }
+      if (data && data.length > 0) {
+        return { data: data || [] };
+      }
+    } catch (error) {
+      console.warn(`RPC ${attempt.fn} threw:`, error);
+    }
   }
   
-  return { data: data || [] };
+  return { data: [] };
 }
 
 export async function searchPeople(query: string, limit: number = 25): Promise<PersonSearchResult[]> {
-  // Try the working function first
-  const { data, error } = await supabase2.rpc('search_legislators_with_sessions', {
-    p_search_term: query
-  });
+  // Try the available functions in order of preference
+  const attempts = [
+    { fn: 'rs_legislators_people_index', payload: { q: query, p_limit: limit, p_offset: 0 } },
+    { fn: 'search_legislators_with_sessions', payload: { p_search_term: query } },
+    { fn: 'search_people_with_sessions', payload: { p_search_term: query } },
+    { fn: 'rs_search_people', payload: { q: query, p_limit: limit } }
+  ];
 
-  if (error) {
-    console.warn('search_legislators_with_sessions failed, trying fallback:', error);
-    // Fallback to the original function if it exists
-    const { data: fallbackData, error: fallbackError } = await supabase2.rpc('rs_search_people', {
-      q: query,
-      p_limit: limit
-    });
-    
-    if (fallbackError) throw fallbackError;
-    return fallbackData || [];
+  for (const attempt of attempts) {
+    try {
+      const { data, error } = await supabase2.rpc(attempt.fn, attempt.payload);
+      if (error) {
+        console.warn(`RPC ${attempt.fn} failed:`, error);
+        continue;
+      }
+      if (data && data.length > 0) {
+        return data || [];
+      }
+    } catch (error) {
+      console.warn(`RPC ${attempt.fn} threw:`, error);
+    }
   }
   
-  return data || [];
+  return [];
 }
 
 // ============================================

@@ -182,11 +182,13 @@ export const searchPeopleWithSessions = async (
 
   if (!query.trim()) return [];
 
-  // Try the newer search function first, fall back if needed
+  // Try the available search functions in order of preference
   const attempts: Array<{ fn: string; payload: Record<string, unknown> }> = [
     // Primary function that exists in the database
     { fn: 'search_legislators_with_sessions', payload: { p_search_term: query.trim() } },
-    // Alternate name present in SQL folder
+    // Function from people_centric_functions.sql
+    { fn: 'rs_legislators_people_index', payload: { q: query.trim(), p_limit: limit, p_offset: offset } },
+    // Function from update_mv_entities_search.sql
     { fn: 'search_people_with_sessions', payload: { p_search_term: query.trim() } },
   ];
 

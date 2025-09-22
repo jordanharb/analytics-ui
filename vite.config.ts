@@ -24,7 +24,11 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['@modelcontextprotocol/sdk']
+    include: ['@modelcontextprotocol/sdk'],
+    exclude: ['@modelcontextprotocol/sdk']
+  },
+  define: {
+    global: 'globalThis',
   },
   server: {
     proxy: {
