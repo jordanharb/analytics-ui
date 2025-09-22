@@ -22,23 +22,45 @@ export async function fetchPeopleIndex(
   limit: number = 100,
   offset: number = 0
 ): Promise<{ data: PersonIndex[]; total?: number }> {
-  const { data, error } = await supabase2.rpc('rs_people_index_simple', {
-    p_q: query || null,
-    p_limit: limit,
-    p_offset: offset
+  // Try the working function first
+  const { data, error } = await supabase2.rpc('search_legislators_with_sessions', {
+    p_search_term: query || ''
   });
 
-  if (error) throw error;
+  if (error) {
+    console.warn('search_legislators_with_sessions failed, trying fallback:', error);
+    // Fallback to the original function if it exists
+    const { data: fallbackData, error: fallbackError } = await supabase2.rpc('rs_people_index_simple', {
+      p_q: query || null,
+      p_limit: limit,
+      p_offset: offset
+    });
+    
+    if (fallbackError) throw fallbackError;
+    return { data: fallbackData || [] };
+  }
+  
   return { data: data || [] };
 }
 
 export async function searchPeople(query: string, limit: number = 25): Promise<PersonSearchResult[]> {
-  const { data, error } = await supabase2.rpc('rs_search_people', {
-    q: query,
-    p_limit: limit
+  // Try the working function first
+  const { data, error } = await supabase2.rpc('search_legislators_with_sessions', {
+    p_search_term: query
   });
 
-  if (error) throw error;
+  if (error) {
+    console.warn('search_legislators_with_sessions failed, trying fallback:', error);
+    // Fallback to the original function if it exists
+    const { data: fallbackData, error: fallbackError } = await supabase2.rpc('rs_search_people', {
+      q: query,
+      p_limit: limit
+    });
+    
+    if (fallbackError) throw fallbackError;
+    return fallbackData || [];
+  }
+  
   return data || [];
 }
 

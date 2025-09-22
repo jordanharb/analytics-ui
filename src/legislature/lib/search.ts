@@ -184,12 +184,10 @@ export const searchPeopleWithSessions = async (
 
   // Try the newer search function first, fall back if needed
   const attempts: Array<{ fn: string; payload: Record<string, unknown> }> = [
-    // Newer function name used in some environments
+    // Primary function that exists in the database
     { fn: 'search_legislators_with_sessions', payload: { p_search_term: query.trim() } },
     // Alternate name present in SQL folder
     { fn: 'search_people_with_sessions', payload: { p_search_term: query.trim() } },
-    // Fallback to MV-backed people index when search RPCs are missing
-    { fn: 'rs_legislators_people_index', payload: { p_q: query.trim(), p_limit: limit, p_offset: offset } },
   ];
 
   for (const attempt of attempts) {
@@ -208,36 +206,8 @@ export const searchPeopleWithSessions = async (
     }
   }
 
-  // Last resort: fallback to direct table query (limited features)
-  try {
-    const start = offset;
-    const end = offset + limit - 1;
-
-    const { data, error } = await supabase2
-      .from('rs_people')
-      .select(
-        `person_id, display_name, party, body, district,
-         rs_person_legislators(legislator_id),
-         rs_person_cf_entities(entity_id)`,
-      )
-      .ilike('display_name', `%${query.trim()}%`)
-      .range(start, end);
-
-    if (error) {
-      console.error('rs_people fallback query failed', error);
-      return [];
-    }
-
-    const fallbackRows = (data || []).map((row: any) => ({
-      ...row,
-      all_legislator_ids: row.rs_person_legislators,
-      all_entity_ids: row.rs_person_cf_entities,
-    }));
-
-    return normalizePeopleRows(fallbackRows);
-  } catch (fallbackError) {
-    console.error('searchPeopleWithSessions fallback failed', fallbackError);
-    return [];
-  }
+  // If all attempts failed, return empty array
+  console.warn('All search functions failed for query:', query);
+  return [];
 };
 

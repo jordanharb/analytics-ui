@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MCPClient } from '../../lib/mcp/MCPClient';
+import { getClaudeKey, setClaudeKey, getGeminiKey, setGeminiKey } from '../../lib/aiKeyStore';
 import { ChatMessage } from './components/ChatMessage';
 import { ChatInput } from './components/ChatInput';
 import { ChatHistoryManager, type ChatSession } from '../../lib/chat/ChatHistoryManager';
@@ -25,6 +26,9 @@ export const ChatView: React.FC = () => {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [claudeKeyInput, setClaudeKeyInput] = useState<string>(getClaudeKey() || '');
+  const [geminiKeyInput, setGeminiKeyInput] = useState<string>(getGeminiKey() || '');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 const mcpClientRef = useRef<MCPClient | null>(null);
 const historyManagerRef = useRef<ChatHistoryManager | null>(null);
@@ -391,6 +395,14 @@ const createMessageId = () => {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">
+              {/* Settings Button */}
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="btn btn-xs btn-ghost"
+                title="AI Settings"
+              >
+                Settings
+              </button>
               {/* Provider Selector */}
               {availableProviders.length > 1 && (
                 <div className="flex items-center gap-2">
@@ -447,6 +459,74 @@ const createMessageId = () => {
             </div>
           </div>
         </div>
+
+        {/* Settings Panel */}
+        {showSettings && (
+          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-sm text-gray-600">Claude API Key</label>
+                <input
+                  type="password"
+                  value={claudeKeyInput}
+                  onChange={(e) => setClaudeKeyInput(e.target.value)}
+                  className="input input-sm w-full"
+                  placeholder="sk-ant-..."
+                />
+              </div>
+              <div>
+                <label className="text-sm text-gray-600">Gemini API Key</label>
+                <input
+                  type="password"
+                  value={geminiKeyInput}
+                  onChange={(e) => setGeminiKeyInput(e.target.value)}
+                  className="input input-sm w-full"
+                  placeholder="AIza..."
+                />
+              </div>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  setClaudeKey(claudeKeyInput || null);
+                  setGeminiKey(geminiKeyInput || null);
+                  // Re-init client to pick up new keys
+                  mcpClientRef.current = null;
+                  setConnectionError(null);
+                  setAvailableProviders([]);
+                  setAvailableModels([]);
+                  setCurrentProvider(null);
+                  setSelectedModel('');
+                  // Trigger re-init via effect
+                  (async () => {
+                    try {
+                      const client = new MCPClient();
+                      mcpClientRef.current = client;
+                      const providers = client.getAvailableProviders();
+                      setAvailableProviders(providers);
+                      const current = client.getCurrentProvider();
+                      if (current) {
+                        setCurrentProvider(current);
+                        const models = client.getAvailableModels();
+                        setAvailableModels(models);
+                        if (models.length > 0) {
+                          setSelectedModel(models[0].id);
+                          client.setModel(models[0].id);
+                        }
+                      }
+                    } catch (e: any) {
+                      setConnectionError(e.message);
+                    }
+                  })();
+                }}
+              >
+                Save & Reload Providers
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setShowSettings(false)}>Close</button>
+            </div>
+          </div>
+        )}
 
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-4">

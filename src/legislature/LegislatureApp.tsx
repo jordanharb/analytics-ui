@@ -1,19 +1,19 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import './globals.css';
 
-// Import all page components (to be converted)
-import HomePage from './HomePage';
-import BillsPage from './BillsPage';
-import BulkPage from './BulkExportPage';
-import ReportsChatPage from './ReportsChatPage';
-import AboutPage from './AboutPage';
-import CandidatePage from './CandidatePage';
-import ReportGeneratorPage from './ReportGeneratorPage';
-import DeprecatedReportGeneratorPage from './deprecated_ReportGeneratorPageV2';
-import PersonPage from './PersonPage';
-import CampaignFinanceChatView from './chat/CampaignFinanceChatView';
-import EntityPage from './finance/EntityPage';
+// Lazy load page components to reduce initial bundle size
+const HomePage = lazy(() => import('./HomePage'));
+const BillsPage = lazy(() => import('./BillsPage'));
+const BulkPage = lazy(() => import('./BulkExportPage'));
+const ReportsChatPage = lazy(() => import('./ReportsChatPage'));
+const AboutPage = lazy(() => import('./AboutPage'));
+const CandidatePage = lazy(() => import('./CandidatePage'));
+const ReportGeneratorPage = lazy(() => import('./ReportGeneratorPage'));
+const DeprecatedReportGeneratorPage = lazy(() => import('./deprecated_ReportGeneratorPageV2'));
+const PersonPage = lazy(() => import('./PersonPage'));
+const CampaignFinanceChatView = lazy(() => import('./chat/CampaignFinanceChatView'));
+const EntityPage = lazy(() => import('./finance/EntityPage'));
 
 const LegislatureApp: React.FC = () => {
   const location = useLocation();
@@ -73,19 +73,21 @@ const LegislatureApp: React.FC = () => {
 
         {/* Main Content */}
         <main style={{ flex: 1, maxWidth: '1200px', margin: '0 auto', padding: '2rem 1rem', width: '100%', overflowY: 'auto' }}>
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/bills" element={<BillsPage />} />
-            <Route path="/bulk" element={<BulkPage />} />
-            <Route path="/reports-chat" element={<CampaignFinanceChatView />} />
-            <Route path="/reports-chat-legacy" element={<ReportsChatPage />} />
-            <Route path="/report-generator" element={<ReportGeneratorPage />} />
-            <Route path="/report-generator-v2" element={<DeprecatedReportGeneratorPage />} />
-            <Route path="/about" element={<AboutPage />} />
-            <Route path="/candidate/:id" element={<CandidatePage />} />
-            <Route path="/person/:id" element={<PersonPage />} />
-            <Route path="/finance/entity/:id" element={<EntityPage />} />
-          </Routes>
+          <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '200px' }}>Loading...</div>}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/bills" element={<BillsPage />} />
+              <Route path="/bulk" element={<BulkPage />} />
+              <Route path="/reports-chat" element={<CampaignFinanceChatView />} />
+              <Route path="/reports-chat-legacy" element={<ReportsChatPage />} />
+              <Route path="/report-generator" element={<ReportGeneratorPage />} />
+              <Route path="/report-generator-v2" element={<DeprecatedReportGeneratorPage />} />
+              <Route path="/about" element={<AboutPage />} />
+              <Route path="/candidate/:id" element={<CandidatePage />} />
+              <Route path="/person/:id" element={<PersonPage />} />
+              <Route path="/finance/entity/:id" element={<EntityPage />} />
+            </Routes>
+          </Suspense>
         </main>
 
         {/* Footer */}

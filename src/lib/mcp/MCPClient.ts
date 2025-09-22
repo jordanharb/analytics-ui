@@ -17,8 +17,9 @@ export class MCPClient {
   }
 
   private initializeProviders() {
-    // Initialize Claude if API key exists
-    const claudeKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+    // Initialize Claude if API key exists (env or local override)
+    const { getClaudeKey, getGeminiKey } = require('../aiKeyStore');
+    const claudeKey = getClaudeKey() || import.meta.env.VITE_ANTHROPIC_API_KEY;
     if (claudeKey) {
       try {
         const claudeProvider = new ClaudeProvider(claudeKey);
@@ -33,8 +34,8 @@ export class MCPClient {
       }
     }
 
-    // Initialize Gemini if API key exists
-    const geminiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+    // Initialize Gemini if API key exists (env or local override)
+    const geminiKey = getGeminiKey() || import.meta.env.VITE_GOOGLE_API_KEY;
     if (geminiKey) {
       try {
         const geminiProvider = new GeminiProvider(geminiKey);

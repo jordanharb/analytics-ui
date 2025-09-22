@@ -5,8 +5,9 @@ import { supabase2 as supabase } from '../lib/supabase2';
 import type { PersonSearchResult } from './lib/types';
 import { searchPeopleWithSessions } from './lib/search';
 import { GoogleGenerativeAI, SchemaType, type Tool } from '@google/generative-ai';
+import { getGeminiKey } from '../lib/../lib/aiKeyStore';
 
-const GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+const GEMINI_API_KEY = getGeminiKey() || import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
 
 interface Person extends PersonSearchResult {
   extra?: string; // Additional info like "3 legis IDs • 2 entities"
