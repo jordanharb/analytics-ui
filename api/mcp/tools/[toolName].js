@@ -7,11 +7,27 @@ import { createClient } from '@supabase/supabase-js'
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
+const CAMPAIGN_SUPABASE_URL = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL
+const CAMPAIGN_SUPABASE_SERVICE_KEY =
+  process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY ||
+  process.env.CAMPAIGN_FINANCE_SUPABASE_KEY ||
+  process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY ||
+  process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_ANON_KEY
+
 function getSupabase() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     throw new Error('Supabase env not configured: set SUPABASE_URL and SUPABASE_SERVICE_KEY (or their VITE_ equivalents).')
   }
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+}
+
+function getCampaignFinanceSupabase() {
+  if (!CAMPAIGN_SUPABASE_URL || !CAMPAIGN_SUPABASE_SERVICE_KEY) {
+    throw new Error(
+      'Campaign finance Supabase env not configured: set CAMPAIGN_FINANCE_SUPABASE_URL and CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY (or their VITE_ equivalents).'
+    )
+  }
+  return createClient(CAMPAIGN_SUPABASE_URL, CAMPAIGN_SUPABASE_SERVICE_KEY)
 }
 
 // ---------------- EventAnalyzer.queryEvents (JS) ----------------
@@ -321,33 +337,49 @@ export default async function handler(req, res) {
   const args = req.body || {}
 
   try {
-    const supabase = getSupabase()
-
     let result
     switch (toolName) {
       case 'query_events':
-        result = await queryEvents(supabase, args.filters || {})
+        result = await queryEvents(getSupabase(), args.filters || {})
         break
       case 'search_posts':
-        result = await searchPosts(supabase, args)
+        result = await searchPosts(getSupabase(), args)
         break
       case 'search_events':
-        result = await searchEvents(supabase, args)
+        result = await searchEvents(getSupabase(), args)
         break
       case 'find_similar_content':
-        result = await findSimilarContent(supabase, args)
+        result = await findSimilarContent(getSupabase(), args)
         break
       case 'analyze_trends':
-        result = await analyzeTrends(supabase, args)
+        result = await analyzeTrends(getSupabase(), args)
         break
       case 'get_analytics':
-        result = await getAnalytics(supabase, args)
+        result = await getAnalytics(getSupabase(), args)
         break
       case 'get_actor_info':
-        result = await getActorInfo(supabase, args)
+        result = await getActorInfo(getSupabase(), args)
         break
       case 'resolve_unknown_actors':
-        result = await resolveUnknownActors(supabase, args)
+        result = await resolveUnknownActors(getSupabase(), args)
+        break
+      case 'campaign_search_entities':
+        result = await campaignSearchEntities(args)
+        break
+      case 'campaign_get_entity_summary':
+        result = await campaignGetEntitySummary(args)
+        break
+      case 'campaign_get_person_sessions':
+        result = await campaignGetPersonSessions(args)
+        break
+      case 'campaign_list_bills_for_person':
+        result = await campaignListBillsForPerson(args)
+        break
+      case 'campaign_list_transactions':
+        result = await campaignListTransactions(args)
+        break
+      case 'campaign_top_donors':
+        result = await campaignTopDonors(args)
         break
       default:
         res.status(404).json({ success: false, error: `Unknown tool: ${toolName}` })
@@ -534,4 +566,500 @@ async function resolveUnknownActors(supabase, params = {}) {
     })
   }
   return { total: suggestions.length, items: suggestions }
+}
+
+const toNumber = (value) => {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return value
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+async function campaignSearchEntities(params = {}) {
+  const query = (params.query || '').trim()
+  const limit = Math.min(Math.max(params.limit || 25, 1), 200)
+  const offset = Math.max(params.offset || 0, 0)
+
+  if (!query) {
+    throw new Error('query is required')
+  }
+
+  const supabase = getCampaignFinanceSupabase()
+
+  const { data: entities, error, count } = await supabase
+    .from('cf_entities')
+    .select(
+      `entity_id, primary_committee_name, primary_candidate_name, total_records, earliest_activity, latest_activity, total_income_all_records, total_expense_all_records, max_cash_balance`,
+      { count: 'exact' }
+    )
+    .or(`primary_committee_name.ilike.%${query}%,primary_candidate_name.ilike.%${query}%`)
+    .order('latest_activity', { ascending: false, nullsLast: true })
+    .range(offset, offset + limit - 1)
+
+  if (error) throw error
+
+  const entityIds = (entities || []).map((entity) => entity.entity_id).filter(Boolean)
+  const latestRecordByEntity = {}
+
+  if (entityIds.length) {
+    const { data: records, error: recordsError } = await supabase
+      .from('cf_entity_records')
+      .select('entity_id, committee_name, committee_status, party_name, office_name, candidate, chairman, treasurer, cash_balance, income, expense, registration_date, termination_date')
+      .in('entity_id', entityIds)
+      .order('registration_date', { ascending: false, nullsLast: true })
+      .limit(entityIds.length * 5)
+
+    if (recordsError) throw recordsError
+
+    for (const record of records || []) {
+      if (!latestRecordByEntity[record.entity_id]) {
+        latestRecordByEntity[record.entity_id] = record
+      }
+    }
+  }
+
+  return {
+    dataset: 'campaign_finance',
+    query,
+    total: count ?? (entities || []).length,
+    limit,
+    offset,
+    entities: (entities || []).map((entity) => ({
+      entity_id: entity.entity_id,
+      primary_committee_name: entity.primary_committee_name,
+      primary_candidate_name: entity.primary_candidate_name,
+      earliest_activity: entity.earliest_activity,
+      latest_activity: entity.latest_activity,
+      total_records: entity.total_records,
+      total_income_all_records: toNumber(entity.total_income_all_records),
+      total_expense_all_records: toNumber(entity.total_expense_all_records),
+      max_cash_balance: toNumber(entity.max_cash_balance),
+      latest_record: latestRecordByEntity[entity.entity_id] || null,
+    })),
+  }
+}
+
+async function campaignGetEntitySummary(params = {}) {
+  const entityId = params.entity_id
+  const recentRecords = Math.min(Math.max(params.recent_records || 5, 1), 20)
+
+  if (!entityId) {
+    throw new Error('entity_id is required')
+  }
+
+  const supabase = getCampaignFinanceSupabase()
+
+  const { data: entity, error: entityError } = await supabase
+    .from('cf_entities')
+    .select('entity_id, primary_committee_name, primary_candidate_name, total_records, earliest_activity, latest_activity, total_income_all_records, total_expense_all_records, max_cash_balance')
+    .eq('entity_id', entityId)
+    .single()
+
+  if (entityError) throw entityError
+  if (!entity) {
+    return { dataset: 'campaign_finance', entity_id: entityId, error: 'Entity not found' }
+  }
+
+  const { data: records, error: recordError } = await supabase
+    .from('cf_entity_records')
+    .select('record_id, entity_id, committee_name, committee_status, party_name, office_name, candidate, chairman, treasurer, cash_balance, income, expense, registration_date, termination_date, mailing_address')
+    .eq('entity_id', entityId)
+    .order('registration_date', { ascending: false, nullsLast: true })
+    .limit(recentRecords)
+
+  if (recordError) throw recordError
+
+  let totals = []
+  try {
+    const { data: totalsData, error: totalsError } = await supabase
+      .from('cf_transactions')
+      .select('transaction_type_disposition_id, total_amount:sum(amount), transaction_count:count(transaction_id)')
+      .eq('entity_id', entityId)
+      .group('transaction_type_disposition_id')
+
+    if (totalsError) throw totalsError
+    totals = totalsData || []
+  } catch (aggregateError) {
+    // If group by is not supported, gracefully fallback with empty totals
+    console.warn('campaign_get_entity_summary aggregate fallback:', aggregateError?.message || aggregateError)
+    totals = []
+  }
+
+  const { data: recentTransactions, error: txError } = await supabase
+    .from('cf_transactions')
+    .select('public_transaction_id, transaction_id, transaction_date, amount, transaction_type, transaction_type_disposition_id, received_from_or_paid_to, transaction_first_name, transaction_last_name, transaction_occupation, transaction_city, transaction_state, transaction_group_name, memo')
+    .eq('entity_id', entityId)
+    .order('transaction_date', { ascending: false, nullsLast: true })
+    .limit(25)
+
+  if (txError) throw txError
+
+  return {
+    dataset: 'campaign_finance',
+    entity: {
+      entity_id: entity.entity_id,
+      primary_committee_name: entity.primary_committee_name,
+      primary_candidate_name: entity.primary_candidate_name,
+      earliest_activity: entity.earliest_activity,
+      latest_activity: entity.latest_activity,
+      total_records: entity.total_records,
+      total_income_all_records: toNumber(entity.total_income_all_records),
+      total_expense_all_records: toNumber(entity.total_expense_all_records),
+      max_cash_balance: toNumber(entity.max_cash_balance),
+    },
+    recent_records: (records || []).map((record) => ({
+      record_id: record.record_id,
+      committee_name: record.committee_name,
+      committee_status: record.committee_status,
+      party_name: record.party_name,
+      office_name: record.office_name,
+      candidate: record.candidate,
+      chairman: record.chairman,
+      treasurer: record.treasurer,
+      cash_balance: toNumber(record.cash_balance),
+      income: toNumber(record.income),
+      expense: toNumber(record.expense),
+      registration_date: record.registration_date,
+      termination_date: record.termination_date,
+      mailing_address: record.mailing_address,
+    })),
+    transaction_summary: totals.map((row) => ({
+      disposition: row.transaction_type_disposition_id,
+      total_amount: toNumber(row.total_amount),
+      transaction_count: toNumber(row.transaction_count),
+    })),
+    recent_transactions: (recentTransactions || []).map((tx) => ({
+      public_transaction_id: tx.public_transaction_id,
+      transaction_id: tx.transaction_id,
+      transaction_date: tx.transaction_date,
+      amount: toNumber(tx.amount),
+      transaction_type: tx.transaction_type,
+      disposition: tx.transaction_type_disposition_id,
+      donor_display: tx.received_from_or_paid_to,
+      donor_first_name: tx.transaction_first_name,
+      donor_last_name: tx.transaction_last_name,
+      donor_occupation: tx.transaction_occupation,
+      donor_city: tx.transaction_city,
+      donor_state: tx.transaction_state,
+      group_name: tx.transaction_group_name,
+      memo: tx.memo,
+    })),
+  }
+}
+
+async function campaignGetPersonSessions(params = {}) {
+  const personId = params.person_id
+  if (!personId) {
+    throw new Error('person_id is required')
+  }
+
+  const supabase = getCampaignFinanceSupabase()
+
+  const { data: legSessions, error: legSessionError } = await supabase
+    .from('rs_person_leg_sessions')
+    .select('session_id, legislator_id')
+    .eq('person_id', personId)
+
+  if (legSessionError) throw legSessionError
+
+  const sessionIds = Array.from(new Set((legSessions || []).map((item) => item.session_id).filter(Boolean)))
+  const legislatorIds = Array.from(new Set((legSessions || []).map((item) => item.legislator_id).filter(Boolean)))
+
+  let sessions = []
+  if (sessionIds.length) {
+    const { data, error } = await supabase
+      .from('sessions')
+      .select('session_id, session_name, legislature_number, session_type, year, start_date, end_date, is_active')
+      .in('session_id', sessionIds)
+    if (error) throw error
+    sessions = data || []
+  }
+
+  let legislators = []
+  if (legislatorIds.length) {
+    const { data, error } = await supabase
+      .from('legislators')
+      .select('legislator_id, full_name, party, body')
+      .in('legislator_id', legislatorIds)
+    if (error) throw error
+    legislators = data || []
+  }
+
+  const sessionMap = new Map(sessions.map((session) => [session.session_id, session]))
+  const legislatorMap = new Map(legislators.map((leg) => [leg.legislator_id, leg]))
+
+  const { data: personEntities, error: entitiesError } = await supabase
+    .from('rs_person_cf_entities')
+    .select('entity_id')
+    .eq('person_id', personId)
+
+  if (entitiesError) throw entitiesError
+
+  const entityIds = Array.from(new Set((personEntities || []).map((item) => item.entity_id).filter(Boolean)))
+
+  let entities = []
+  if (entityIds.length) {
+    const { data, error } = await supabase
+      .from('cf_entities')
+      .select('entity_id, primary_committee_name, primary_candidate_name, earliest_activity, latest_activity, max_cash_balance')
+      .in('entity_id', entityIds)
+    if (error) throw error
+    entities = data || []
+  }
+
+  return {
+    dataset: 'campaign_finance',
+    person_id: personId,
+    legislator_assignments: (legSessions || []).map((assignment) => ({
+      session_id: assignment.session_id,
+      legislator_id: assignment.legislator_id,
+      session: sessionMap.get(assignment.session_id) || null,
+      legislator: legislatorMap.get(assignment.legislator_id) || null,
+    })),
+    committee_entities: entities,
+  }
+}
+
+async function campaignListBillsForPerson(params = {}) {
+  const personId = params.person_id
+  const limit = Math.min(Math.max(params.limit || 100, 1), 500)
+  const sessionIdsFilter = Array.isArray(params.session_ids) ? params.session_ids.filter(Boolean) : []
+
+  if (!personId) {
+    throw new Error('person_id is required')
+  }
+
+  const supabase = getCampaignFinanceSupabase()
+
+  const { data: legislatorRows, error: legislatorRowError } = await supabase
+    .from('rs_person_legislators')
+    .select('legislator_id')
+    .eq('person_id', personId)
+
+  if (legislatorRowError) throw legislatorRowError
+
+  const legislatorIds = Array.from(new Set((legislatorRows || []).map((row) => row.legislator_id).filter(Boolean)))
+  if (!legislatorIds.length) {
+    return { dataset: 'campaign_finance', person_id: personId, bills: [] }
+  }
+
+  let votesQuery = supabase
+    .from('votes')
+    .select('vote_id, bill_id, legislator_id, vote, vote_date, body, bills!inner(session_id, bill_number, short_title, description, primary_sponsor_name, governor_action, final_disposition, date_introduced)')
+    .in('legislator_id', legislatorIds)
+    .order('vote_date', { ascending: false, nullsLast: true })
+    .limit(limit)
+
+  if (sessionIdsFilter.length) {
+    votesQuery = votesQuery.in('bills.session_id', sessionIdsFilter)
+  }
+
+  const { data: votes, error: votesError } = await votesQuery
+  if (votesError) throw votesError
+
+  const billIds = Array.from(new Set((votes || []).map((vote) => vote.bill_id).filter(Boolean)))
+  const sessionIds = Array.from(new Set((votes || []).map((vote) => vote.bills?.session_id).filter(Boolean)))
+
+  let sponsorsByBillLegislator = new Map()
+  if (billIds.length) {
+    const { data: sponsors, error: sponsorError } = await supabase
+      .from('bill_sponsors')
+      .select('bill_id, legislator_id, sponsor_type')
+      .in('bill_id', billIds)
+      .in('legislator_id', legislatorIds)
+    if (sponsorError) throw sponsorError
+    sponsorsByBillLegislator = new Map(
+      (sponsors || []).map((sponsor) => [`${sponsor.bill_id}:${sponsor.legislator_id}`, sponsor])
+    )
+  }
+
+  let sessions = []
+  if (sessionIds.length) {
+    const { data: sessionRows, error: sessionError } = await supabase
+      .from('sessions')
+      .select('session_id, session_name, session_type, year, start_date, end_date')
+      .in('session_id', sessionIds)
+    if (sessionError) throw sessionError
+    sessions = sessionRows || []
+  }
+
+  let legislators = []
+  const { data: legislatorData, error: legislatorError } = await supabase
+    .from('legislators')
+    .select('legislator_id, full_name, party, body')
+    .in('legislator_id', legislatorIds)
+  if (legislatorError) throw legislatorError
+  legislators = legislatorData || []
+
+  const sessionMap = new Map(sessions.map((session) => [session.session_id, session]))
+  const legislatorMap = new Map(legislators.map((leg) => [leg.legislator_id, leg]))
+
+  const bills = (votes || []).map((vote) => {
+    const bill = vote.bills || {}
+    const sponsorKey = `${vote.bill_id}:${vote.legislator_id}`
+    const sponsorMatch = sponsorsByBillLegislator.get(sponsorKey)
+
+    return {
+      bill_id: vote.bill_id,
+      bill_number: bill.bill_number,
+      bill_title: bill.short_title || bill.description,
+      legislator_id: vote.legislator_id,
+      legislator: legislatorMap.get(vote.legislator_id) || null,
+      session_id: bill.session_id,
+      session: sessionMap.get(bill.session_id) || null,
+      vote: vote.vote,
+      vote_date: vote.vote_date,
+      chamber: vote.body,
+      is_sponsor: Boolean(sponsorMatch),
+      sponsor_type: sponsorMatch?.sponsor_type || null,
+      primary_sponsor_name: bill.primary_sponsor_name,
+      governor_action: bill.governor_action,
+      final_disposition: bill.final_disposition,
+      introduced_date: bill.date_introduced,
+    }
+  })
+
+  return { dataset: 'campaign_finance', person_id: personId, bills }
+}
+
+async function campaignListTransactions(params = {}) {
+  const entityId = params.entity_id
+  if (!entityId) {
+    throw new Error('entity_id is required')
+  }
+
+  const limit = Math.min(Math.max(params.limit || 100, 1), 500)
+  const offset = Math.max(params.offset || 0, 0)
+
+  const supabase = getCampaignFinanceSupabase()
+
+  let query = supabase
+    .from('cf_transactions')
+    .select(
+      'public_transaction_id, transaction_id, entity_id, committee_name, transaction_date, amount, transaction_type, transaction_type_disposition_id, transaction_first_name, transaction_last_name, received_from_or_paid_to, transaction_entity_type_id, transaction_occupation, transaction_employer, transaction_city, transaction_state, transaction_group_name, memo',
+      { count: 'exact' }
+    )
+    .eq('entity_id', entityId)
+
+  if (params.disposition) query = query.eq('transaction_type_disposition_id', params.disposition)
+  if (params.start_date) query = query.gte('transaction_date', params.start_date)
+  if (params.end_date) query = query.lte('transaction_date', params.end_date)
+  if (params.min_amount !== undefined) query = query.gte('amount', params.min_amount)
+  if (params.max_amount !== undefined) query = query.lte('amount', params.max_amount)
+  if (Array.isArray(params.transaction_entity_type_ids) && params.transaction_entity_type_ids.length) {
+    query = query.in('transaction_entity_type_id', params.transaction_entity_type_ids)
+  }
+
+  const { data: transactions, error, count } = await query
+    .order('transaction_date', { ascending: false, nullsLast: true })
+    .range(offset, offset + limit - 1)
+
+  if (error) throw error
+
+  const summary = (transactions || []).reduce(
+    (acc, tx) => {
+      const amount = toNumber(tx.amount) || 0
+      acc.total_amount += amount
+      acc.transaction_count += 1
+      return acc
+    },
+    { total_amount: 0, transaction_count: 0 }
+  )
+
+  return {
+    dataset: 'campaign_finance',
+    entity_id: entityId,
+    total: count ?? (transactions || []).length,
+    limit,
+    offset,
+    summary,
+    transactions: (transactions || []).map((tx) => ({
+      public_transaction_id: tx.public_transaction_id,
+      transaction_id: tx.transaction_id,
+      transaction_date: tx.transaction_date,
+      amount: toNumber(tx.amount),
+      transaction_type: tx.transaction_type,
+      disposition: tx.transaction_type_disposition_id,
+      transaction_entity_type_id: tx.transaction_entity_type_id,
+      donor_display: tx.received_from_or_paid_to,
+      donor_first_name: tx.transaction_first_name,
+      donor_last_name: tx.transaction_last_name,
+      donor_occupation: tx.transaction_occupation,
+      donor_employer: tx.transaction_employer,
+      donor_city: tx.transaction_city,
+      donor_state: tx.transaction_state,
+      group_name: tx.transaction_group_name,
+      memo: tx.memo,
+    })),
+  }
+}
+
+async function campaignTopDonors(params = {}) {
+  const entityId = params.entity_id
+  const limit = Math.min(Math.max(params.limit || 25, 1), 200)
+
+  if (!entityId) {
+    throw new Error('entity_id is required')
+  }
+
+  const supabase = getCampaignFinanceSupabase()
+
+  const fetchLimit = Math.min(limit * 25, 2000)
+
+  let query = supabase
+    .from('cf_transactions')
+    .select('transaction_entity_id, transaction_first_name, transaction_last_name, received_from_or_paid_to, transaction_entity_type_id, transaction_city, transaction_state, amount, transaction_type_disposition_id, transaction_date')
+    .eq('entity_id', entityId)
+
+  if (params.disposition) query = query.eq('transaction_type_disposition_id', params.disposition)
+  if (params.start_date) query = query.gte('transaction_date', params.start_date)
+  if (params.end_date) query = query.lte('transaction_date', params.end_date)
+
+  const { data, error } = await query
+    .order('transaction_date', { ascending: false, nullsLast: true })
+    .limit(fetchLimit)
+
+  if (error) throw error
+
+  const donorsMap = new Map()
+  for (const row of data || []) {
+    const key = row.transaction_entity_id || `${row.transaction_first_name || ''}|${row.transaction_last_name || ''}|${row.received_from_or_paid_to || ''}`
+    if (!donorsMap.has(key)) {
+      donorsMap.set(key, {
+        transaction_entity_id: row.transaction_entity_id,
+        display_name: row.received_from_or_paid_to,
+        first_name: row.transaction_first_name,
+        last_name: row.transaction_last_name,
+        entity_type_id: row.transaction_entity_type_id,
+        city: row.transaction_city,
+        state: row.transaction_state,
+        transaction_count: 0,
+        total_amount: 0,
+        latest_transaction_date: null,
+      })
+    }
+    const donor = donorsMap.get(key)
+    const amount = toNumber(row.amount) || 0
+    donor.transaction_count += 1
+    donor.total_amount += amount
+    if (!donor.latest_transaction_date || donor.latest_transaction_date < row.transaction_date) {
+      donor.latest_transaction_date = row.transaction_date
+    }
+  }
+
+  const donors = Array.from(donorsMap.values())
+    .sort((a, b) => b.total_amount - a.total_amount)
+    .slice(0, limit)
+
+  return {
+    dataset: 'campaign_finance',
+    entity_id: entityId,
+    limit,
+    filters: {
+      start_date: params.start_date || null,
+      end_date: params.end_date || null,
+      disposition: params.disposition || null,
+    },
+    donors,
+  }
 }

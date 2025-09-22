@@ -21,6 +21,7 @@ export interface LLMProvider {
   isAvailable(): boolean;
   getAvailableModels(): ModelInfo[];
   setModel(modelId: string): void;
+  clearHistory?(): void;
 }
 
 export interface ModelInfo {

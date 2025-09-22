@@ -21,17 +21,20 @@ export interface Message {
   tools?: any[];
 }
 
-const STORAGE_KEY = 'woke_palantir_chat_sessions';
-const CURRENT_SESSION_KEY = 'woke_palantir_current_session';
 const MAX_SESSIONS = 50; // Limit to prevent localStorage bloat
+const DEFAULT_NAMESPACE = 'woke_palantir';
 
 export class ChatHistoryManager {
   private sessions: Map<string, ChatSession>;
   private currentSessionId: string | null;
+  private storageKey: string;
+  private currentSessionKey: string;
 
-  constructor() {
+  constructor(namespace: string = DEFAULT_NAMESPACE) {
     this.sessions = new Map();
     this.currentSessionId = null;
+    this.storageKey = `${namespace}_chat_sessions`;
+    this.currentSessionKey = `${namespace}_current_session`;
     this.loadFromStorage();
   }
 
@@ -40,7 +43,7 @@ export class ChatHistoryManager {
    */
   private loadFromStorage(): void {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(this.storageKey);
       if (stored) {
         const data = JSON.parse(stored);
         Object.entries(data).forEach(([id, session]) => {
@@ -49,7 +52,7 @@ export class ChatHistoryManager {
       }
 
       // Load current session ID
-      const currentId = localStorage.getItem(CURRENT_SESSION_KEY);
+      const currentId = localStorage.getItem(this.currentSessionKey);
       if (currentId && this.sessions.has(currentId)) {
         this.currentSessionId = currentId;
       }
@@ -69,10 +72,10 @@ export class ChatHistoryManager {
         data[id] = session;
       });
 
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(this.storageKey, JSON.stringify(data));
 
       if (this.currentSessionId) {
-        localStorage.setItem(CURRENT_SESSION_KEY, this.currentSessionId);
+        localStorage.setItem(this.currentSessionKey, this.currentSessionId);
       }
     } catch (error) {
       console.error('Failed to save chat history:', error);
@@ -215,8 +218,8 @@ export class ChatHistoryManager {
   clearAllSessions(): void {
     this.sessions.clear();
     this.currentSessionId = null;
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(CURRENT_SESSION_KEY);
+    localStorage.removeItem(this.storageKey);
+    localStorage.removeItem(this.currentSessionKey);
     this.createSession(); // Create a fresh session
   }
 

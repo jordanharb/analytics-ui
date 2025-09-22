@@ -44,7 +44,26 @@ export interface SearchResult {
   latest_activity: string | null;
   total_income: number;
   total_expense: number;
-  similarity: number;
+  similarity?: number;
+}
+
+export interface PersonSearchResult {
+  person_id: number;
+  display_name: string;
+  party?: string | null;
+  body?: string | null;
+  district?: number | null;
+  latest_activity?: string | null;
+  total_income?: number | null;
+  total_expense?: number | null;
+  all_session_ids: number[];
+  all_legislator_ids: number[];
+  all_entity_ids: number[];
+  primary_entity_id?: number | null;
+  primary_entity_name?: string | null;
+  entity_count: number;
+  legislator_count: number;
+  summary?: string;
 }
 
 export interface Report {

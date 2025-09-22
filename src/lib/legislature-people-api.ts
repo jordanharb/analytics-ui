@@ -3,6 +3,7 @@ import type {
   PersonIndex,
   PersonSession,
   PersonBillVote,
+  PersonVote,
   PersonVoteHistory,
   BillRollCall,
   RTSPositionWithSearch,
@@ -220,13 +221,25 @@ export async function fetchPersonReports(personId: number): Promise<PersonReport
 
 export function getPersonTransactionsCSVUrl(personId: number, entityIds: number[]): string {
   const params = new URLSearchParams({
+    person_id: String(personId),
     entity_ids: entityIds.join(',')
   });
   return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_queue_transactions_export?${params}`;
 }
 
+export async function fetchPersonVotesInSession(personId: number, sessionId: number): Promise<PersonVote[]> {
+  const { data, error } = await supabase2.rpc('get_person_votes_in_session', {
+    p_person_id: personId,
+    p_session_id: sessionId
+  });
+
+  if (error) throw error;
+  return data || [];
+}
+
 export function getPersonReportsCSVUrl(personId: number, entityIds: number[]): string {
   const params = new URLSearchParams({
+    person_id: String(personId),
     entity_ids: entityIds.join(',')
   });
   return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_queue_reports_export?${params}`;

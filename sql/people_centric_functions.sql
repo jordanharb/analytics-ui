@@ -288,39 +288,48 @@ RETURNS TABLE (
   first_activity date,
   last_activity date,
   entity_details jsonb
-) LANGUAGE sql STABLE AS $$
-  WITH entity_summary AS (
+) LANGUAGE sql STABLE AS $
+  WITH person_entity_details AS (
     SELECT 
       pe.person_id,
-      COUNT(DISTINCT pe.entity_id) AS entity_count,
-      SUM(e.total_income_all_records) AS total_raised,
-      SUM(e.total_expense_all_records) AS total_spent,
-      COUNT(DISTINCT t.public_transaction_id) AS transaction_count,
-      MIN(t.transaction_date) AS first_activity,
-      MAX(t.transaction_date) AS last_activity,
       jsonb_agg(jsonb_build_object(
         'entity_id', e.entity_id,
         'display_name', COALESCE(e.primary_candidate_name, e.primary_committee_name),
         'total_raised', e.total_income_all_records,
         'total_spent', e.total_expense_all_records
-      ) ORDER BY e.total_income_all_records DESC) AS entity_details
+      ) ORDER BY e.total_income_all_records DESC) FILTER (WHERE e.entity_id IS NOT NULL) AS entity_details_agg,
+      COUNT(DISTINCT pe.entity_id) AS entity_count_agg,
+      SUM(e.total_income_all_records) AS total_raised_agg,
+      SUM(e.total_expense_all_records) AS total_spent_agg
     FROM rs_person_cf_entities pe
     JOIN cf_entities e ON e.entity_id = pe.entity_id
+    WHERE pe.person_id = p_person_id
+    GROUP BY pe.person_id
+  ),
+  person_transactions_summary AS (
+    SELECT
+      pe.person_id,
+      COUNT(t.public_transaction_id) AS transaction_count,
+      MIN(t.transaction_date) AS first_activity,
+      MAX(t.transaction_date) AS last_activity
+    FROM rs_person_cf_entities pe
     LEFT JOIN cf_transactions t ON t.entity_id = pe.entity_id
     WHERE pe.person_id = p_person_id
     GROUP BY pe.person_id
   )
   SELECT 
-    COALESCE(total_raised, 0),
-    COALESCE(total_spent, 0),
-    COALESCE(entity_count, 0),
-    COALESCE(transaction_count, 0),
-    first_activity,
-    last_activity,
-    COALESCE(entity_details, '[]'::jsonb)
-  FROM entity_summary;
-$$;
-
+    COALESCE(ped.total_raised_agg, 0) AS total_raised,
+    COALESCE(ped.total_spent_agg, 0) AS total_spent,
+    COALESCE(ped.entity_count_agg, 0) AS entity_count,
+    COALESCE(pts.transaction_count, 0) AS transaction_count,
+    pts.first_activity,
+    pts.last_activity,
+    COALESCE(ped.entity_details_agg, '[]'::jsonb) AS entity_details
+  FROM rs_people p
+  LEFT JOIN person_entity_details ped ON p.person_id = ped.person_id
+  LEFT JOIN person_transactions_summary pts ON p.person_id = pts.person_id
+  WHERE p.person_id = p_person_id;
+$;
 -- ============================================
 -- 8. PERSON TRANSACTIONS (Across all entities)
 -- ============================================

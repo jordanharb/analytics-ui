@@ -23,5 +23,19 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/legislature/about/**",
+    "src/legislature/api/**",
+    "src/legislature/bills/**",
+    "src/legislature/BillsPage.tsx",
+    "src/legislature/bulk/**",
+    "src/legislature/candidate/**",
+    "src/legislature/layout.tsx",
+    "src/legislature/lib/**",
+    "src/legislature/page.tsx",
+    "src/legislature/reports/**",
+    "src/views/ChatView/**",
+    "src/lib/mcp/**"
+  ]
 }

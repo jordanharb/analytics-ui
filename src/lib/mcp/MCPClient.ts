@@ -186,6 +186,12 @@ export class MCPClient {
     this.tools = [];
   }
 
+  clearHistory(): void {
+    if (this.currentProvider && typeof this.currentProvider.clearHistory === 'function') {
+      this.currentProvider.clearHistory();
+    }
+  }
+
   getTools(): MCPTool[] {
     return this.tools;
   }

@@ -2,15 +2,13 @@
 
 import React, { useState } from 'react';
 import { supabase2 as supabase } from '../lib/supabase2';
+import type { PersonSearchResult } from './lib/types';
+import { searchPeopleWithSessions } from './lib/search';
 import { GoogleGenerativeAI, SchemaType, type Tool } from '@google/generative-ai';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
 
-interface Person {
-  person_id: number;
-  display_name: string;
-  all_session_ids?: number[];
-  all_legislator_ids?: number[];
+interface Person extends PersonSearchResult {
   extra?: string; // Additional info like "3 legis IDs • 2 entities"
 }
 
@@ -23,10 +21,24 @@ interface Session {
   end_date?: string;
 }
 
+type SessionSelection = number | 'combined';
+
 interface AnalysisResult {
   sessionName: string;
   report?: any;
   error?: string;
+  phase1?: Phase1RenderData;
+}
+
+interface Phase1RenderData {
+  sessionName: string;
+  data: any;
+  summaryStats: any;
+  billIds: number[];
+  donationIds: string[];
+  groups: any[];
+  phase1ReportId?: number;
+  sessionKey: string;
 }
 
 const ReportGeneratorPage: React.FC = () => {
@@ -35,7 +47,7 @@ const ReportGeneratorPage: React.FC = () => {
   const [currentLegislatorIds, setCurrentLegislatorIds] = useState<number[]>([]);
   const [currentEntityIds, setCurrentEntityIds] = useState<number[]>([]);
   const [availableSessions, setAvailableSessions] = useState<Session[]>([]);
-  const [selectedSessions, setSelectedSessions] = useState<number[] | string[]>([]);
+  const [selectedSessions, setSelectedSessions] = useState<SessionSelection[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [autocompleteResults, setAutocompleteResults] = useState<Person[]>([]);
@@ -44,14 +56,13 @@ const ReportGeneratorPage: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [customInstructions, setCustomInstructions] = useState('');
-  const [excludeAnalyzedBills, setExcludeAnalyzedBills] = useState(false);
-  const [analyzedBillIds, setAnalyzedBillIds] = useState<number[]>([]);
-  const [incrementalStats, setIncrementalStats] = useState<any>(null);
   const [progressText, setProgressText] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[] | null>(null);
   const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results'>('search');
   const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall'>('twoPhase');
+  const [phase1Previews, setPhase1Previews] = useState<Record<string, Phase1RenderData>>({});
+  const [activePhaseView, setActivePhaseView] = useState<'phase1' | 'phase2'>('phase2');
 
 const baseGenerationConfig = {
   temperature: 0.6,
@@ -69,6 +80,10 @@ const runWithTimeout = async <T,>(executor: (signal: AbortSignal) => Promise<T>,
     clearTimeout(timeout);
   }
 };
+
+const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function'
+  ? performance.now()
+  : Date.now());
 
 const parseJsonLoose = (raw: string) => {
   const cleaned = raw.trim();
@@ -173,66 +188,14 @@ const parseJsonLoose = (raw: string) => {
 
   const searchCachedLegislators = async (term: string) => {
     try {
-      // Try different possible search function names
-      let data, error;
+      const people = await searchPeopleWithSessions({ query: term, limit: 10 });
 
-      // First try the search function that exists in LegislatureApp
-      try {
-        const result = await supabase.rpc('search_legislators_with_sessions', { p_search_term: term });
-        data = result.data;
-        error = result.error;
-      } catch (firstError) {
-        // If that fails, try other possible function names
-        console.log('search_legislators_with_sessions not found, trying alternatives...');
-
-        try {
-          const result = await supabase.rpc('search_people_with_sessions', { p_q: term, p_limit: 10 });
-          data = result.data;
-          error = result.error;
-        } catch (secondError) {
-          // Last resort - direct query to rs_people table
-          const result = await supabase
-            .from('rs_people')
-            .select(`
-              person_id,
-              display_name,
-              rs_person_legislators!inner(legislator_id),
-              rs_person_cf_entities(entity_id)
-            `)
-            .ilike('display_name', `%${term}%`)
-            .limit(10);
-
-          if (result.error) throw result.error;
-
-          // Transform the data to match expected format
-          data = (result.data || []).map((person: any) => ({
-            person_id: person.person_id,
-            display_name: person.display_name,
-            all_legislator_ids: person.rs_person_legislators?.map((l: any) => l.legislator_id) || [],
-            extra: `${person.rs_person_legislators?.length || 0} legis IDs • ${person.rs_person_cf_entities?.length || 0} entities`
-          }));
-          error = null;
-        }
-      }
-
-      if (error) throw error;
-
-      // Filter to only show people who have legislator records
-      const mappedData = (data || [])
-        .filter((item: any) => {
-          // Check for legislator IDs in different possible formats
-          const legisIds = item.all_legislator_ids?.length || 0;
-          const extraText = item.extra || '';
-          const legisMatch = extraText.match(/(\d+)\s+legis\s+IDs/);
-          const legisCount = legisMatch ? parseInt(legisMatch[1]) : legisIds;
-          return legisCount > 0; // Only show people with legislator records
-        })
-        .map((item: any) => ({
-          person_id: item.person_id,
-          display_name: item.display_name || item.label,
-          extra: item.extra,
-          all_legislator_ids: item.all_legislator_ids
-        }));
+      const mappedData: Person[] = people
+        .map((person) => ({
+          ...person,
+          extra: person.summary ?? `${person.legislator_count} legislators • ${person.entity_count} entities`,
+        }))
+        .filter((item) => (item.all_legislator_ids?.length || 0) > 0);
 
       setAutocompleteResults(mappedData);
       setShowAutocomplete(mappedData.length > 0);
@@ -272,38 +235,31 @@ const parseJsonLoose = (raw: string) => {
           if (sessionError) throw sessionError;
           sessionRows = sessionData || [];
         } catch (sessionError) {
-          console.warn('get_person_sessions RPC failed, attempting fallback', sessionError);
+          console.warn('get_person_sessions RPC failed, attempting direct query fallback', sessionError);
           try {
-            const { data: altData, error: altError } = await supabase.rpc('get_person_sessions_simple', { p_person_id: personId });
-            if (altError) throw altError;
-            sessionRows = altData || [];
-          } catch (fallbackError) {
-            console.warn('Fallback get_person_sessions_simple failed, attempting direct query', fallbackError);
-            try {
-              const { data: legislatorSessions, error: lsError } = await supabase
-                .from('rs_person_legislators')
-                .select('session_id')
-                .eq('person_id', personId);
-              if (lsError) throw lsError;
+            const { data: legSessionRows, error: legSessionError } = await supabase
+              .from('rs_person_leg_sessions')
+              .select('session_id')
+              .eq('person_id', personId);
+            if (legSessionError) throw legSessionError;
 
-              const sessionIds = (legislatorSessions || [])
-                .map((row: any) => row.session_id)
-                .filter((id: any) => typeof id === 'number');
+            const sessionIds = Array.from(new Set((legSessionRows || [])
+              .map((row: any) => Number(row.session_id))
+              .filter((id) => Number.isFinite(id))));
 
-              if (sessionIds.length) {
-                const { data: directSessions, error: directError } = await supabase
-                  .from('mv_sessions_with_dates')
-                  .select('session_id, session_name, year, calculated_start, calculated_end, total_votes, date_range_display')
-                  .in('session_id', sessionIds);
-                if (directError) throw directError;
-                sessionRows = directSessions || [];
-              } else {
-                sessionRows = [];
-              }
-            } catch (finalError) {
-              console.error('Failed to load sessions for person via all paths', finalError);
-              throw finalError;
+            if (sessionIds.length) {
+              const { data: directSessions, error: directError } = await supabase
+                .from('mv_sessions_with_dates')
+                .select('session_id, session_name, year, calculated_start, calculated_end, total_votes, date_range_display')
+                .in('session_id', sessionIds);
+              if (directError) throw directError;
+              sessionRows = directSessions || [];
+            } else {
+              sessionRows = [];
             }
+          } catch (fallbackError) {
+            console.error('Failed to load sessions for person via fallback path', fallbackError);
+            sessionRows = [];
           }
         }
 
@@ -355,9 +311,6 @@ const parseJsonLoose = (raw: string) => {
       setCurrentPersonId(personId);
       setAvailableSessions(sessions);
       setCurrentStep('sessions');
-      if (sessions.length === 1 && personId) {
-        checkIncrementalAnalysis(sessions[0].id, personId);
-      }
     } catch (err: any) {
       setError(err.message || 'Failed to search legislator');
     } finally {
@@ -365,12 +318,8 @@ const parseJsonLoose = (raw: string) => {
     }
   };
 
-  const checkIncrementalAnalysis = async (sessionId: number, personId: number) => {
-    // Implementation omitted for brevity
-  };
-
-  const toggleSession = (sessionId: number | string) => {
-    setSelectedSessions((prev) => {
+  const toggleSession = (sessionId: SessionSelection) => {
+    setSelectedSessions((prev: SessionSelection[]) => {
       const exists = prev.includes(sessionId);
       if (exists) return prev.filter((s) => s !== sessionId);
       return [...prev, sessionId];
@@ -390,6 +339,7 @@ const parseJsonLoose = (raw: string) => {
       });
 
       const results: AnalysisResult[] = [];
+      const previewUpdates: Record<string, Phase1RenderData> = {};
       const customBlock = customInstructions.trim()
         ? `================================\nCUSTOM CRITICAL INSTRUCTIONS AND CONTEXT - These Override all other rules:\n${customInstructions}\n================================\n\n`
         : '';
@@ -398,6 +348,7 @@ const parseJsonLoose = (raw: string) => {
       for (let i = 0; i < selectedSessions.length; i++) {
         const sessionId = selectedSessions[i];
         const isCombined = typeof sessionId === 'string';
+        const sessionStartTime = nowMs();
 
         let sessionName: string;
         let startDate: string;
@@ -445,6 +396,12 @@ const parseJsonLoose = (raw: string) => {
           throw new Error('No valid session IDs selected for analysis');
         }
 
+        const sessionKey = isCombined
+          ? `combined-${sessionIdsForQuery.join('-')}`
+          : String(sessionIdsForQuery[0]);
+
+        let phase1ReportId: number | null = null;
+
         // Add 100 days buffer for donations (as per original analysis.mjs)
         const donationStartDate = new Date(new Date(startDate).getTime() - (100 * 24 * 60 * 60 * 1000));
         const donationEndDate = new Date(new Date(endDate).getTime() + (100 * 24 * 60 * 60 * 1000));
@@ -480,7 +437,8 @@ const parseJsonLoose = (raw: string) => {
           }));
           console.log(`Found ${bills.length} bills for ${sessionName}`);
         } catch (billsError) {
-          throw new Error(`Bills function failed: ${billsError.message || billsError}`);
+          const message = billsError instanceof Error ? billsError.message : String(billsError);
+          throw new Error(`Bills function failed: ${message}`);
         }
 
         // Try to get donations data
@@ -498,7 +456,8 @@ const parseJsonLoose = (raw: string) => {
           donations = donationsData.data || [];
           console.log(`Found ${donations.length} donations for ${sessionName}`);
         } catch (donationsError) {
-          throw new Error(`Donations function failed: ${donationsError.message || donationsError}`);
+          const message = donationsError instanceof Error ? donationsError.message : String(donationsError);
+          throw new Error(`Donations function failed: ${message}`);
         }
 
         if (bills.length === 0 && donations.length === 0) {
@@ -732,6 +691,116 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
         const potentialGroups = Array.from(mergedGroupsMap.values());
         console.log('Phase 1 potential groups parsed:', potentialGroups.length);
 
+        const autoHigh = potentialGroups.filter((group: any) => Number(group.confidence_score ?? 0) >= 0.7).length;
+        const autoMedium = potentialGroups.filter((group: any) => {
+          const score = Number(group.confidence_score ?? 0);
+          return score >= 0.4 && score < 0.7;
+        }).length;
+        const autoLow = potentialGroups.filter((group: any) => {
+          const score = Number(group.confidence_score ?? 0);
+          return score > 0 && score < 0.4;
+        }).length;
+
+        const phase1Summary = {
+          total_donations: Number(phase1Data.summary_stats?.total_donations ?? summaryStats.total_donations) || 0,
+          total_votes: Number(phase1Data.summary_stats?.total_votes ?? summaryStats.total_votes) || 0,
+          total_sponsorships: Number(phase1Data.summary_stats?.total_sponsorships ?? summaryStats.total_sponsorships) || 0,
+          high_confidence_pairs: typeof phase1Data.summary_stats?.high_confidence_pairs === 'number'
+            ? Number(phase1Data.summary_stats.high_confidence_pairs)
+            : autoHigh,
+          medium_confidence_pairs: typeof phase1Data.summary_stats?.medium_confidence_pairs === 'number'
+            ? Number(phase1Data.summary_stats.medium_confidence_pairs)
+            : autoMedium,
+          low_confidence_pairs: typeof phase1Data.summary_stats?.low_confidence_pairs === 'number'
+            ? Number(phase1Data.summary_stats.low_confidence_pairs)
+            : autoLow,
+        };
+
+
+        const phase1BillIds = Array.from(new Set(
+          potentialGroups
+            .map((group: any) => Number(group.bill_id))
+            .filter((id) => Number.isFinite(id))
+        )) as number[];
+
+        const phase1DonationIds = Array.from(new Set(
+          potentialGroups.flatMap((group: any) =>
+            (Array.isArray(group.donors) ? group.donors : [])
+              .map((donor: any) => donor?.donation_id)
+              .filter((donationId: any) => donationId !== null && donationId !== undefined)
+              .map((donationId: any) => String(donationId))
+          )
+        )) as string[];
+
+        const normalizedPhase1Data = {
+          ...phase1Data,
+          potential_groups: potentialGroups,
+          summary_stats: phase1Summary,
+        };
+
+        const phase1PreviewBase: Phase1RenderData = {
+          sessionName,
+          data: normalizedPhase1Data,
+          summaryStats: phase1Summary,
+          billIds: phase1BillIds,
+          donationIds: phase1DonationIds,
+          groups: potentialGroups,
+          sessionKey,
+        };
+
+        previewUpdates[sessionKey] = phase1PreviewBase;
+        setPhase1Previews((prev) => ({ ...prev, [sessionKey]: phase1PreviewBase }));
+
+        try {
+          const { data: phase1SaveData, error: phase1SaveError } = await supabase.rpc('save_phase1_analysis_report', {
+            p_person_id: currentPersonId,
+            p_session_id: isCombined ? null : sessionIdsForQuery[0],
+            p_phase1_data: normalizedPhase1Data,
+            p_session_ids: sessionIdsForQuery,
+            p_is_combined: isCombined,
+            p_custom_instructions: customInstructions || null,
+            p_summary_stats: phase1Summary,
+            p_bill_ids: phase1BillIds,
+            p_donation_ids: phase1DonationIds,
+            p_phase1_report_id: null,
+          });
+
+          if (phase1SaveError) {
+            const errorCode = (phase1SaveError as any)?.code;
+            if (errorCode === 'PGRST202') {
+              console.warn('save_phase1_analysis_report is unavailable; skipping persistence for now.');
+            } else {
+              throw phase1SaveError;
+            }
+          } else {
+            const savedIdRaw = Array.isArray(phase1SaveData) ? phase1SaveData[0] : phase1SaveData;
+            if (savedIdRaw !== null && savedIdRaw !== undefined) {
+              const parsedPhase1Id = Number.parseInt(String(savedIdRaw), 10);
+              if (!Number.isNaN(parsedPhase1Id)) {
+                phase1ReportId = parsedPhase1Id;
+              }
+            }
+
+            if (phase1ReportId) {
+              const previewWithId: Phase1RenderData = {
+                ...phase1PreviewBase,
+                phase1ReportId,
+              };
+              previewUpdates[sessionKey] = previewWithId;
+              setPhase1Previews((prev) => ({ ...prev, [sessionKey]: previewWithId }));
+            }
+          }
+        } catch (phase1SaveErr) {
+          const errorCode = (phase1SaveErr as any)?.code;
+          if (errorCode === 'PGRST202') {
+            console.warn('save_phase1_analysis_report is unavailable; continuing without persistence.');
+          } else {
+            console.error('Failed to save Phase 1 report:', phase1SaveErr);
+            const message = phase1SaveErr instanceof Error ? phase1SaveErr.message : String(phase1SaveErr);
+            throw new Error(`Failed to save Phase 1 report: ${message}`);
+          }
+        }
+
         const highConfidenceGroups = potentialGroups
           .filter((group: any) => Number(group.confidence_score ?? 0) >= 0.5)
           .slice(0, 10); // Limit to top 10
@@ -766,21 +835,9 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
             const billDetails = billDetailResult.data?.[0];
             if (!billDetails) continue;
 
-            const donorsForPhase2 = group.donors?.map((d: any) => ({
-              name: d.name,
-              employer: d.employer ?? null,
-              occupation: d.occupation ?? null,
-              type: d.type ?? 'Unknown',
-              amount: d.amount,
-              donation_id: d.donation_id ?? null
-            })) ?? [];
-
             const groupReasons = Array.isArray(group.group_reasons) && group.group_reasons.length > 0
               ? group.group_reasons
               : [group.connection_reason ?? group.group_reason ?? ''].filter(Boolean);
-
-            const voteOrSponsorship = group.vote_or_sponsorship || (group.is_sponsor ? 'sponsor' : 'vote');
-            const voteValue = group.vote_value ?? group.vote ?? null;
 
             const phase2Prompt = `${customBlock}You are an investigative journalist doing a DEEP DIVE analysis of potential donor-bill connections.
 
@@ -870,7 +927,7 @@ REMEMBER: When analyzing bill text, pay EXTRA attention to provisions that benef
 For lobbyist donors: even indirect benefits count (e.g., rules that make their job easier).
 
 GROUP RATIONALES:
-${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: ${reason}`).join('\n') : '- No explicit rationale provided from Phase 1.'}`;
+${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Reason ${idx + 1}: ${reason}`).join('\n') : '- No explicit rationale provided from Phase 1.'}`;
 
             const phase2Result = await runWithTimeout((signal) => model.generateContent(phase2Prompt, { signal }));
             const phase2Response = phase2Result.response.text();
@@ -902,22 +959,6 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
         }
 
         // Compile final report
-        const autoHigh = potentialGroups.filter((group: any) => Number(group.confidence_score ?? 0) >= 0.7).length;
-        const autoMedium = potentialGroups.filter((group: any) => {
-          const score = Number(group.confidence_score ?? 0);
-          return score >= 0.4 && score < 0.7;
-        }).length;
-        const autoLow = potentialGroups.filter((group: any) => Number(group.confidence_score ?? 0) > 0 && Number(group.confidence_score ?? 0) < 0.4).length;
-
-        const phase1Summary = {
-          total_donations: Number(phase1Data.summary_stats?.total_donations ?? summaryStats.total_donations) || 0,
-          total_votes: Number(phase1Data.summary_stats?.total_votes ?? summaryStats.total_votes) || 0,
-          total_sponsorships: Number(phase1Data.summary_stats?.total_sponsorships ?? summaryStats.total_sponsorships) || 0,
-          high_confidence_pairs: Number(phase1Data.summary_stats?.high_confidence_pairs ?? autoHigh) || 0,
-          medium_confidence_pairs: Number(phase1Data.summary_stats?.medium_confidence_pairs ?? autoMedium) || 0,
-          low_confidence_pairs: Number(phase1Data.summary_stats?.low_confidence_pairs ?? autoLow) || 0,
-        };
-
         const mergedSessionInfo = {
           ...sessionInfo,
           ...(typeof phase1Data.session_info === 'object' && phase1Data.session_info !== null ? phase1Data.session_info : {})
@@ -944,9 +985,73 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
           customInstructions: customInstructions || undefined
         };
 
+        const phase2BillIds = Array.from(new Set(
+          potentialGroups
+            .map((group: any) => Number(group.bill_id))
+            .filter((id) => Number.isFinite(id))
+        )) as number[];
+
+        const phase2DonationIds = Array.from(new Set(
+          potentialGroups.flatMap((group: any) =>
+            (Array.isArray(group.donors) ? group.donors : [])
+              .map((donor: any) => donor?.donation_id)
+              .filter((donationId: any) => donationId !== null && donationId !== undefined)
+              .map((donationId: any) => String(donationId))
+          )
+        )) as string[];
+
+        const sessionDurationMs = Math.round(nowMs() - sessionStartTime);
+
+        let savedReportId: number | undefined;
+        try {
+          const { data: phase2SaveData, error: phase2SaveError } = await supabase.rpc('save_phase2_analysis_report', {
+            p_person_id: currentPersonId,
+            p_session_id: isCombined ? null : sessionIdsForQuery[0],
+            p_report_data: report,
+            p_bill_ids: phase2BillIds,
+            p_donation_ids: phase2DonationIds,
+            p_is_combined: isCombined,
+            p_custom_instructions: customInstructions || null,
+            p_analysis_duration_ms: sessionDurationMs,
+            p_report_id: null,
+            p_phase1_report_id: phase1ReportId,
+          });
+
+          if (phase2SaveError) {
+            const errorCode = (phase2SaveError as any)?.code;
+            if (errorCode === 'PGRST202') {
+              console.warn('save_phase2_analysis_report is unavailable; skipping persistence for now.');
+            } else {
+              throw phase2SaveError;
+            }
+          } else {
+            const savedReportIdRaw = Array.isArray(phase2SaveData) ? phase2SaveData[0] : phase2SaveData;
+            if (savedReportIdRaw !== null && savedReportIdRaw !== undefined) {
+              const parsedReportId = Number.parseInt(String(savedReportIdRaw), 10);
+              if (!Number.isNaN(parsedReportId)) {
+                savedReportId = parsedReportId;
+                (report as any).reportId = savedReportId;
+              }
+            }
+          }
+        } catch (phase2SaveErr) {
+          const errorCode = (phase2SaveErr as any)?.code;
+          if (errorCode === 'PGRST202') {
+            console.warn('save_phase2_analysis_report is unavailable; continuing without persistence.');
+          } else {
+            console.error('Failed to save Phase 2 report:', phase2SaveErr);
+            const message = phase2SaveErr instanceof Error ? phase2SaveErr.message : String(phase2SaveErr);
+            throw new Error(`Failed to save Phase 2 report: ${message}`);
+          }
+        }
+
         results.push({
           sessionName,
-          report
+          report,
+          phase1: previewUpdates[sessionKey] ?? {
+            ...phase1PreviewBase,
+            ...(phase1ReportId ? { phase1ReportId } : {}),
+          }
         });
 
         setProgressPercent(70 + (i * 20));
@@ -954,6 +1059,7 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
       }
 
       setAnalysisResults(results);
+      setActivePhaseView('phase2');
       setProgressPercent(100);
       setProgressText('Analysis complete');
       setCurrentStep('results');
@@ -963,10 +1069,8 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
     }
   };
 
-  const runSingleCallAnalysis = async (generationConfig: typeof baseGenerationConfig) => {
+  const runSingleCallAnalysis = async () => {
     if (!GEMINI_API_KEY) throw new Error('Missing Gemini API key');
-
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
     const availableFunctions: Record<string, {
       description: string;
@@ -1567,10 +1671,12 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
     setProgressText('Starting analysis...');
     setProgressPercent(5);
     setError(null);
+    setPhase1Previews({});
+    setActivePhaseView('phase2');
 
     try {
       if (analysisMode === 'singleCall') {
-        await runSingleCallAnalysis(baseGenerationConfig);
+        await runSingleCallAnalysis();
       } else {
         await runTwoPhaseAnalysisInternal();
       }
@@ -1591,8 +1697,27 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
       </p>
 
       {error && (
-        <div style={{ marginBottom: 16, padding: 12, backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: 6, color: '#b91c1c' }}>
-          {error}
+        <div style={{ marginBottom: 16, padding: 12, backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: 6, color: '#b91c1c', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>{error}</div>
+          {!analyzing && (
+            <div>
+              <button
+                type="button"
+                onClick={() => startAnalysis()}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#b91c1c',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                Retry Analysis
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1620,8 +1745,7 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
                   style={{
                     padding: 8,
                     cursor: 'pointer',
-                    borderBottom: '1px solid #f0f0f0',
-                    ':hover': { backgroundColor: '#f9f9f9' }
+                    borderBottom: '1px solid #f0f0f0'
                   }}
                 >
                   <div style={{ fontWeight: 600 }}>{p.display_name}</div>
@@ -1652,6 +1776,21 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
             >
               ← Change Person
             </button>
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Additional Instructions (overrides defaults)</label>
+            <textarea
+              value={customInstructions}
+              onChange={(event) => setCustomInstructions(event.target.value)}
+              placeholder="Provide any custom guidance for the AI. These directions override all other instructions."
+              rows={4}
+              style={{ width: '100%', padding: 8, border: '1px solid #d1d5db', borderRadius: 6, fontFamily: 'inherit', fontSize: '0.95em' }}
+            />
+            {customInstructions.trim() && (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#dc2626' }}>
+                When provided, these instructions are injected at the top of every prompt and supersede default guidance.
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1730,6 +1869,76 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
             <div style={{ width: `${progressPercent}%`, height: '100%', backgroundColor: '#2563eb', transition: 'width 0.3s ease' }} />
           </div>
           <div style={{ marginTop: 12, color: '#555' }}>{progressText}</div>
+
+          {Object.values(phase1Previews).length > 0 && (
+            <div style={{ marginTop: 16, display: 'grid', gap: 12 }}>
+              {Object.values(phase1Previews).map((preview) => (
+                <div
+                  key={preview.sessionKey}
+                  style={{
+                    border: '1px solid #d1d5db',
+                    borderRadius: 8,
+                    padding: 12,
+                    backgroundColor: '#f9fafb',
+                    maxHeight: 320,
+                    overflowY: 'auto'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Phase 1 Preview — {preview.sessionName}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>
+                      {preview.billIds.length} bills • {preview.donationIds.length} donations
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: 12, color: '#374151', marginBottom: 8 }}>
+                    <strong>Summary:</strong>
+                    <span style={{ marginLeft: 6 }}>
+                      {`Votes ${preview.summaryStats.total_votes ?? 0}, Sponsors ${preview.summaryStats.total_sponsorships ?? 0}, Donations ${preview.summaryStats.total_donations ?? 0}`}
+                    </span>
+                    <span style={{ marginLeft: 10 }}>
+                      {`Confidence — High ${preview.summaryStats.high_confidence_pairs ?? 0} • Medium ${preview.summaryStats.medium_confidence_pairs ?? 0} • Low ${preview.summaryStats.low_confidence_pairs ?? 0}`}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Potential Groups</div>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {preview.groups.map((group: any, groupIdx: number) => (
+                        <div key={`${preview.sessionKey}-group-${groupIdx}`} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, backgroundColor: '#fff' }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>
+                            {group.bill_number || 'Unknown Bill'} — {group.bill_title || 'Untitled Bill'}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                            {group.vote_or_sponsorship || 'vote'} • {group.vote_value || 'N/A'} • {group.vote_date || 'Unknown date'}
+                            {group.is_party_outlier ? ' • Party Outlier' : ''}
+                          </div>
+                          {group.connection_reason && (
+                            <div style={{ fontSize: 12, color: '#374151', marginTop: 4 }}>
+                              <strong>Reason:</strong> {group.connection_reason}
+                            </div>
+                          )}
+                          {Array.isArray(group.donors) && group.donors.length > 0 && (
+                            <div style={{ marginTop: 6 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600 }}>Donors ({group.donors.length}):</div>
+                              <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: 12 }}>
+                                {group.donors.map((donor: any, donorIdx: number) => (
+                                  <li key={`${preview.sessionKey}-group-${groupIdx}-donor-${donorIdx}`}>
+                                    <strong>{donor.name}</strong> — ${Number(donor.amount ?? 0).toLocaleString()} ({donor.type || 'Unknown'})
+                                    {donor.transaction_date && ` • ${donor.transaction_date}`}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1739,6 +1948,14 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Analysis Results</h2>
             <div style={{ display: 'flex', gap: 8 }}>
+              {(analysisResults ?? []).some((r) => r.phase1) && (
+                <button
+                  onClick={() => setActivePhaseView((prev) => (prev === 'phase1' ? 'phase2' : 'phase1'))}
+                  style={{ padding: '6px 12px', fontSize: '0.9em', background: '#0f172a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                >
+                  {activePhaseView === 'phase1' ? '→ View Phase 2 Results' : '← View Phase 1 Preview'}
+                </button>
+              )}
               <button
                 onClick={() => setCurrentStep('sessions')}
                 style={{ padding: '6px 12px', fontSize: '0.9em', background: '#6b7280', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
@@ -1753,7 +1970,75 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
               </button>
             </div>
           </div>
-          {(analysisResults ?? []).map((result, idx) => (
+          {activePhaseView === 'phase1' && (
+            <div style={{ display: 'grid', gap: 16, marginBottom: 16 }}>
+              {(analysisResults ?? []).map((result, idx) => {
+                if (!result.phase1) return null;
+                const phase1 = result.phase1;
+                return (
+                  <div key={`phase1-${idx}`} style={{ padding: 16, border: '1px solid #d1d5db', borderRadius: 8, backgroundColor: '#f9fafb' }}>
+                    <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{result.sessionName} — Phase 1 Preview</h3>
+                    {result.error && (
+                      <div style={{ marginBottom: 12, padding: 8, borderRadius: 6, backgroundColor: '#fee2e2', color: '#b91c1c' }}>
+                        {result.error}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <div style={{ fontSize: 13, color: '#374151' }}>
+                        <strong>Summary:</strong>
+                        <span style={{ marginLeft: 6 }}>
+                          {`Votes ${phase1.summaryStats.total_votes ?? 0}, Sponsors ${phase1.summaryStats.total_sponsorships ?? 0}, Donations ${phase1.summaryStats.total_donations ?? 0}`}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                        {phase1.billIds.length} bills • {phase1.donationIds.length} donations
+                        {phase1.phase1ReportId ? ` • Saved ID ${phase1.phase1ReportId}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+                      Confidence — High {phase1.summaryStats.high_confidence_pairs ?? 0} • Medium {phase1.summaryStats.medium_confidence_pairs ?? 0} • Low {phase1.summaryStats.low_confidence_pairs ?? 0}
+                    </div>
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {phase1.groups.map((group: any, groupIdx: number) => (
+                        <div key={`${phase1.sessionKey}-phase1-${groupIdx}`} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 10, backgroundColor: '#fff' }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>
+                            {group.bill_number || 'Unknown Bill'} — {group.bill_title || 'Untitled Bill'}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                            {group.vote_or_sponsorship || 'vote'} • {group.vote_value || 'N/A'} • {group.vote_date || 'Unknown date'}
+                            {group.is_party_outlier ? ' • Party Outlier' : ''}
+                          </div>
+                          {group.connection_reason && (
+                            <div style={{ fontSize: 12, color: '#374151', marginTop: 4 }}>
+                              <strong>Reason:</strong> {group.connection_reason}
+                            </div>
+                          )}
+                          {Array.isArray(group.donors) && group.donors.length > 0 && (
+                            <div style={{ marginTop: 6 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600 }}>Donors ({group.donors.length}):</div>
+                              <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: 12 }}>
+                                {group.donors.map((donor: any, donorIdx: number) => (
+                                  <li key={`${phase1.sessionKey}-phase1-${groupIdx}-donor-${donorIdx}`}>
+                                    <strong>{donor.name}</strong> — ${Number(donor.amount ?? 0).toLocaleString()} ({donor.type || 'Unknown'})
+                                    {donor.transaction_date && ` • ${donor.transaction_date}`}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {(analysisResults ?? []).map((result, idx) => {
+            if (activePhaseView === 'phase1' && result.phase1) {
+              return null;
+            }
+            return (
             <div key={idx} style={{ padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, marginBottom: 16, backgroundColor: '#fafafa' }}>
               <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{result.sessionName}</h3>
 
@@ -1914,19 +2199,11 @@ ${groupReasons.length ? groupReasons.map((reason, idx) => `- Reason ${idx + 1}: 
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {/* Debug info for previously-declared state */}
-      {(analyzedBillIds.length > 0 || incrementalStats) && (
-        <div style={{ marginTop: 24, color: '#6b7280' }}>
-          <div>Analyzed Bill IDs: {analyzedBillIds.length}</div>
-          {incrementalStats && (
-            <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(incrementalStats, null, 2)}</pre>
-          )}
-        </div>
-      )}
     </div>
   );
 };

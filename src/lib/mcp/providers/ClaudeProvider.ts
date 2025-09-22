@@ -20,7 +20,7 @@ export class ClaudeProvider implements LLMProvider {
     });
   }
 
-  async *processQuery(query: string, tools?: MCPTool[], toolExecutor?: (name: string, args: any) => Promise<any>): AsyncIterable<StreamChunk> {
+  async *processQuery(query: string, tools?: MCPTool[], _toolExecutor?: (name: string, args: any) => Promise<any>): AsyncIterable<StreamChunk> {
     // Initialize with system message if this is the first message
     if (this.messages.length === 0) {
       this.messages.push({
@@ -58,11 +58,12 @@ export class ClaudeProvider implements LLMProvider {
       let accumulatedText = '';
 
       for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
-          accumulatedText += chunk.delta.text;
+        const deltaText = (chunk as any)?.delta?.text;
+        if (chunk.type === 'content_block_delta' && typeof deltaText === 'string') {
+          accumulatedText += deltaText;
           yield {
             type: 'text',
-            content: chunk.delta.text
+            content: deltaText
           };
         } else if (chunk.type === 'content_block_start' && chunk.content_block?.type === 'tool_use') {
           yield {

@@ -136,6 +136,7 @@ export default function BillsPage() {
       // For now, we'll just use the selected bill data
       // TODO: Create API endpoints for sponsors and votes
       setBillDetails({
+        bill_id: billId,
         sponsors: [],
         votes: []
       });

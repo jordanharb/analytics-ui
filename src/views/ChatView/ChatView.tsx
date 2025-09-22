@@ -26,8 +26,15 @@ export const ChatView: React.FC = () => {
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const mcpClientRef = useRef<MCPClient | null>(null);
-  const historyManagerRef = useRef<ChatHistoryManager | null>(null);
+const mcpClientRef = useRef<MCPClient | null>(null);
+const historyManagerRef = useRef<ChatHistoryManager | null>(null);
+
+const createMessageId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
   useEffect(() => {
     // Initialize history manager
@@ -131,7 +138,7 @@ export const ChatView: React.FC = () => {
 
     // Add user message
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: createMessageId(),
       role: 'user',
       content,
       timestamp: new Date().toISOString()
@@ -145,7 +152,7 @@ export const ChatView: React.FC = () => {
 
     // Create assistant message placeholder
     const assistantMessage: Message = {
-      id: (Date.now() + 1).toString(),
+      id: createMessageId(),
       role: 'assistant',
       content: '',
       timestamp: new Date().toISOString(),

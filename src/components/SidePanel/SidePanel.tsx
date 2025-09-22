@@ -404,7 +404,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 try {
                   setExporting(true);
                   // Build scope and params based on current view
-                  let scope: 'city' | 'cluster' | 'map' = 'map';
+                  let scope: 'city' | 'cluster' | 'map' | 'virtual' = 'map';
                   let scope_params: Record<string, any> = {};
 
                   if (showVirtual) {

@@ -30,6 +30,25 @@ export function getSupabase() {
   return createClient(url, key);
 }
 
+export function getCampaignFinanceSupabase() {
+  const url =
+    process.env.CAMPAIGN_FINANCE_SUPABASE_URL ||
+    process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
+  const key =
+    process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY ||
+    process.env.CAMPAIGN_FINANCE_SUPABASE_KEY ||
+    process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY ||
+    process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_ANON_KEY;
+
+  if (!url || !key) {
+    throw new Error(
+      'Campaign finance Supabase env not configured. Set CAMPAIGN_FINANCE_SUPABASE_URL and CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY (or their VITE_ equivalents).'
+    );
+  }
+
+  return createClient(url, key);
+}
+
 export function ensureServerExports() {
   if (!serverExports || !serverExports.tools || !serverExports.executeTool) {
     throw new Error('MCP server modules not available in API. Ensure mcp-server/src/http-adapter.ts exports { tools, executeTool } and paths are correct.');

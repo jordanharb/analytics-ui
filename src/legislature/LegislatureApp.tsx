@@ -10,7 +10,10 @@ import ReportsChatPage from './ReportsChatPage';
 import AboutPage from './AboutPage';
 import CandidatePage from './CandidatePage';
 import ReportGeneratorPage from './ReportGeneratorPage';
-import ReportGeneratorPageV2 from './ReportGeneratorPageV2';
+import DeprecatedReportGeneratorPage from './deprecated_ReportGeneratorPageV2';
+import PersonPage from './PersonPage';
+import CampaignFinanceChatView from './chat/CampaignFinanceChatView';
+import EntityPage from './finance/EntityPage';
 
 const LegislatureApp: React.FC = () => {
   const location = useLocation();
@@ -50,17 +53,12 @@ const LegislatureApp: React.FC = () => {
                 </li>
                 <li>
                   <Link to="/legislature/reports-chat" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
-                    AI Reports
+                    AI Assistant
                   </Link>
                 </li>
                 <li>
                   <Link to="/legislature/report-generator" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
                     Report Generator
-                  </Link>
-                </li>
-                <li>
-                  <Link to="/legislature/report-generator-v2" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
-                    Report Generator V2
                   </Link>
                 </li>
                 <li>
@@ -79,11 +77,14 @@ const LegislatureApp: React.FC = () => {
             <Route path="/" element={<HomePage />} />
             <Route path="/bills" element={<BillsPage />} />
             <Route path="/bulk" element={<BulkPage />} />
-            <Route path="/reports-chat" element={<ReportsChatPage />} />
+            <Route path="/reports-chat" element={<CampaignFinanceChatView />} />
+            <Route path="/reports-chat-legacy" element={<ReportsChatPage />} />
             <Route path="/report-generator" element={<ReportGeneratorPage />} />
-            <Route path="/report-generator-v2" element={<ReportGeneratorPageV2 />} />
+            <Route path="/report-generator-v2" element={<DeprecatedReportGeneratorPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/candidate/:id" element={<CandidatePage />} />
+            <Route path="/person/:id" element={<PersonPage />} />
+            <Route path="/finance/entity/:id" element={<EntityPage />} />
           </Routes>
         </main>
 
