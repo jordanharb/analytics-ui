@@ -5,7 +5,7 @@ import { supabase2 as supabase } from '../lib/supabase2';
 import type { PersonSearchResult } from './lib/types';
 import { searchPeopleWithSessions } from './lib/search';
 import { GoogleGenerativeAI, SchemaType, type Tool } from '@google/generative-ai';
-import { getGeminiKey } from '../lib/../lib/aiKeyStore';
+import { getGeminiKey, setGeminiKey } from '../lib/../lib/aiKeyStore';
 
 const GEMINI_API_KEY = getGeminiKey() || import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
 
@@ -64,6 +64,8 @@ const ReportGeneratorPage: React.FC = () => {
   const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall'>('twoPhase');
   const [phase1Previews, setPhase1Previews] = useState<Record<string, Phase1RenderData>>({});
   const [activePhaseView, setActivePhaseView] = useState<'phase1' | 'phase2'>('phase2');
+  const [showSettings, setShowSettings] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState<string>(getGeminiKey() || '');
 
 const baseGenerationConfig = {
   temperature: 0.6,
@@ -1696,6 +1698,69 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         Generate detailed analyses of potential conflicts of interest between campaign donations and legislative activity.
         Select a legislator, choose sessions, and let the AI perform a two-phase analysis.
       </p>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          style={{
+            padding: '0.5rem 1rem',
+            backgroundColor: '#f3f4f6',
+            color: '#374151',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.375rem',
+            cursor: 'pointer',
+            fontSize: '0.875rem'
+          }}
+        >
+          AI Settings
+        </button>
+      </div>
+      {showSettings && (
+        <div style={{ padding: '1rem', backgroundColor: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '0.5rem', marginBottom: '1rem' }}>
+          <div style={{ marginBottom: '0.75rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem', fontWeight: '500' }}>Gemini API Key</label>
+            <input
+              type="password"
+              value={geminiKeyInput}
+              onChange={(e) => setGeminiKeyInput(e.target.value)}
+              style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem' }}
+              placeholder="AIza..."
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={() => {
+                setGeminiKey(geminiKeyInput || null);
+                window.location.reload();
+              }}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.25rem',
+                cursor: 'pointer',
+                fontSize: '0.875rem'
+              }}
+            >
+              Save & Reload
+            </button>
+            <button
+              onClick={() => setShowSettings(false)}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.25rem',
+                cursor: 'pointer',
+                fontSize: '0.875rem'
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div style={{ marginBottom: 16, padding: 12, backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: 6, color: '#b91c1c', display: 'flex', flexDirection: 'column', gap: 12 }}>
