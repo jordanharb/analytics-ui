@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "npm run dev",
     "build": "tsc -b && vite build",
     "build:no-typecheck": "vite build",
     "lint": "eslint .",
@@ -12,6 +13,7 @@
     "vercel-build": "npm run build:no-typecheck"
   },
   "dependencies": {
+    "@ai-sdk/google": "^0.0.51",
     "@anthropic-ai/sdk": "^0.62.0",
     "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.18.0",
@@ -24,10 +26,13 @@
     "@types/mapbox-gl": "^3.4.1",
     "@types/react-router-dom": "^5.3.3",
     "@vercel/node": "^3.0.0",
+    "ai": "^3.4.9",
     "axios": "^1.11.0",
+    "clsx": "^2.1.1",
     "dotenv": "^17.2.2",
     "lodash": "^4.17.21",
     "lodash-es": "^4.17.21",
+    "lucide-react": "^0.471.0",
     "mapbox-gl": "^3.14.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

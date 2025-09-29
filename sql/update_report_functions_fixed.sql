@@ -73,6 +73,8 @@ RETURNS TABLE (
   donation_amt NUMERIC,
   donation_type VARCHAR,
   entity_name VARCHAR,
+  entity_type_id INTEGER,
+  entity_type_name VARCHAR,
   is_pac BOOLEAN,
   is_corporate BOOLEAN
 )
@@ -87,11 +89,14 @@ AS $$
     d.donation_amt,
     d.donation_type,
     COALESCE(e.primary_candidate_name, e.primary_committee_name) as entity_name,
+    d.entity_type_id,
+    et.entity_type_name,
     d.is_pac,
     d.is_corporate
   FROM cf_donations d
   INNER JOIN cf_entities e ON d.entity_id = e.entity_id
   LEFT JOIN cf_entity_records er ON d.record_id = er.record_id
+  LEFT JOIN cf_entity_types et ON d.entity_type_id = et.entity_type_id
   WHERE d.entity_id IN (
     -- Get all campaign finance entities for this person
     SELECT DISTINCT pce.entity_id

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase2 as supabase } from '../lib/supabase2';
 import type { PersonSearchResult } from './lib/types';
 import { searchPeopleWithSessions } from './lib/search';
@@ -174,6 +174,25 @@ const ReportGeneratorPage: React.FC = () => {
   const [donorThemeAnalysisResult, setDonorThemeAnalysisResult] = useState<any>(null);
   const [savedReports, setSavedReports] = useState<Map<string, any>>(new Map());
   const [themeListId, setThemeListId] = useState<number | null>(null);
+  const [existingThemeLists, setExistingThemeLists] = useState<any[]>([]);
+  // const [loadingExistingThemes, setLoadingExistingThemes] = useState(false);
+
+  // Check for existing theme lists when person or sessions change
+  useEffect(() => {
+    const checkExisting = async () => {
+      if (currentPersonId && selectedSessions.length > 0) {
+        // setLoadingExistingThemes(true);
+        const existing = await checkExistingThemeLists();
+        setExistingThemeLists(existing);
+        // setLoadingExistingThemes(false);
+      } else {
+        setExistingThemeLists([]);
+      }
+    };
+
+    checkExisting();
+  }, [currentPersonId, selectedSessions]);
+
   // Track active donor theme selection for UI/analytics if needed.
   // Currently we only store context; selection can be inferred from analysis results.
   const [donorThemeProgress, setDonorThemeProgress] = useState<{ text: string; percent: number } | null>(null);
@@ -240,6 +259,41 @@ const ReportGeneratorPage: React.FC = () => {
       donationStartDate: donationStart,
       donationEndDate: donationEnd
     };
+  };
+
+  // Markdown to HTML conversion for PDF
+  const convertMarkdownToHtml = (markdown: string): string => {
+    if (!markdown) return '';
+
+    return markdown
+      // Headers
+      .replace(/^#### (.*$)/gm, '<h4>$1</h4>')
+      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+
+      // Bold text
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+
+      // Lists - handle nested bullets
+      .replace(/^[\s]*- (.*$)/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+
+      // Clean up nested lists
+      .replace(/<\/ul>\s*<ul>/g, '')
+
+      // Paragraphs - convert double newlines to paragraph breaks
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/^(?!<[hul])/gm, '<p>')
+      .replace(/(?<!>)$/gm, '</p>')
+
+      // Clean up empty paragraphs and fix formatting
+      .replace(/<p><\/p>/g, '')
+      .replace(/<p>(<[hul])/g, '$1')
+      .replace(/(<\/[hul]>)<\/p>/g, '$1')
+
+      // Single line breaks
+      .replace(/\n/g, '<br>');
   };
 
   // PDF Generation Functions
@@ -372,7 +426,25 @@ const ReportGeneratorPage: React.FC = () => {
           .vote-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; margin: 0 4px; }
           .vote-yes { background: #dcfce7; color: #15803d; }
           .vote-no { background: #fee2e2; color: #dc2626; }
-          .markdown-content { margin-top: 30px; white-space: pre-wrap; line-height: 1.8; }
+          .markdown-content { margin-top: 30px; line-height: 1.8; }
+          .markdown-content h1, .markdown-content h2, .markdown-content h3, .markdown-content h4 {
+            color: #1e40af; margin-top: 20px; margin-bottom: 10px;
+          }
+          .markdown-content h4 {
+            font-size: 16px; border-left: 3px solid #1e40af; padding-left: 8px;
+          }
+          .markdown-content p {
+            margin: 10px 0; text-align: justify;
+          }
+          .markdown-content ul {
+            margin: 15px 0; padding-left: 20px;
+          }
+          .markdown-content li {
+            margin: 8px 0; line-height: 1.6;
+          }
+          .markdown-content strong {
+            color: #1f2937; font-weight: 600;
+          }
           @media print { body { margin: 20px; } .theme-section { page-break-inside: avoid; } }
         </style>
       </head>
@@ -449,7 +521,7 @@ const ReportGeneratorPage: React.FC = () => {
         ${report.markdown_summary ? `
           <div class="markdown-content">
             <h2>Detailed Analysis</h2>
-            ${report.markdown_summary.replace(/\n/g, '<br>')}
+            ${convertMarkdownToHtml(report.markdown_summary)}
           </div>
         ` : ''}
       </body>
@@ -537,10 +609,49 @@ const ReportGeneratorPage: React.FC = () => {
 
     const savedReport = savedReports.get(themeId);
     if (savedReport) {
-      console.log('Found cached report, loading...');
-      setDonorThemeAnalysisResult(savedReport.reportData);
-      setCurrentStep('donorThemeResults');
-      return;
+      console.log('Found cached report reference...');
+
+      // If reportData is already loaded, use it directly
+      if (savedReport.reportData) {
+        console.log('Using cached report data');
+        setDonorThemeAnalysisResult(savedReport.reportData);
+        setCurrentStep('donorThemeResults');
+        return;
+      }
+
+      // If reportData is null, load it from the database using the reportId
+      console.log('Loading full report data from database for report ID:', savedReport.reportId);
+      try {
+        const { data: fullReport, error: reportError } = await supabase
+          .from('cf_theme_analysis_reports')
+          .select('report_json')
+          .eq('id', savedReport.reportId)
+          .single();
+
+        if (reportError) {
+          console.error('Error loading full report:', reportError);
+          return;
+        }
+
+        if (fullReport?.report_json) {
+          console.log('Successfully loaded full report data');
+          // Cache the loaded data
+          setSavedReports(prev => new Map(prev.set(themeId, {
+            reportId: savedReport.reportId,
+            reportData: fullReport.report_json
+          })));
+
+          setDonorThemeAnalysisResult(fullReport.report_json);
+          setCurrentStep('donorThemeResults');
+          return;
+        } else {
+          console.error('Report JSON not found in database record');
+          return;
+        }
+      } catch (error) {
+        console.error('Error loading report from database:', error);
+        return;
+      }
     }
 
     // Load from database using theme list ID and theme ID
@@ -597,12 +708,67 @@ const ReportGeneratorPage: React.FC = () => {
     }
   };
 
-  const loadExistingReportsForThemes = async () => {
-    if (!themeListId || !donorThemes) return;
+  // Function to check for existing theme lists for the current person and sessions
+  const checkExistingThemeLists = async (): Promise<any[]> => {
+    if (!currentPersonId || selectedSessions.length === 0) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('cf_donor_theme_lists')
+        .select('id, created_at, model_used, total_donors, total_transactions, themes_json')
+        .eq('person_id', currentPersonId)
+        .in('session_id', selectedSessions)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error checking existing theme lists:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (error) {
+      console.error('Error checking existing theme lists:', error);
+      return [];
+    }
+  };
+
+  const loadExistingThemeList = async (themeListId: number) => {
+    try {
+      const { data, error } = await supabase
+        .from('cf_donor_theme_lists')
+        .select('*')
+        .eq('id', themeListId)
+        .single();
+
+      if (error) {
+        console.error('Error loading theme list:', error);
+        return;
+      }
+
+      if (data) {
+        // Load the theme list data
+        setThemeListId(data.id);
+        setDonorThemes(data.themes_json || []);
+        setDonorThemeContext(data.donor_context_json || {});
+        setCurrentStep('donorThemeThemes');
+
+        // Load existing reports for this theme list
+        await loadExistingReportsForThemes(data.id);
+
+        console.log('Successfully loaded existing theme list:', data.id);
+      }
+    } catch (error) {
+      console.error('Error loading existing theme list:', error);
+    }
+  };
+
+  const loadExistingReportsForThemes = async (listId?: number) => {
+    const targetListId = listId || themeListId;
+    if (!targetListId) return;
 
     try {
       const { data, error } = await supabase.rpc('get_theme_analysis_reports', {
-        p_theme_list_id: themeListId
+        p_theme_list_id: targetListId
       });
 
       if (error) throw error;
@@ -3150,60 +3316,127 @@ Return JSON {"queries": ["..."]}.`;
         throw new Error('No bills were found for the selected theme.');
       }
 
-      setDonorThemeProgress({ text: 'Retrieving bill details...', percent: 65 });
+      setDonorThemeProgress({ text: 'Analyzing bills with AI...', percent: 65 });
 
-      const detailedBills: any[] = [];
-      const limitedBills = allBills
+      // Phase 1: Get top candidate bills with summaries (no full text yet)
+      const candidateBills = allBills
         .sort((a: any, b: any) => Number(b.score ?? 0) - Number(a.score ?? 0))
         .slice(0, 150);
 
-      for (let i = 0; i < limitedBills.length; i += 1) {
-        const bill = limitedBills[i];
-        const billId = Number(bill.bill_id ?? bill.id);
-        if (!Number.isFinite(billId)) continue;
+      // Phase 2: Use Gemini to intelligently select relevant bills
+      const billSelectionPrompt = `Analyze these ${candidateBills.length} candidate bills and select the most relevant ones for the theme: "${theme.title || theme.description}".
 
-        setDonorThemeProgress({
-          text: `Retrieving bill details (${i + 1}/${limitedBills.length})...`,
-          percent: 65 + Math.min(20, Math.floor((i / Math.max(limitedBills.length - 1, 1)) * 20)),
-        });
+Theme donors: ${theme.donor_names.join(', ')} (Total IDs: ${theme.donor_ids.length})
 
-        const [billTextResult, voteRollupResult] = await Promise.all([
-          supabase.rpc('get_bill_text', { p_bill_id: billId }),
-          supabase.rpc('get_bill_vote_rollup', { p_bill_id: billId }),
-        ]);
+Consider which bills would most likely be influenced by these types of donors. Return ONLY a JSON array of bill_id numbers (as integers) for the most relevant bills. Limit to maximum 20 bills.
 
-        const billText = billTextResult.error ? null : (billTextResult.data as any);
-        const voteRollup = voteRollupResult.error ? [] : ((voteRollupResult.data as any[]) || []);
+Candidate Bills:
+${candidateBills.map((bill: any) =>
+  `Bill ${bill.bill_number}: ${bill.summary_title || bill.bill_title || 'No title'} (ID: ${bill.bill_id}, Score: ${bill.score?.toFixed(3) || 'N/A'})`
+).join('\n')}
+
+Response format: [12345, 67890, ...]`;
+
+      let selectedBillIds: number[] = [];
+      try {
+        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+        const result = await model.generateContent(billSelectionPrompt);
+        const responseText = result.response.text();
+
+        // Parse JSON array of bill IDs
+        const parsed = JSON.parse(responseText.replace(/```json\n?|\n?```/g, '').trim());
+        selectedBillIds = Array.isArray(parsed) ? parsed.filter(id => Number.isInteger(id)) : [];
+
+        console.log(`Gemini selected ${selectedBillIds.length} bills from ${candidateBills.length} candidates:`, selectedBillIds);
+      } catch (error) {
+        console.warn('Gemini bill selection failed, using top scoring bills:', error);
+        // Fallback to top 15 bills by score
+        selectedBillIds = candidateBills.slice(0, 15).map((bill: any) => Number(bill.bill_id)).filter(id => Number.isFinite(id));
+      }
+
+      if (!selectedBillIds.length) {
+        throw new Error('No bills were selected for analysis.');
+      }
+
+      setDonorThemeProgress({ text: `Retrieving full text for ${selectedBillIds.length} selected bills...`, percent: 75 });
+
+      // Phase 3: Get full bill texts for selected bills using efficient array function
+      const { data: billTextsData, error: billTextsError } = await supabase.rpc('get_bill_texts_array', {
+        p_bill_ids: selectedBillIds
+      });
+
+      if (billTextsError) {
+        console.error('Error fetching bill texts:', billTextsError);
+        throw new Error('Failed to retrieve bill texts for analysis.');
+      }
+
+      const billTextsMap = new Map();
+      (billTextsData || []).forEach((bill: any) => {
+        billTextsMap.set(bill.bill_id, bill);
+      });
+
+      setDonorThemeProgress({ text: 'Retrieving voting records and stakeholders...', percent: 85 });
+
+      // Get voting records for selected bills
+      const votePromises = selectedBillIds.map(billId =>
+        supabase.rpc('get_bill_vote_rollup', { p_bill_id: billId })
+          .then(result => ({ billId, votes: result.error ? [] : (result.data || []) }))
+      );
+
+      const voteResults = await Promise.all(votePromises);
+      const votesMap = new Map();
+      voteResults.forEach(({ billId, votes }) => {
+        votesMap.set(billId, votes);
+      });
+
+      // Get stakeholders for theme (only generate embedding once)
+      let themeVector: number[] = [];
+      try {
+        themeVector = await embeddingService.generateQueryEmbedding(theme.title || theme.description || '');
+      } catch (error) {
+        console.warn('Failed to generate theme embedding for stakeholder search:', error);
+      }
+
+      const detailedBills: any[] = [];
+
+      for (const billId of selectedBillIds) {
+        const billText = billTextsMap.get(billId);
+        const votes = votesMap.get(billId) || [];
+        const candidateBill = candidateBills.find((b: any) => Number(b.bill_id) === billId);
 
         let stakeholders: any[] = [];
-        try {
-          const themeVector = await embeddingService.generateQueryEmbedding(theme.title || theme.description || '');
-          const { data: stakeholderData, error: stakeholderError } = await supabase.rpc('search_rts_by_vector', {
-            p_bill_id: billId,
-            p_session_id: donorThemeContext.sessionId,
-            p_limit: 20,
-            p_query_vec: themeVector.length ? embeddingService.formatForPgVector(themeVector) : null,
-          });
-          if (stakeholderError) throw stakeholderError;
-          stakeholders = stakeholderData || [];
-        } catch (stakeholderError) {
-          stakeholders = [];
+        if (themeVector.length) {
+          try {
+            const { data: stakeholderData, error: stakeholderError } = await supabase.rpc('search_rts_by_vector', {
+              p_bill_id: billId,
+              p_session_id: donorThemeContext.sessionId,
+              p_limit: 20,
+              p_query_vec: embeddingService.formatForPgVector(themeVector),
+            });
+            if (!stakeholderError) {
+              stakeholders = stakeholderData || [];
+            }
+          } catch (stakeholderError) {
+            console.warn(`Failed to get stakeholders for bill ${billId}:`, stakeholderError);
+          }
         }
 
         detailedBills.push({
           bill_id: billId,
-          bill_number: bill.bill_number || bill.billno,
-          title: bill.summary_title || bill.bill_title || '',
-          score: bill.score ?? null,
-          vote: bill.vote ?? bill.vote_value ?? null,
-          vote_date: bill.vote_date ?? null,
-          is_sponsor: bill.is_sponsor ?? false,
-          is_party_outlier: bill.is_party_outlier ?? false,
-          party_breakdown: bill.party_breakdown ?? null,
-          statutes: bill.statutes ?? [],
-          summary_excerpt: bill.summary_excerpt ?? billText?.bill_summary ?? '',
-          full_excerpt: bill.full_excerpt ?? billText?.bill_text ?? '',
-          vote_rollup: voteRollup,
+          bill_number: billText?.bill_number || candidateBill?.bill_number || candidateBill?.billno,
+          title: billText?.summary_title || candidateBill?.summary_title || candidateBill?.bill_title || '',
+          score: candidateBill?.score ?? null,
+          vote: candidateBill?.vote ?? candidateBill?.vote_value ?? null,
+          vote_date: candidateBill?.vote_date ?? null,
+          is_sponsor: candidateBill?.is_sponsor ?? false,
+          is_party_outlier: candidateBill?.is_party_outlier ?? false,
+          party_breakdown: candidateBill?.party_breakdown ?? null,
+          statutes: candidateBill?.statutes ?? [],
+          summary_excerpt: candidateBill?.summary_excerpt ?? billText?.bill_summary ?? '',
+          full_excerpt: candidateBill?.full_excerpt ?? billText?.bill_text ?? '',
+          vote_rollup: votes,
           stakeholders,
         });
       }
@@ -3704,6 +3937,61 @@ Rules:
                 <div style={{ fontSize: '0.9em', color: '#666' }}>Analyze all selected sessions together</div>
               </div>
             </label>
+          )}
+
+          {/* Existing Theme Lists Section */}
+          {existingThemeLists.length > 0 && (
+            <div style={{
+              marginTop: 16,
+              padding: 12,
+              border: '1px solid #e5e7eb',
+              borderRadius: 6,
+              backgroundColor: '#f9fafb'
+            }}>
+              <h4 style={{ margin: '0 0 8px 0', fontSize: '0.9em', fontWeight: 600, color: '#374151' }}>
+                📋 Existing Analysis Reports
+              </h4>
+              <p style={{ margin: '0 0 12px 0', fontSize: '0.85em', color: '#6b7280' }}>
+                Found {existingThemeLists.length} previous analysis{existingThemeLists.length !== 1 ? 'es' : ''} for this person and session combination.
+              </p>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {existingThemeLists.map((themeList) => (
+                  <div key={themeList.id} style={{
+                    padding: 8,
+                    border: '1px solid #d1d5db',
+                    borderRadius: 4,
+                    backgroundColor: '#ffffff',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '0.85em', fontWeight: 500 }}>
+                        Report #{themeList.id} • {new Date(themeList.created_at).toLocaleDateString()}
+                      </div>
+                      <div style={{ fontSize: '0.8em', color: '#6b7280', marginTop: 2 }}>
+                        {themeList.themes_json?.length || 0} themes • {themeList.total_donors} donors • Model: {themeList.model_used}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => loadExistingThemeList(themeList.id)}
+                      style={{
+                        padding: '4px 8px',
+                        backgroundColor: '#059669',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: 4,
+                        cursor: 'pointer',
+                        fontSize: '0.8em',
+                        fontWeight: 500
+                      }}
+                    >
+                      Load Report
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
 
           <div style={{ marginTop: 16, display: 'flex', gap: 12 }}>

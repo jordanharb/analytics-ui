@@ -24,8 +24,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['@modelcontextprotocol/sdk'],
-    exclude: ['@modelcontextprotocol/sdk']
+    exclude: ['@modelcontextprotocol/sdk', '@modelcontextprotocol/sdk/client/index.js', '@modelcontextprotocol/sdk/client/streamableHttp.js']
   },
   define: {
     global: 'globalThis',

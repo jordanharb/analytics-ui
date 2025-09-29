@@ -1,15 +1,23 @@
 /**
- * Service for generating embeddings using Google's Generative AI API
- * Uses the same text-embedding-004 model as the backend
+ * Service for generating embeddings using OpenAI's API
+ * Uses text-embedding-3-small model to generate 1536-dimension vectors.
  */
 
-const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
-const EMBEDDING_MODEL = 'text-embedding-004';
-const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
+const EMBEDDING_MODEL = 'text-embedding-3-small';
+const OPENAI_API_BASE_URL = 'https://api.openai.com/v1';
 
-interface EmbeddingResponse {
-  embedding: {
-    values: number[];
+interface OpenAIEmbeddingResponse {
+  object: 'list';
+  data: {
+    object: 'embedding';
+    embedding: number[];
+    index: number;
+  }[];
+  model: string;
+  usage: {
+    prompt_tokens: number;
+    total_tokens: number;
   };
 }
 
@@ -26,74 +34,62 @@ export class EmbeddingService {
   }
   
   /**
-   * Generate embedding for a search query using Google's text-embedding-004 model
-   * This matches the model used for the existing event embeddings
+   * Generate embedding for a search query using OpenAI's text-embedding-3-small model.
    */
   async generateQueryEmbedding(query: string): Promise<number[]> {
-    if (!GOOGLE_API_KEY) {
-      console.error('Google API key not configured');
-      return [];
+    if (!OPENAI_API_KEY) {
+      console.error('OpenAI API key not configured. Set VITE_OPENAI_API_KEY.');
+      throw new Error('OpenAI API key not configured.');
     }
     
     try {
-      console.log('Generating embedding for query:', query);
+      console.log('Generating OpenAI embedding for query:', query);
       
-      // Call Google's embedding API
-      const response = await fetch(
-        `${GOOGLE_AI_BASE_URL}/models/${EMBEDDING_MODEL}:embedContent?key=${GOOGLE_API_KEY}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: `models/${EMBEDDING_MODEL}`,
-            content: {
-              parts: [{
-                text: query
-              }]
-            },
-            taskType: 'RETRIEVAL_QUERY' // Use RETRIEVAL_QUERY for search queries
-          })
-        }
-      );
+      const response = await fetch(`${OPENAI_API_BASE_URL}/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: EMBEDDING_MODEL,
+          input: query,
+          dimensions: 1536,
+        }),
+      });
       
       if (!response.ok) {
-        const error = await response.text();
-        console.error('Google AI API error:', error);
+        const error = await response.json().catch(() => ({ message: 'Unknown error' }));
+        console.error('OpenAI API error:', error);
         
-        // Check for specific errors
         if (response.status === 429) {
-          throw new Error('Rate limit exceeded. Please try again in a moment.');
-        } else if (response.status === 403) {
-          throw new Error('API key invalid or not authorized for embeddings.');
+          throw new Error('OpenAI rate limit exceeded. Please check your plan and billing details.');
+        } else if (response.status === 401) {
+          throw new Error('Invalid OpenAI API key.');
         }
         
-        throw new Error(`Failed to generate embedding: ${response.status}`);
+        throw new Error(`Failed to generate embedding: ${error.message || response.statusText}`);
       }
       
-      const data: EmbeddingResponse = await response.json();
+      const data: OpenAIEmbeddingResponse = await response.json();
       
-      if (!data.embedding?.values) {
-        console.error('Invalid embedding response:', data);
-        return [];
+      const embedding = data?.data?.[0]?.embedding;
+      if (!embedding) {
+        console.error('Invalid embedding response from OpenAI:', data);
+        throw new Error('Invalid embedding response from OpenAI.');
       }
       
-      console.log('Generated embedding with dimension:', data.embedding.values.length);
-      return data.embedding.values;
+      console.log('Generated OpenAI embedding with dimension:', embedding.length);
+      return embedding;
       
     } catch (error) {
-      console.error('Error generating embedding:', error);
+      console.error('Error generating OpenAI embedding:', error);
       
-      // Show user-friendly error message
       if (error instanceof Error) {
-        if (error.message.includes('Rate limit')) {
-          // Could implement retry logic here
-          console.warn('Rate limited - consider implementing retry logic');
-        }
+        throw error;
       }
       
-      return [];
+      throw new Error('An unknown error occurred while generating the embedding.');
     }
   }
   

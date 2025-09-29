@@ -1,84 +1,60 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback } from 'react';
+import { SendHorizontal, Loader2 } from 'lucide-react';
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
-  disabled?: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
   placeholder?: string;
+  isStreaming?: boolean;
+  canSend?: boolean;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
-  onSend,
-  disabled = false,
-  placeholder = 'Type your message...'
+  value,
+  onChange,
+  onSubmit,
+  placeholder = 'Type your question…',
+  isStreaming = false,
+  canSend = true,
 }) => {
-  const [input, setInput] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    // Auto-resize textarea
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-    }
-  }, [input]);
-
-  const handleSubmit = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (input.trim() && !disabled) {
-      onSend(input.trim());
-      setInput('');
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (canSend) {
+          onSubmit();
+        }
+      }
+    },
+    [onSubmit, canSend]
+  );
 
   return (
-    <form onSubmit={handleSubmit} className="w-full">
-      <div className="flex gap-2 items-end">
-        <div className="flex-1 relative">
+    <div className="w-full">
+      <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/70 shadow-lg">
+        <div className="flex items-end gap-3 px-4 py-3">
           <textarea
-            ref={textareaRef}
-            className="input w-full resize-none pr-2"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            disabled={disabled}
             rows={1}
-            style={{ minHeight: '40px' }}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={handleKeyDown}
+            className="flex-1 resize-none bg-transparent text-sm text-slate-800 dark:text-slate-50 placeholder:text-slate-400 focus:outline-none"
+            placeholder={placeholder}
           />
-        </div>
-        <button
-          type="submit"
-          className="btn-primary"
-          disabled={disabled || !input.trim()}
-          aria-label="Send message"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSend}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-900 text-white shadow-md transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
           >
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-          <span className="ml-2">Send</span>
-        </button>
+            {isStreaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
-      <div className="text-xs text-gray-500 mt-2 text-center">
-        Press Enter to send, Shift+Enter for new line
-      </div>
-    </form>
+      <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+        Press Enter to send, Shift + Enter for new line.
+      </p>
+    </div>
   );
 };

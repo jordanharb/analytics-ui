@@ -1,8 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { json } from './_shared.js';
-
 export default function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'GET') return json(res, 405, { error: 'Method Not Allowed' });
-  return json(res, 200, { status: 'healthy', server: 'mcp-vercel-functions' });
-}
+  res.setHeader('Content-Type', 'application/json');
 
+  if (req.method !== 'GET') {
+    res.status(405).send(JSON.stringify({ error: 'Method Not Allowed' }));
+    return;
+  }
+
+  res.status(200).send(JSON.stringify({ status: 'healthy', server: 'mcp-http-proxy' }));
+}

@@ -1,5 +1,7 @@
 import { ClaudeProvider } from './providers/ClaudeProvider';
 import { GeminiProvider } from './providers/GeminiProvider';
+import { contextManager } from './providers/ContextManager';
+import { getClaudeKey, getGeminiKey } from '../aiKeyStore';
 import type { LLMProvider, MCPTool, StreamChunk, ProviderType, ModelInfo } from './providers/types';
 
 export class MCPClient {
@@ -18,7 +20,6 @@ export class MCPClient {
 
   private initializeProviders() {
     // Initialize Claude if API key exists (env or local override)
-    const { getClaudeKey, getGeminiKey } = require('../aiKeyStore');
     const claudeKey = getClaudeKey() || import.meta.env.VITE_ANTHROPIC_API_KEY;
     if (claudeKey) {
       try {
@@ -94,10 +95,7 @@ export class MCPClient {
   }
 
   private setContextForProviders(context: string): void {
-    // Import contextManager
-    import('./providers/ContextManager').then(({ contextManager }) => {
-      contextManager.setMCPContext(context);
-    });
+    contextManager.setMCPContext(context);
   }
 
   async executeTool(toolName: string, args: any): Promise<any> {

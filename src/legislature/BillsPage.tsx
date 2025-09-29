@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase2 as supabase } from '../lib/supabase2';
+import { embeddingService } from '../services/embeddingService';
 
 interface Bill {
   bill_id: number;
@@ -14,6 +15,7 @@ interface Bill {
   final_disposition: string;
   governor_action: string;
   last_action_date: string | null;
+  match_score?: number;
   sponsors?: Array<{
     legislator_id: number;
     full_name: string;
@@ -70,7 +72,6 @@ export default function BillsPage() {
 
       if (error) {
         console.error('Error loading sessions:', error);
-        // Fallback to mock data if table doesn't exist
         const mockSessions = [
           { session_id: 56, session_name: '56th Legislature - 1st Regular Session (2023)' },
           { session_id: 55, session_name: '55th Legislature - 2nd Regular Session (2022)' },
@@ -89,17 +90,48 @@ export default function BillsPage() {
     }
   };
 
+  const saveEmbeddingToFile = (embedding: number[], searchTerm: string) => {
+    if (!embedding || embedding.length === 0) return;
+
+    const sanitizedTerm = searchTerm.replace(/[^a-z0-9]/gi, '_').toLowerCase().substring(0, 50);
+    const timestamp = Date.now();
+    const filename = `embedding_${sanitizedTerm}_${timestamp}.json`;
+
+    const blob = new Blob([JSON.stringify(embedding, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const loadBills = async () => {
     if (!selectedSession) return;
 
     setLoading(true);
+    let queryVec: number[] | null = null;
 
     try {
-      // Use RPC function to get bills with all details
+      const trimmedSearch = searchTerm.trim();
+      if (trimmedSearch) {
+        try {
+          queryVec = await embeddingService.generateQueryEmbedding(trimmedSearch);
+          console.log('Raw embedding for search:', queryVec);
+          saveEmbeddingToFile(queryVec, trimmedSearch);
+        } catch (e) {
+          console.error("Failed to generate embedding, proceeding with text search only.", e);
+        }
+      }
+
+      // RPC call now matches the definitive SQL function signature
       const { data: billsData, error } = await supabase
         .rpc('get_bills_with_details', {
           p_session_id: selectedSession,
-          p_search_term: searchTerm || null,
+          p_search_term: trimmedSearch || null,
+          p_query_vec: queryVec,
           p_limit: 100,
           p_offset: 0
         });
@@ -108,20 +140,17 @@ export default function BillsPage() {
         console.error('Error loading bills:', error);
         setBills([]);
       } else {
-        // Process the bills data
         const processedBills = (billsData || []).map((bill: any) => ({
           ...bill,
-          // Parse sponsors JSON if it's a string
           sponsors: typeof bill.sponsors === 'string'
             ? JSON.parse(bill.sponsors)
             : bill.sponsors,
-          // Ensure primary_sponsor_name has a fallback
           primary_sponsor_name: bill.primary_sponsor_name || 'Unknown'
         }));
         setBills(processedBills);
       }
     } catch (error) {
-      console.error('Error loading bills:', error);
+      console.error('Error during bill loading:', error);
       setBills([]);
     }
 
@@ -133,8 +162,6 @@ export default function BillsPage() {
     setBillDetails(null);
 
     try {
-      // For now, we'll just use the selected bill data
-      // TODO: Create API endpoints for sponsors and votes
       setBillDetails({
         bill_id: billId,
         sponsors: [],
@@ -152,14 +179,8 @@ export default function BillsPage() {
     await loadBillDetails(bill.bill_id);
   };
 
-  const filteredBills = bills.filter(bill => {
-    if (searchTerm && !bill.bill_number.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        !bill.short_title?.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        !bill.primary_sponsor_name?.toLowerCase().includes(searchTerm.toLowerCase())) {
-      return false;
-    }
-    return true;
-  });
+  // The database now handles all filtering and ranking.
+  const filteredBills = bills;
 
   const currentSession = sessions.find(s => s.session_id === selectedSession);
 

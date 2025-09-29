@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { analyticsClient } from '../api/analyticsClient';
 import type { Filters, FilterOptions } from '../api/types';
 
 interface FiltersStore {
@@ -137,7 +138,6 @@ export const useFiltersStore = create<FiltersStore>((set, get) => ({
     
     try {
       // Generate embedding using Google's API
-      const { analyticsClient } = await import('../api/analyticsClient');
       const embedding = await analyticsClient.generateEmbedding(query);
       
       console.log('Generated embedding for query:', query, 'Dimension:', embedding.length);
