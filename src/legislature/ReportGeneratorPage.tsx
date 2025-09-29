@@ -6,20 +6,21 @@ import type { PersonSearchResult } from './lib/types';
 import { searchPeopleWithSessions } from './lib/search';
 import { GoogleGenerativeAI, SchemaType, type Tool } from '@google/generative-ai';
 import { getGeminiKey, setGeminiKey } from '../lib/../lib/aiKeyStore';
+import { embeddingService } from '../services/embeddingService';
 
 const GEMINI_API_KEY = getGeminiKey() || import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
 
 interface Person extends PersonSearchResult {
-  extra?: string; // Additional info like "3 legis IDs • 2 entities"
+  extra?: string; // Additional info like "3 legis IDs * 2 entities"
 }
 
 interface Session {
   id: number;
   name: string;
-  dateRange?: string;
-  vote_count?: number;
-  start_date?: string;
-  end_date?: string;
+  dateRange: string;
+  voteCount: number;
+  startDate: string | null;
+  endDate: string | null;
 }
 
 type SessionSelection = number | 'combined';
@@ -42,12 +43,83 @@ interface Phase1RenderData {
   sessionKey: string;
 }
 
+interface DonorRecord {
+  transaction_entity_id: number;
+  entity_name: string;
+  total_to_recipient: number;
+  donation_count: number;
+  top_employer?: string | null;
+  top_occupation?: string | null;
+  best_match?: number | null;
+  entity_type_id?: number | null;
+  entity_type_name?: string | null;
+  [key: string]: any;
+}
+
+interface DonorTheme {
+  id: string;
+  title: string;
+  description: string;
+  summary?: string;
+  industry_tags?: string[];
+  heuristics_used?: string[];
+  evidence?: string[];
+  donor_ids: number[];
+  donor_names: string[];
+  donor_totals?: number[]; // Total donation amounts for each donor
+  query_suggestions: string[];
+  confidence?: number;
+}
+
+interface DonorThemeContext {
+  legislatorName: string;
+  sessionId: number;
+  sessionName: string;
+  sessionIdsForBills: number[];
+  entityIds: number[];
+  legislatorIds: number[];
+  primaryLegislatorId: number;
+  sessionLegislatorMap: Record<number, number[]>;
+  donors: DonorRecord[];
+  transactions: DonorTransaction[];
+  daysBefore: number;
+  daysAfter: number;
+  sessionStartDate?: string | null;
+  sessionEndDate?: string | null;
+}
+
+interface DonorTransaction {
+  public_transaction_id: number;
+  transaction_entity_id: number;
+  transaction_date: string;
+  amount: number;
+  transaction_employer?: string | null;
+  transaction_occupation?: string | null;
+  memo?: string | null;
+  committee_name?: string | null;
+  transaction_entity_type_id?: number | null;
+  entity_type_name?: string | null;
+  transaction_entity_name?: string | null;
+  [key: string]: any;
+}
+
+type GeminiModel = 'gemini-2.0-flash-exp' | 'gemini-2.0-flash-thinking-exp-01-21' | 'gemini-2.5-flash' | 'gemini-2.5-pro';
+
 const ReportGeneratorPage: React.FC = () => {
   const [currentLegislator, setCurrentLegislator] = useState<string | null>(null);
   const [currentPersonId, setCurrentPersonId] = useState<number | null>(null);
+
+  // Model selection for each analysis step
+  // @ts-ignore - Preserving for future restoration of single call analysis
+  const [singleCallModel, setSingleCallModel] = useState<GeminiModel>('gemini-2.5-pro');
+  const [themeGenerationModel, setThemeGenerationModel] = useState<GeminiModel>('gemini-2.5-flash');
+  const [queryExpansionModel, setQueryExpansionModel] = useState<GeminiModel>('gemini-2.5-flash');
+  const [finalReportModel, setFinalReportModel] = useState<GeminiModel>('gemini-2.5-pro');
   const [currentLegislatorIds, setCurrentLegislatorIds] = useState<number[]>([]);
+  const [primaryLegislatorId, setPrimaryLegislatorId] = useState<number | null>(null);
   const [currentEntityIds, setCurrentEntityIds] = useState<number[]>([]);
   const [availableSessions, setAvailableSessions] = useState<Session[]>([]);
+  const [sessionLegislatorMap, setSessionLegislatorMap] = useState<Record<number, number[]>>({});
   const [selectedSessions, setSelectedSessions] = useState<SessionSelection[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
@@ -60,16 +132,509 @@ const ReportGeneratorPage: React.FC = () => {
   const [progressText, setProgressText] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[] | null>(null);
-  const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results'>('search');
-  const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall'>('twoPhase');
+  const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results' | 'donorThemeThemes' | 'donorThemeProgress' | 'donorThemeResults'>('search');
+  const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall' | 'donorTheme'>('donorTheme');
   const [phase1Previews, setPhase1Previews] = useState<Record<string, Phase1RenderData>>({});
   const [activePhaseView, setActivePhaseView] = useState<'phase1' | 'phase2'>('phase2');
   const [showSettings, setShowSettings] = useState(false);
   const [geminiKeyInput, setGeminiKeyInput] = useState<string>(getGeminiKey() || '');
 
+  const normalizeLegislatorIds = (
+    ids: Array<number | null | undefined> | null | undefined,
+  ): number[] => {
+    if (!ids || !Array.isArray(ids) || !ids.length) {
+      return [];
+    }
+
+    const unique = new Set<number>();
+    ids.forEach((value) => {
+      const numeric = typeof value === 'number' ? value : Number(value);
+      if (Number.isFinite(numeric)) {
+        unique.add(numeric);
+      }
+    });
+
+    const ordered = Array.from(unique);
+    ordered.sort((a, b) => b - a);
+    return ordered;
+  };
+
+  const applyLegislatorIds = (
+    ids: Array<number | null | undefined> | null | undefined,
+  ): number[] => {
+    const normalized = normalizeLegislatorIds(ids);
+    setCurrentLegislatorIds(normalized);
+    setPrimaryLegislatorId(normalized.length ? normalized[0] : null);
+    return normalized;
+  };
+
+  const [donorThemes, setDonorThemes] = useState<DonorTheme[] | null>(null);
+  const [donorThemeContext, setDonorThemeContext] = useState<DonorThemeContext | null>(null);
+  const [completedThemes, setCompletedThemes] = useState<Set<string>>(new Set());
+  const [donorThemeAnalysisResult, setDonorThemeAnalysisResult] = useState<any>(null);
+  const [savedReports, setSavedReports] = useState<Map<string, any>>(new Map());
+  const [themeListId, setThemeListId] = useState<number | null>(null);
+  // Track active donor theme selection for UI/analytics if needed.
+  // Currently we only store context; selection can be inferred from analysis results.
+  const [donorThemeProgress, setDonorThemeProgress] = useState<{ text: string; percent: number } | null>(null);
+
+  // Query suggestions editing state
+  const [editingThemeId, setEditingThemeId] = useState<string | null>(null);
+  const [editingQueries, setEditingQueries] = useState<string>('');
+
+  // PDF and report management state
+
+  const startEditingQueries = (themeId: string, currentQueries: string[]) => {
+    setEditingThemeId(themeId);
+    setEditingQueries(currentQueries.join('\n'));
+  };
+
+  const saveEditedQueries = () => {
+    if (!editingThemeId || !donorThemes) return;
+
+    const updatedThemes = donorThemes.map(theme => {
+      if (theme.id === editingThemeId) {
+        const newQueries = editingQueries
+          .split('\n')
+          .map(q => q.trim())
+          .filter(Boolean);
+        return { ...theme, query_suggestions: newQueries };
+      }
+      return theme;
+    });
+
+    setDonorThemes(updatedThemes);
+    setEditingThemeId(null);
+    setEditingQueries('');
+  };
+
+  const cancelEditingQueries = () => {
+    setEditingThemeId(null);
+    setEditingQueries('');
+  };
+
+  // Helper function to calculate and format date ranges
+  const getDateRangeInfo = (context: DonorThemeContext) => {
+    if (!context.sessionStartDate || !context.sessionEndDate) {
+      return {
+        sessionRange: 'Session dates unavailable',
+        donationRange: `${context.daysBefore} days before to ${context.daysAfter} days after session`,
+        donationStartDate: null,
+        donationEndDate: null
+      };
+    }
+
+    const sessionStart = new Date(context.sessionStartDate);
+    const sessionEnd = new Date(context.sessionEndDate);
+
+    const donationStart = new Date(sessionStart.getTime() - (context.daysBefore * 24 * 60 * 60 * 1000));
+    const donationEnd = new Date(sessionStart.getTime() + (context.daysAfter * 24 * 60 * 60 * 1000));
+
+    const formatDate = (date: Date) => date.toLocaleDateString('en-US', {
+      year: 'numeric', month: 'short', day: 'numeric'
+    });
+
+    return {
+      sessionRange: `${formatDate(sessionStart)} to ${formatDate(sessionEnd)}`,
+      donationRange: `${formatDate(donationStart)} to ${formatDate(donationEnd)}`,
+      donationStartDate: donationStart,
+      donationEndDate: donationEnd
+    };
+  };
+
+  // PDF Generation Functions
+  const generateThemeListPDF = () => {
+    if (!donorThemes || !donorThemeContext) return;
+
+    const dateInfo = getDateRangeInfo(donorThemeContext);
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const printHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Donor Theme Analysis - ${donorThemeContext.legislatorName}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; color: #333; }
+          h1 { color: #1e40af; border-bottom: 2px solid #1e40af; padding-bottom: 10px; }
+          h2 { color: #1e40af; margin-top: 30px; }
+          h3 { color: #374151; margin-top: 20px; }
+          .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 30px; }
+          .theme { break-inside: avoid; margin-bottom: 25px; padding: 15px; border: 1px solid #e5e7eb; border-radius: 8px; }
+          .theme-title { font-weight: bold; color: #1e40af; font-size: 16px; margin-bottom: 8px; }
+          .donors { margin: 10px 0; }
+          .donor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 10px 0; }
+          .donor-item { padding: 6px 10px; background: #f3f4f6; border-radius: 4px; font-size: 12px; border-left: 3px solid #059669; }
+          .donor-name { font-weight: 500; }
+          .donor-amount { color: #059669; font-weight: bold; }
+          .queries { margin-top: 15px; }
+          .query-item { display: inline-block; margin: 2px 4px 2px 0; padding: 3px 8px; background: #dbeafe; border-radius: 3px; font-size: 11px; }
+          .summary { background: #f9fafb; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+          .type-indicator { font-size: 9px; padding: 2px 4px; border-radius: 2px; color: white; font-weight: bold; margin-left: 4px; }
+          .type-pac { background: #dc2626; }
+          .type-individual { background: #16a34a; }
+          .type-business { background: #2563eb; }
+          @media print { body { margin: 20px; } .theme { page-break-inside: avoid; } }
+        </style>
+      </head>
+      <body>
+        <h1>Donor Theme Analysis - ${donorThemeContext.legislatorName}</h1>
+        <div class="subtitle">${donorThemeContext.sessionName} • Generated ${new Date().toLocaleDateString()}</div>
+
+        <div class="summary">
+          <h3>Analysis Summary</h3>
+          <p><strong>Total Themes Identified:</strong> ${donorThemes.length}</p>
+          <p><strong>Total Donors Analyzed:</strong> ${donorThemeContext.donors?.length || 0}</p>
+          <p><strong>Total Transactions:</strong> ${donorThemeContext.transactions?.length || 0}</p>
+          <p><strong>Session Period:</strong> ${dateInfo.sessionRange}</p>
+          <p><strong>Donation Analysis Period:</strong> ${dateInfo.donationRange}</p>
+        </div>
+
+        ${donorThemes.map(theme => `
+          <div class="theme">
+            <div class="theme-title">${theme.title || 'Untitled Theme'}</div>
+            <div style="margin: 8px 0; color: #6b7280; font-style: italic;">${theme.description || ''}</div>
+
+            <div class="donors">
+              <strong>Donors (${theme.donor_names?.length || 0}):</strong>
+              <div class="donor-grid">
+                ${(theme.donor_names || []).map((name, idx) => {
+                  const total = theme.donor_totals?.[idx];
+                  const displayTotal = total ? `$${total.toLocaleString()}` : 'Unknown';
+
+                  // Get donor info for additional details
+                  const donorInfo = donorThemeContext?.donors?.find(d => d.entity_name === name);
+                  return `
+                    <div class="donor-item">
+                      <div class="donor-name">${name}</div>
+                      <div class="donor-amount">${displayTotal}</div>
+                      ${donorInfo?.entity_type_name ? `<div style="font-size: 10px; margin-top: 2px; color: #6b7280;">${donorInfo.entity_type_name}${donorInfo.top_employer ? ' • ' + donorInfo.top_employer : ''}${donorInfo.top_occupation ? ' • ' + donorInfo.top_occupation : ''}</div>` : ''}
+                      ${donorInfo?.transaction_entity_id ? `<div style="font-size: 9px; margin-top: 2px; color: #9ca3af;">ID: ${donorInfo.transaction_entity_id}</div>` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+
+          </div>
+        `).join('')}
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(printHtml);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.print();
+      printWindow.close();
+    };
+  };
+
+  const generateFinalReportPDF = (reportData: any) => {
+    if (!reportData?.report) return;
+
+    const dateInfo = donorThemeContext ? getDateRangeInfo(donorThemeContext) : {
+      sessionRange: 'Session dates unavailable',
+      donationRange: 'Donation dates unavailable'
+    };
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const report = reportData.report;
+    const printHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Campaign Finance Analysis Report</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; color: #333; }
+          h1 { color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; }
+          h2 { color: #1e40af; margin-top: 30px; border-left: 4px solid #1e40af; padding-left: 12px; }
+          h3 { color: #374151; margin-top: 20px; }
+          .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 30px; }
+          .summary { background: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          .theme-section { break-inside: avoid; margin-bottom: 35px; background: #fefefe; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
+          .confidence { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin: 8px 0; }
+          .confidence-high { background: #dcfce7; color: #15803d; }
+          .confidence-medium { background: #fef3c7; color: #d97706; }
+          .confidence-low { background: #fee2e2; color: #dc2626; }
+          .donor-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin: 15px 0; }
+          .donor-item { margin: 8px 0; padding: 12px; background: #f8fafc; border-radius: 6px; border-left: 4px solid #059669; }
+          .donor-name { font-weight: bold; color: #1e293b; }
+          .donor-amount { color: #059669; font-weight: bold; font-size: 14px; }
+          .donor-details { font-size: 12px; color: #64748b; margin-top: 4px; }
+          .bill-list { margin: 15px 0; }
+          .bill-item { margin: 12px 0; padding: 15px; background: #f1f5f9; border-radius: 6px; border-left: 4px solid #2563eb; }
+          .bill-title { font-weight: bold; color: #1e40af; }
+          .bill-details { margin: 5px 0; font-size: 13px; }
+          .vote-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; margin: 0 4px; }
+          .vote-yes { background: #dcfce7; color: #15803d; }
+          .vote-no { background: #fee2e2; color: #dc2626; }
+          .markdown-content { margin-top: 30px; white-space: pre-wrap; line-height: 1.8; }
+          @media print { body { margin: 20px; } .theme-section { page-break-inside: avoid; } }
+        </style>
+      </head>
+      <body>
+        <h1>Campaign Finance Analysis Report</h1>
+        <div class="subtitle">${report.session_info?.session_name || 'Unknown Session'} • Generated ${new Date().toLocaleDateString()}</div>
+
+        <div class="summary">
+          <h2>Executive Summary</h2>
+          <p>${report.overall_summary || 'No summary available.'}</p>
+          <p><strong>Session Period:</strong> ${dateInfo.sessionRange}</p>
+          <p><strong>Donation Analysis Period:</strong> ${dateInfo.donationRange}</p>
+        </div>
+
+        ${(report.themes || []).map((theme: any) => {
+          const confidence = theme.confidence || 0;
+          const confidenceClass = confidence >= 0.8 ? 'confidence-high' : confidence >= 0.5 ? 'confidence-medium' : 'confidence-low';
+          const confidenceText = confidence >= 0.8 ? 'HIGH CONFIDENCE' : confidence >= 0.5 ? 'MEDIUM CONFIDENCE' : 'LOW CONFIDENCE';
+
+          return `
+            <div class="theme-section">
+              <h2>${theme.theme}</h2>
+              <div class="confidence ${confidenceClass}">${confidenceText} (${Math.round(confidence * 100)}%)</div>
+              <p><strong>Summary:</strong> ${theme.summary || theme.description}</p>
+
+              <h3>Donors (${theme.donors?.length || 0})</h3>
+              <div class="donor-list">
+                ${(theme.donors || []).map((donor: any) => `
+                  <div class="donor-item">
+                    <div class="donor-name">${donor.name}</div>
+                    <div class="donor-amount">${donor.total}</div>
+                    <div class="donor-details">
+                      ${donor.employer ? `<div><strong>Employer:</strong> ${donor.employer}</div>` : ''}
+                      ${donor.occupation ? `<div><strong>Occupation:</strong> ${donor.occupation}</div>` : ''}
+                      ${donor.type ? `<div><strong>Type:</strong> ${donor.type}</div>` : ''}
+                      ${(donor.transaction_ids || donor.donation_dates) ? `<div><strong>Transactions:</strong> ${(donor.transaction_ids || []).length} donations on ${(donor.donation_dates || []).join(', ')}</div>` : ''}
+                      ${donor.notes ? `<div><em>${donor.notes}</em></div>` : ''}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+
+              <h3>Related Bills (${theme.bills?.length || 0})</h3>
+              <div class="bill-list">
+                ${(theme.bills || []).map((bill: any) => `
+                  <div class="bill-item">
+                    <div class="bill-title">${bill.bill_number} - ${bill.title}</div>
+                    <div class="bill-details">
+                      <span class="vote-badge ${bill.vote === 'Y' ? 'vote-yes' : 'vote-no'}">VOTE: ${bill.vote || 'Unknown'}</span>
+                      <strong>Reason:</strong> ${bill.reason}
+                    </div>
+                    ${bill.takeaways ? `<div style="margin-top: 8px;"><strong>Key Takeaways:</strong> ${bill.takeaways}</div>` : ''}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+
+        ${report.transactions_cited ? `
+          <div class="summary">
+            <h2>Transaction Details</h2>
+            <div style="font-size: 12px; line-height: 1.4;">
+              ${(report.transactions_cited || []).map((txn: any) => `
+                <div style="margin: 8px 0; padding: 8px; background: #f8fafc; border-radius: 4px;">
+                  <strong>ID ${txn.public_transaction_id}:</strong> ${txn.donor} gave $${txn.amount?.toLocaleString()} on ${txn.date}
+                  ${txn.linked_bills ? `<div style="margin-top: 4px; color: #6b7280;">Linked to: ${txn.linked_bills.join(', ')}</div>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        ${report.markdown_summary ? `
+          <div class="markdown-content">
+            <h2>Detailed Analysis</h2>
+            ${report.markdown_summary.replace(/\n/g, '<br>')}
+          </div>
+        ` : ''}
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(printHtml);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.print();
+      printWindow.close();
+    };
+  };
+
+  // Database functions for saving/loading reports
+  const saveThemeListToDatabase = async () => {
+    if (!donorThemes || !donorThemeContext) return null;
+
+    try {
+      const { data, error } = await supabase.rpc('save_donor_theme_list', {
+        p_person_id: currentPersonId,
+        p_legislator_name: donorThemeContext.legislatorName,
+        p_session_id: donorThemeContext.sessionId,
+        p_session_name: donorThemeContext.sessionName,
+        p_model_used: themeGenerationModel,
+        p_themes_json: donorThemes,
+        p_donor_context_json: donorThemeContext,
+        p_total_donors: donorThemeContext.donors?.length || 0,
+        p_total_transactions: donorThemeContext.transactions?.length || 0
+      });
+
+      if (error) throw error;
+
+      const listId = typeof data === 'number' ? data : (Array.isArray(data) ? data[0] : null);
+      if (listId) {
+        setThemeListId(listId);
+        console.log('Theme list saved successfully with ID:', listId);
+        return listId;
+      }
+      return null;
+    } catch (err) {
+      console.error('Error saving theme list:', err);
+      return null;
+    }
+  };
+
+  const saveReportToDatabase = async (themeId: string, reportData: any) => {
+    if (!themeListId && !await saveThemeListToDatabase()) {
+      console.error('Cannot save report without theme list ID');
+      return;
+    }
+
+    const listId = themeListId || await saveThemeListToDatabase();
+    if (!listId || !donorThemeContext) return;
+
+    const theme = donorThemes?.find(t => t.id === themeId);
+    if (!theme) return;
+
+    try {
+      const { data, error } = await supabase.rpc('save_theme_analysis_report', {
+        p_theme_list_id: listId,
+        p_theme_id: themeId,
+        p_theme_title: theme.title,
+        p_person_id: currentPersonId,
+        p_legislator_name: donorThemeContext.legislatorName,
+        p_session_id: donorThemeContext.sessionId,
+        p_session_name: donorThemeContext.sessionName,
+        p_model_used: finalReportModel,
+        p_report_json: reportData,
+        p_confidence_score: theme.confidence
+      });
+
+      if (error) throw error;
+      setSavedReports(prev => new Map(prev.set(themeId, { reportId: data, reportData })));
+      console.log('Report saved successfully with ID:', data);
+    } catch (err) {
+      console.error('Error saving report:', err);
+    }
+  };
+
+  const loadSavedReport = async (themeId: string) => {
+    console.log('Loading saved report for theme:', themeId);
+    console.log('Current savedReports Map:', savedReports);
+    console.log('Theme list ID:', themeListId);
+
+    const savedReport = savedReports.get(themeId);
+    if (savedReport) {
+      console.log('Found cached report, loading...');
+      setDonorThemeAnalysisResult(savedReport.reportData);
+      setCurrentStep('donorThemeResults');
+      return;
+    }
+
+    // Load from database using theme list ID and theme ID
+    if (!themeListId) {
+      console.error('No theme list ID available to load saved report');
+      return;
+    }
+
+    console.log('Loading report from database...');
+
+    try {
+      const { data, error } = await supabase.rpc('get_theme_analysis_reports', {
+        p_theme_list_id: themeListId
+      });
+
+      if (error) {
+        console.error('RPC error:', error);
+        throw error;
+      }
+
+      console.log('RPC returned data:', data);
+
+      const reportRecord = data?.find((r: any) => r.theme_id === themeId);
+      if (!reportRecord) {
+        console.error('No saved report found for theme:', themeId);
+        console.log('Available theme IDs:', data?.map((r: any) => r.theme_id));
+        return;
+      }
+
+      console.log('Found report record:', reportRecord);
+
+      // Load the full report JSON from the record
+      const { data: fullReport, error: reportError } = await supabase
+        .from('cf_theme_analysis_reports')
+        .select('report_json')
+        .eq('id', reportRecord.id)
+        .single();
+
+      if (reportError) {
+        console.error('Report loading error:', reportError);
+        throw reportError;
+      }
+      if (!fullReport?.report_json) {
+        console.error('No report JSON found');
+        return;
+      }
+
+      console.log('Loaded full report:', fullReport.report_json);
+      setDonorThemeAnalysisResult(fullReport.report_json);
+      setCurrentStep('donorThemeResults');
+      console.log('Successfully loaded saved report for theme:', themeId);
+    } catch (err) {
+      console.error('Error loading saved report:', err);
+    }
+  };
+
+  const loadExistingReportsForThemes = async () => {
+    if (!themeListId || !donorThemes) return;
+
+    try {
+      const { data, error } = await supabase.rpc('get_theme_analysis_reports', {
+        p_theme_list_id: themeListId
+      });
+
+      if (error) throw error;
+
+      const reportsMap = new Map();
+      data?.forEach((report: any) => {
+        reportsMap.set(report.theme_id, {
+          reportId: report.id,
+          reportData: null // We'll load the full data when needed
+        });
+      });
+
+      setSavedReports(reportsMap);
+      console.log(`Loaded ${reportsMap.size} existing reports for theme list`);
+    } catch (err) {
+      console.error('Error loading existing reports:', err);
+    }
+  };
+
 const baseGenerationConfig = {
   temperature: 0.6,
   maxOutputTokens: 8192,
+};
+
+// Model-specific token limits based on official Google API specs
+const getMaxOutputTokens = (model: string): number => {
+  if (model.includes('gemini-2.5-pro') || model.includes('gemini-2.5-flash')) {
+    return 65536; // Both 2.5 Pro and Flash support up to 65,536 output tokens
+  } else if (model.includes('gemini-2.0-flash-thinking')) {
+    return 65536; // Thinking models also support high output limits
+  }
+  return 8192; // Default fallback for older models
 };
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
@@ -87,6 +652,270 @@ const runWithTimeout = async <T,>(executor: (signal: AbortSignal) => Promise<T>,
 const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function'
   ? performance.now()
   : Date.now());
+
+const DONOR_THEME_SYSTEM_PROMPT = `You are an investigative analyst producing long-form, fully-cited reports.
+
+Hard rules:
+1) EXCLUDE funding from the Citizens Clean Elections Commission, EXCLUDE "Multiple Contributors," and EXCLUDE the candidate's own committees. Do not mention them.
+2) ALWAYS cite individual transactions: donor name, amount, date, and public_transaction_id.
+3) Build 12-20+ distinct donor themes (cap 30) in the first pass. Be exhaustive across multiple lenses:
+   * Industry/sector (employer, occupation, PAC category, entity_type/group)
+   * Corporate and family networks (shared surnames, shared addresses, known company officers)
+   * PAC coalitions and affiliate families
+   * Geography (out-of-state vs in-state, specific cities/regions)
+   * Timing patterns (donation clusters around bill/vote dates)
+   * Contribution size patterns (max-out donors, frequent small donors--excluding CCEC)
+4) For each theme, generate 15-30 search queries mixing jargon, synonyms, and statute phrasing (e.g., "A.R.S.", "section", "statute", "amend", "repeal", "exemption", "fee", "preemption").
+5) Iteratively call tools to run EXHAUSTIVE bill searches until two consecutive iterations yield no new bills or ~1000 bills are accumulated. Lower p_min_text_score stepwise: 0.35->0.25->0.15->0.10 when needed.
+6) Every cited bill must include at least one statute reference and one excerpt (from bills.bill_summary or bills.bill_text), plus the legislator's vote/sponsor context.
+7) Return STRICT JSON exactly matching the requested schema when asked. Prefer detailed, long outputs.`;
+
+const chunkArray = <T,>(values: T[], size: number): T[][] => {
+  if (size <= 0) return [values];
+  const result: T[][] = [];
+  for (let i = 0; i < values.length; i += size) {
+    result.push(values.slice(i, i + size));
+  }
+  return result;
+};
+
+const uniqueStrings = (items: string[]): string[] => Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
+
+const sanitizeSearchQuery = (query: string): string => {
+  if (!query) return '';
+  return query
+    .replace(/["']/g, '')
+    .replace(/\btitle\s+\d+\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const fetchPersonSessions = async (personId: number): Promise<{
+  personId: number;
+  sessionCount: number;
+  sessions: Session[];
+}> => {
+  const { data: rpcData, error: rpcError } = await supabase.rpc('get_person_sessions', {
+    p_person_id: personId,
+  });
+  if (rpcError) throw rpcError;
+
+  const sessionsFromRpc = (rpcData ?? []) as Array<{
+    session_id: number;
+    session_name: string | null;
+    year: number | null;
+    start_date: string | null;
+    end_date: string | null;
+    vote_count?: number | null;
+    date_range_display?: string | null;
+  }>;
+
+  const sessionIds = sessionsFromRpc.map((s) => s.session_id).filter((id) => Number.isFinite(id));
+
+  if (!sessionIds.length) {
+    return { personId, sessionCount: 0, sessions: [] };
+  }
+
+  const { data: mvDates, error: mvDatesError } = await supabase
+    .from('mv_sessions_with_dates')
+    .select('session_id, first_vote_date, last_vote_date, official_start_date, official_end_date, date_range_display')
+    .in('session_id', sessionIds);
+  if (mvDatesError) {
+    console.warn('mv_sessions_with_dates lookup failed, falling back to RPC values only', mvDatesError);
+  }
+
+  const mvDateMap = new Map<number, any>((mvDates ?? []).map((record: any) => [record.session_id, record]));
+
+  const { data: mvCounts, error: mvCountsError } = await supabase
+    .from('mv_person_session_bill_counts')
+    .select('session_id, bill_count')
+    .eq('person_id', personId)
+    .in('session_id', sessionIds);
+  if (mvCountsError) {
+    console.warn('mv_person_session_bill_counts lookup failed; defaulting vote counts to RPC values', mvCountsError);
+  }
+
+  const countsMap = new Map<number, number>((mvCounts ?? []).map((record: any) => [record.session_id, Number(record.bill_count) || 0]));
+
+  const sessions: Session[] = sessionsFromRpc.map((session) => {
+    const mv = mvDateMap.get(session.session_id) as any | undefined;
+    const start = mv?.first_vote_date ?? mv?.official_start_date ?? session.start_date ?? null;
+    const end = mv?.last_vote_date ?? mv?.official_end_date ?? session.end_date ?? null;
+    const dateRange = mv?.date_range_display ?? (start && end ? `${start} - ${end}` : '');
+    const voteCount = countsMap.get(session.session_id) ?? session.vote_count ?? 0;
+
+    return {
+      id: session.session_id,
+      name: session.session_name ?? `Session ${session.session_id}`,
+      startDate: start,
+      endDate: end,
+      dateRange,
+      voteCount,
+    };
+  });
+
+  return {
+    personId,
+    sessionCount: sessions.length,
+    sessions,
+  };
+};
+
+const buildTransactionWindowPayload = (args: {
+  personId?: number | null;
+  recipientEntityIds?: number[] | null;
+  sessionId: number;
+  includeTransactionEntityIds?: number[] | null;
+  daysBefore?: number;
+  daysAfter?: number;
+  minAmount?: number;
+  excludeNamePatterns?: string[] | null;
+  excludeSelfCommittees?: boolean;
+}) => {
+  const {
+    personId = null,
+    recipientEntityIds = null,
+    sessionId,
+    includeTransactionEntityIds = null,
+    daysBefore = 45,
+    daysAfter = 45,
+    minAmount = 0,
+    excludeNamePatterns = ['citizens clean elections', 'multiple contributors'],
+    excludeSelfCommittees = true,
+  } = args;
+
+  return {
+    p_person_id: personId,
+    p_recipient_entity_ids: recipientEntityIds,
+    p_session_id: sessionId,
+    p_include_transaction_entity_ids: includeTransactionEntityIds ?? [],
+    p_days_before: daysBefore,
+    p_days_after: daysAfter,
+    p_min_amount: minAmount,
+    p_exclude_entity_ids: null,
+    p_exclude_name_patterns: excludeNamePatterns ?? ['citizens clean elections', 'multiple contributors'],
+    p_exclude_self_committees: excludeSelfCommittees,
+    p_from: null,
+    p_to: null,
+  };
+};
+
+const listDonorTransactionsWindow = async (args: {
+  personId?: number | null;
+  recipientEntityIds?: number[] | null;
+  sessionId: number;
+  includeTransactionEntityIds?: number[] | null;
+  daysBefore?: number;
+  daysAfter?: number;
+  minAmount?: number;
+  excludeNamePatterns?: string[] | null;
+  excludeSelfCommittees?: boolean;
+}): Promise<DonorTransaction[]> => {
+  const payload = buildTransactionWindowPayload(args);
+  const { data, error } = await supabase.rpc('list_donor_transactions_window', payload);
+  if (error) throw error;
+  return (data ?? []) as DonorTransaction[];
+};
+
+const searchBillsForLegislatorRpc = async (args: {
+  sessionId: number;
+  personId: number;
+  searchTerms?: string[] | null;
+  queryVectors?: string[] | null;
+  minScore?: number;
+  limit?: number;
+  offset?: number;
+}): Promise<any[]> => {
+  const {
+    sessionId,
+    personId,
+    searchTerms = null,
+    queryVectors = null,
+    minScore = 0.3,
+    limit = 500,
+    offset = 0,
+  } = args;
+
+  const { data, error } = await supabase.rpc('search_bills_for_legislator_optimized', {
+    p_session_id: sessionId,
+    p_person_id: personId,
+    p_search_terms: searchTerms,
+    p_query_vecs: queryVectors,
+    p_min_text_score: minScore,
+    p_limit: limit,
+    p_offset: offset,
+  });
+
+  if (error) throw error;
+  return data ?? [];
+};
+
+function logAndExecute<T>(
+  functionName: string,
+  params: unknown,
+  execution: () => T | Promise<T>
+): T | Promise<T> {
+  const start = nowMs();
+  console.groupCollapsed(`[FUNCTION CALL] ==> ${functionName}`);
+  console.log('INPUT:', params);
+  console.groupEnd();
+
+  const finalize = (status: 'SUCCESS' | 'FAILED', payload: unknown) => {
+    const duration = Math.round(nowMs() - start);
+    console.groupCollapsed(`[FUNCTION CALL] <== ${functionName} ${status} (${duration}ms)`);
+    if (status === 'SUCCESS') {
+      console.log('OUTPUT:', payload);
+    } else {
+      console.error('ERROR:', payload);
+    }
+    console.groupEnd();
+  };
+
+  try {
+    const result = execution();
+    if (result && typeof (result as PromiseLike<T>).then === 'function') {
+      return Promise.resolve(result).then(
+        (value) => {
+          finalize('SUCCESS', value);
+          return value;
+        },
+        (error: unknown) => {
+          finalize('FAILED', error);
+          throw error;
+        }
+      ) as T | Promise<T>;
+    }
+
+    finalize('SUCCESS', result);
+    return result;
+  } catch (error: unknown) {
+    finalize('FAILED', error);
+    throw error;
+  }
+}
+
+const startFunctionLog = (functionName: string, params: unknown) => {
+  const start = nowMs();
+  console.groupCollapsed(`[FUNCTION CALL] ==> ${functionName}`);
+  console.log('INPUT:', params);
+  console.groupEnd();
+
+  const finalize = (status: 'SUCCESS' | 'FAILED', payload: unknown) => {
+    const duration = Math.round(nowMs() - start);
+    console.groupCollapsed(`[FUNCTION CALL] <== ${functionName} ${status} (${duration}ms)`);
+    if (status === 'SUCCESS') {
+      console.log('OUTPUT:', payload);
+    } else {
+      console.error('ERROR:', payload);
+    }
+    console.groupEnd();
+  };
+
+  return {
+    success: (output: unknown) => finalize('SUCCESS', output),
+    failure: (error: unknown) => finalize('FAILED', error),
+  };
+};
 
 const parseJsonLoose = (raw: string) => {
   const cleaned = raw.trim();
@@ -230,161 +1059,297 @@ const parseJsonLoose = (raw: string) => {
   };
 };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setSearchTerm(value);
-    setError(null);
-    if (searchTimeout) clearTimeout(searchTimeout);
-    const trimmedValue = value.trim();
-    if (trimmedValue.length < 2) {
-      setShowAutocomplete(false);
-      return;
+const extractJsonObject = (text: string) => {
+  const cleaned = text.replace(/```json\s*|```/g, '').trim();
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+    throw new Error('Response did not contain a JSON object.');
+  }
+  return cleaned.slice(firstBrace, lastBrace + 1);
+};
+
+// formatCurrency helper was previously used to render donor totals in interim logs;
+// removed to satisfy TypeScript unused checks.
+
+const callGeminiJson = async <T = any>(prompt: string, { system, temperature = baseGenerationConfig.temperature, model = 'gemini-2.5-flash' }: { system?: string; temperature?: number; model?: GeminiModel } = {}): Promise<T> => {
+  return logAndExecute('callGeminiJson', { prompt, system, temperature, model }, async () => {
+    if (!GEMINI_API_KEY) {
+      throw new Error('Missing Gemini API key');
     }
-    const timeout = setTimeout(() => searchCachedLegislators(trimmedValue), 300);
-    setSearchTimeout(timeout);
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+    const body: any = {
+      contents: [{ role: 'user', parts: [{ text: prompt }]}],
+      generationConfig: {
+        temperature,
+        maxOutputTokens: getMaxOutputTokens(model),
+      },
+    };
+
+    if (system) {
+      body.systemInstruction = { role: 'system', parts: [{ text: system }] };
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Gemini error: ${response.status} ${text}`);
+    }
+
+    const data = await response.json();
+    console.log('Gemini raw response:', JSON.stringify(data, null, 2));
+    const candidate = data?.candidates?.[0];
+    const parts = candidate?.content?.parts ?? [];
+    const textContent = parts.filter((part: any) => part.text).map((part: any) => part.text).join('\n');
+
+    if (!textContent) {
+      console.error('No text content found in Gemini response:', {
+        data,
+        candidate,
+        parts,
+        model
+      });
+      throw new Error(`Gemini returned no text content. Model: ${model}, Parts: ${JSON.stringify(parts)}`);
+    }
+
+    const jsonSlice = extractJsonObject(textContent);
+    return parseJsonLoose(jsonSlice) as T;
+  });
+};
+
+const callSupabaseRpc = async <T = any>(fn: string, args: Record<string, unknown>): Promise<T> => {
+  return logAndExecute(fn, args, async () => {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) {
+      throw error;
+    }
+    return data as T;
+  }) as Promise<T>;
+};
+
+const callMcpToolProxy = async <T = any>(tool: string, args: Record<string, unknown>): Promise<T> => {
+  return logAndExecute(`MCP Proxy: ${tool}`, args, async () => {
+    const response = await fetch(`/api/mcp/tools/${tool}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args ?? {}),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.success === false) {
+      const message = payload?.error || `Tool ${tool} failed with status ${response.status}`;
+      throw new Error(message);
+    }
+    return (payload.result ?? payload) as T;
+  }) as Promise<T>;
+};
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    return logAndExecute<void>('handleInputChange', { value: e.target.value }, () => {
+      const value = e.target.value;
+      setSearchTerm(value);
+      setError(null);
+      if (searchTimeout) clearTimeout(searchTimeout);
+      const trimmedValue = value.trim();
+      if (trimmedValue.length < 2) {
+        setShowAutocomplete(false);
+        return;
+      }
+      const timeout = setTimeout(() => searchCachedLegislators(trimmedValue), 300);
+      setSearchTimeout(timeout);
+    });
   };
 
   const searchCachedLegislators = async (term: string) => {
-    try {
+    return (logAndExecute<Person[]>('searchCachedLegislators', { term }, async () => {
       const people = await searchPeopleWithSessions({ query: term, limit: 10 });
 
       const mappedData: Person[] = people
         .map((person) => ({
           ...person,
-          extra: person.summary ?? `${person.legislator_count} legislators • ${person.entity_count} entities`,
+          extra: person.summary ?? `${person.legislator_count} legislators * ${person.entity_count} entities`,
         }))
         .filter((item) => (item.all_legislator_ids?.length || 0) > 0);
 
       setAutocompleteResults(mappedData);
       setShowAutocomplete(mappedData.length > 0);
-    } catch (error) {
-      console.error('Autocomplete error:', error);
+      return mappedData;
+    }) as Promise<Person[]>).catch((err) => {
+      console.error('Autocomplete error:', err);
       setAutocompleteResults([]);
       setShowAutocomplete(false);
-    }
+      return [];
+    });
   };
 
   const selectLegislator = (person: Partial<Person>) => {
-    setSearchTerm(person.display_name || '');
-    setShowAutocomplete(false);
-    setCurrentLegislatorIds(person.all_legislator_ids || []);
-    searchLegislator(person as Person);
+    return logAndExecute<void>('selectLegislator', { person }, () => {
+      setSearchTerm(person.display_name || '');
+      setShowAutocomplete(false);
+      setSessionLegislatorMap({});
+      applyLegislatorIds(person.all_legislator_ids ?? []);
+      searchLegislator(person as Person);
+    });
   };
 
-  const searchLegislator = async (selectedPerson?: Person) => {
+const searchLegislator = async (selectedPerson?: Person) => {
     const name = selectedPerson?.display_name || searchTerm;
     if (!name) {
       setError('Please enter or select a legislator name');
       return;
     }
-    setCurrentLegislatorIds(selectedPerson?.all_legislator_ids || []);
+
+    setSessionLegislatorMap({});
+    applyLegislatorIds(selectedPerson?.all_legislator_ids ?? []);
     setCurrentEntityIds([]);
     setSearchingLegislator(true);
     setError(null);
-    try {
-      let sessions: Session[] = [];
-      let personId: number | null = null;
-      if (selectedPerson?.person_id) {
-        personId = selectedPerson.person_id;
 
-        let sessionRows: any[] = [];
+    return logAndExecute<{ personId: number | null; sessionCount: number } | null>(
+      'searchLegislator',
+      { name, selectedPerson },
+      async () => {
         try {
-          const { data: sessionData, error: sessionError } = await supabase.rpc('get_person_sessions', { p_person_id: personId });
-          if (sessionError) throw sessionError;
-          sessionRows = sessionData || [];
-        } catch (sessionError) {
-          console.warn('get_person_sessions RPC failed, attempting direct query fallback', sessionError);
-          try {
-            const { data: legSessionRows, error: legSessionError } = await supabase
-              .from('rs_person_leg_sessions')
-              .select('session_id')
-              .eq('person_id', personId);
-            if (legSessionError) throw legSessionError;
+          let sessions: Session[] = [];
+          let personId: number | null = null;
 
-            const sessionIds = Array.from(new Set((legSessionRows || [])
-              .map((row: any) => Number(row.session_id))
-              .filter((id) => Number.isFinite(id))));
+          if (selectedPerson?.person_id) {
+            personId = selectedPerson.person_id;
 
-            if (sessionIds.length) {
-              const { data: directSessions, error: directError } = await supabase
-                .from('mv_sessions_with_dates')
-                .select('session_id, session_name, year, calculated_start, calculated_end, total_votes, date_range_display')
-                .in('session_id', sessionIds);
-              if (directError) throw directError;
-              sessionRows = directSessions || [];
+            try {
+              const sessionResult = await fetchPersonSessions(personId);
+              sessions = sessionResult.sessions.map((session) => ({
+                id: session.id,
+                name: session.name,
+                dateRange: session.dateRange,
+                voteCount: session.voteCount,
+                startDate: session.startDate,
+                endDate: session.endDate,
+              }));
+            } catch (sessionsError) {
+              console.error('Failed to load sessions for person', sessionsError);
+              sessions = [];
+            }
+
+            try {
+              if (!selectedPerson?.all_legislator_ids?.length) {
+                const { data: legislatorRows, error: legislatorError } = await supabase
+                  .from('rs_person_legislators')
+                  .select('legislator_id')
+                  .eq('person_id', personId);
+                if (!legislatorError && legislatorRows) {
+                  const uniqueIds = Array.from(new Set(legislatorRows.map((row: any) => Number(row.legislator_id))));
+                  applyLegislatorIds(uniqueIds);
+                }
+              } else {
+                applyLegislatorIds(selectedPerson.all_legislator_ids);
+              }
+
+              const { data: entityRows, error: entityError } = await supabase
+                .from('rs_person_cf_entities')
+                .select('entity_id')
+                .eq('person_id', personId);
+              if (!entityError && entityRows) {
+              const entities = Array.from(new Set(entityRows.map((row: any) => Number(row.entity_id))));
+              setCurrentEntityIds(entities);
             } else {
-              sessionRows = [];
+              setCurrentEntityIds([]);
             }
-          } catch (fallbackError) {
-            console.error('Failed to load sessions for person via fallback path', fallbackError);
-            sessionRows = [];
-          }
-        }
 
-        const sessionMap = new Map();
-        (sessionRows || []).forEach((s: any) => {
-          if (!sessionMap.has(s.session_id)) {
-            sessionMap.set(s.session_id, {
-              id: s.session_id,
-              name: s.session_name,
-              dateRange: s.date_range_display,
-              vote_count: s.vote_count ?? s.total_votes,
-              start_date: s.start_date ?? s.calculated_start,
-              end_date: s.end_date ?? s.calculated_end
-            });
-          }
-        });
-        sessions = Array.from(sessionMap.values());
+              try {
+                const { data: sessionLegRows, error: sessionLegError } = await supabase
+                  .from('rs_person_leg_sessions')
+                  .select('session_id, legislator_id')
+                  .eq('person_id', personId);
 
-        // Fetch legislator IDs if not already populated
-        try {
-          if (!selectedPerson?.all_legislator_ids?.length) {
-            const { data: legislatorRows, error: legislatorError } = await supabase
-              .from('rs_person_legislators')
-              .select('legislator_id')
-              .eq('person_id', personId);
-            if (!legislatorError && legislatorRows) {
-              const uniqueIds = Array.from(new Set(legislatorRows.map((row: any) => Number(row.legislator_id))));
-              setCurrentLegislatorIds(uniqueIds);
+                if (!sessionLegError && sessionLegRows) {
+                  const sessionMap: Record<number, number[]> = {};
+                  sessionLegRows.forEach((row: any) => {
+                    const sessionId = Number(row.session_id);
+                    const legislatorId = Number(row.legislator_id);
+                    if (!Number.isFinite(sessionId) || !Number.isFinite(legislatorId)) return;
+                    if (!sessionMap[sessionId]) {
+                      sessionMap[sessionId] = [];
+                    }
+                    sessionMap[sessionId].push(legislatorId);
+                  });
+
+                  Object.keys(sessionMap).forEach((key) => {
+                    const sessionId = Number(key);
+                    sessionMap[sessionId] = normalizeLegislatorIds(sessionMap[sessionId]);
+                  });
+
+                  const combinedFromSessions = normalizeLegislatorIds(
+                    sessionLegRows.map((row: any) => Number(row.legislator_id)),
+                  );
+                  if (combinedFromSessions.length) {
+                    applyLegislatorIds(combinedFromSessions);
+                  }
+                  setSessionLegislatorMap(sessionMap);
+                } else {
+                  setSessionLegislatorMap({});
+                }
+              } catch (sessionLegErr) {
+                console.warn('Failed to load session->legislator mapping', sessionLegErr);
+                setSessionLegislatorMap({});
+              }
+            } catch (fetchErr) {
+              console.log('Optional legislator/entity lookup failed', fetchErr);
             }
-          } else {
-            setCurrentLegislatorIds(Array.from(new Set(selectedPerson.all_legislator_ids)));
           }
 
-          const { data: entityRows, error: entityError } = await supabase
-            .from('rs_person_cf_entities')
-            .select('entity_id')
-            .eq('person_id', personId);
-          if (!entityError && entityRows) {
-            const entities = Array.from(new Set(entityRows.map((row: any) => Number(row.entity_id))));
-            setCurrentEntityIds(entities);
-          } else {
-            setCurrentEntityIds([]);
-          }
-        } catch (fetchErr) {
-          console.log('Optional legislator/entity lookup failed', fetchErr);
+        setCurrentLegislator(name);
+        setCurrentPersonId(personId);
+        setAvailableSessions(sessions);
+        setCurrentStep('sessions');
+        return {
+          personId,
+          sessionCount: sessions.length,
+          sessions: sessions.map((session) => ({
+            id: session.id,
+            name: session.name,
+            dateRange: session.dateRange,
+            voteCount: session.voteCount,
+            startDate: session.startDate,
+            endDate: session.endDate,
+          })),
+        };
+        } catch (err: any) {
+          setError(err?.message || 'Failed to search legislator');
+          throw err;
+        } finally {
+          setSearchingLegislator(false);
         }
       }
-      setCurrentLegislator(name);
-      setCurrentPersonId(personId);
-      setAvailableSessions(sessions);
-      setCurrentStep('sessions');
-    } catch (err: any) {
-      setError(err.message || 'Failed to search legislator');
-    } finally {
-      setSearchingLegislator(false);
-    }
+    );
   };
 
   const toggleSession = (sessionId: SessionSelection) => {
-    setSelectedSessions((prev: SessionSelection[]) => {
-      const exists = prev.includes(sessionId);
-      if (exists) return prev.filter((s) => s !== sessionId);
-      return [...prev, sessionId];
+    logAndExecute<SessionSelection[]>('toggleSession', { sessionId, previous: selectedSessions }, () => {
+      let next: SessionSelection[] = [];
+      setSelectedSessions((prev: SessionSelection[]) => {
+        const exists = prev.includes(sessionId);
+        next = exists ? prev.filter((s) => s !== sessionId) : [...prev, sessionId];
+        return next;
+      });
+      return next;
     });
   };
 
   const runTwoPhaseAnalysisInternal = async () => {
+    const logger = startFunctionLog('runTwoPhaseAnalysisInternal', {
+      selectedSessions,
+      analysisMode,
+      currentPersonId,
+      customInstructions: customInstructions?.trim() ? '[provided]' : '[empty]'
+    });
     try {
       const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
       const model = genAI.getGenerativeModel({
@@ -424,9 +1389,9 @@ const parseJsonLoose = (raw: string) => {
 
           sessionName = 'Combined Sessions';
           startDate = sessions.reduce((earliest, s) =>
-            s.start_date && (!earliest || s.start_date < earliest) ? s.start_date : earliest, '');
+            s.startDate && (!earliest || s.startDate < earliest) ? s.startDate : earliest, '');
           endDate = sessions.reduce((latest, s) =>
-            s.end_date && (!latest || s.end_date > latest) ? s.end_date : latest, '');
+            s.endDate && (!latest || s.endDate > latest) ? s.endDate : latest, '');
           sessionIdsForQuery = Array.from(new Set(sessions.map(s => s.id).filter((id): id is number => typeof id === 'number')));
         } else {
           const session = availableSessions.find(s => s.id === sessionId);
@@ -434,8 +1399,8 @@ const parseJsonLoose = (raw: string) => {
             throw new Error(`Session ${sessionId} not found`);
           }
           sessionName = session.name;
-          startDate = session.start_date || '';
-          endDate = session.end_date || '';
+          startDate = session.startDate || '';
+          endDate = session.endDate || '';
           sessionIdsForQuery = [session.id];
         }
 
@@ -552,20 +1517,40 @@ const parseJsonLoose = (raw: string) => {
 
         const sessionStartDateObj = new Date(startDate);
         const donorRecords = donations.map((donation: any) => {
-          const transactionDate = donation.transaction_date || donation.donation_date;
-          const amountNumber = Number(donation.amount ?? donation.donation_amt ?? 0);
+          const transactionDate = donation.donation_date;
+          const amountNumber = Number(donation.donation_amt ?? 0);
           const daysFromSession = transactionDate && !Number.isNaN(sessionStartDateObj.getTime())
             ? Math.round((new Date(transactionDate).getTime() - sessionStartDateObj.getTime()) / (1000 * 60 * 60 * 24))
             : null;
+
+          // Use entity type name from database lookup, with fallback logic
+          let donorType = donation.entity_type_name || 'Unknown';
+
+          // If no entity type name, use fallback logic
+          if (!donation.entity_type_name) {
+            if (donation.is_pac) {
+              donorType = 'PAC';
+            } else if (donation.is_corporate) {
+              donorType = 'Business/Corporate';
+            } else if (donation.donation_type) {
+              donorType = donation.donation_type;
+            } else {
+              donorType = 'Individual';
+            }
+          }
+
           return {
-            name: donation.clean_donor_name || donation.donor_name || donation.received_from_or_paid_to || 'Unknown Donor',
-            employer: donation.transaction_employer || donation.donor_employer || null,
-            occupation: donation.transaction_occupation || donation.donor_occupation || null,
-            type: donation.donor_type || donation.entity_type || donation.entity_description || 'Unknown',
+            name: donation.donor_name || 'Unknown Donor',
+            employer: donation.donor_employer || null,
+            occupation: donation.donor_occupation || null,
+            type: donorType,
             amount: amountNumber,
-            donation_id: donation.donation_id || donation.transaction_id || donation.id || null,
+            donation_id: donation.id || null,
             transaction_date: transactionDate,
             days_from_session: daysFromSession,
+            donation_type: donation.donation_type,
+            is_pac: donation.is_pac,
+            is_corporate: donation.is_corporate,
           };
         });
 
@@ -1131,16 +2116,31 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       setProgressPercent(100);
       setProgressText('Analysis complete');
       setCurrentStep('results');
+
+      logger.success({
+        resultsCount: results.length,
+        previewCount: Object.keys(previewUpdates).length,
+        sessionsAnalyzed: selectedSessions.length,
+      });
     } catch (analysisError: any) {
       console.error('Analysis error:', analysisError);
+      logger.failure(analysisError);
       throw analysisError;
     }
   };
 
   const runSingleCallAnalysis = async () => {
-    if (!GEMINI_API_KEY) throw new Error('Missing Gemini API key');
+    const logger = startFunctionLog('runSingleCallAnalysis', {
+      selectedSessions,
+      currentPersonId,
+      currentLegislatorIds,
+      currentEntityIds,
+    });
 
-    const availableFunctions: Record<string, {
+    try {
+      if (!GEMINI_API_KEY) throw new Error('Missing Gemini API key');
+
+      const availableFunctions: Record<string, {
       description: string;
       parameters: any;
       handler: (args: any) => Promise<any>;
@@ -1271,6 +2271,25 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
           return data?.[0] || null;
         }
       },
+      get_bill_texts_array: {
+        description: 'Fetch full bill text and summary for multiple bills at once (more efficient than individual calls).',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            bill_ids: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.NUMBER },
+              description: 'Array of bill IDs to fetch'
+            }
+          },
+          required: ['bill_ids']
+        },
+        handler: async (args: any) => {
+          const { data, error } = await supabase.rpc('get_bill_texts_array', { p_bill_ids: args.bill_ids });
+          if (error) throw error;
+          return data || [];
+        }
+      },
       get_bill_rts: {
         description: 'Request-to-Speak positions for a bill.',
         parameters: {
@@ -1317,18 +2336,11 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       numericSessions = availableSessions.map(s => s.id);
     }
     const sessionMetadata = availableSessions
-      .filter(s => numericSessions.includes(s.id))
-      .map(s => ({
-        id: s.id,
-        name: s.name,
-        start_date: s.start_date,
-        end_date: s.end_date,
-        vote_count: s.vote_count
-      }));
+      .filter(s => numericSessions.includes(s.id));
 
     const combinedSessionRange = sessionMetadata.reduce<{ start?: string; end?: string }>((acc, session) => {
-      if (session.start_date && (!acc.start || session.start_date < acc.start)) acc.start = session.start_date;
-      if (session.end_date && (!acc.end || session.end_date > acc.end)) acc.end = session.end_date;
+      if (session.startDate && (!acc.start || session.startDate < acc.start)) acc.start = session.startDate;
+      if (session.endDate && (!acc.end || session.endDate > acc.end)) acc.end = session.endDate;
       return acc;
     }, {});
 
@@ -1354,11 +2366,11 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         return sessionCache.get(sessionId) || null;
       }
 
-      const { data, error } = await supabase
-        .from('mv_sessions_with_dates')
-        .select('session_id, session_name, calculated_start, calculated_end, total_votes, date_range_display')
-        .eq('session_id', sessionId)
-        .maybeSingle();
+    const { data, error } = await supabase
+      .from('mv_sessions_with_dates')
+      .select('session_id, session_name, first_vote_date, last_vote_date, official_start_date, official_end_date, total_votes, date_range_display')
+      .eq('session_id', sessionId)
+      .maybeSingle();
 
       if (error) {
         console.warn('Unable to fetch metadata for session', sessionId, error);
@@ -1367,14 +2379,17 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
       if (!data) return null;
 
-      const meta: Session = {
-        id: data.session_id,
-        name: data.session_name,
-        dateRange: data.date_range_display,
-        vote_count: data.total_votes,
-        start_date: data.calculated_start,
-        end_date: data.calculated_end,
-      };
+    const start = data.first_vote_date ?? data.official_start_date ?? null;
+    const end = data.last_vote_date ?? data.official_end_date ?? null;
+
+    const meta: Session = {
+      id: data.session_id,
+      name: data.session_name ?? `Session ${data.session_id}`,
+      dateRange: data.date_range_display ?? (start && end ? `${start} - ${end}` : ''),
+      voteCount: Number(data.total_votes ?? 0),
+      startDate: start,
+      endDate: end,
+    };
 
       sessionCache.set(sessionId, meta);
       return meta;
@@ -1399,9 +2414,9 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
         sessionName = 'Combined Sessions';
         startDate = combinedSessions.reduce((earliest, s) =>
-          s.start_date && (!earliest || s.start_date < earliest) ? s.start_date : earliest, '');
+          s.startDate && (!earliest || s.startDate < earliest) ? s.startDate : earliest, '');
         endDate = combinedSessions.reduce((latest, s) =>
-          s.end_date && (!latest || s.end_date > latest) ? s.end_date : latest, '');
+          s.endDate && (!latest || s.endDate > latest) ? s.endDate : latest, '');
         sessionIdsForQuery = Array.from(new Set(combinedSessions.map(s => s.id)));
       } else {
         const session = await fetchSessionMeta(selection);
@@ -1409,8 +2424,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
           throw new Error(`Session ${selection} not found`);
         }
         sessionName = session.name;
-        startDate = session.start_date || '';
-        endDate = session.end_date || '';
+        startDate = session.startDate || '';
+        endDate = session.endDate || '';
         sessionIdsForQuery = [session.id];
       }
 
@@ -1491,20 +2506,40 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
       const sessionStartDateObj = new Date(startDate);
       const baselineDonations = (donations || []).map((donation: any) => {
-        const transactionDate = donation.transaction_date || donation.donation_date;
-        const amountNumber = Number(donation.amount ?? donation.donation_amt ?? 0);
+        const transactionDate = donation.donation_date;
+        const amountNumber = Number(donation.donation_amt ?? 0);
         const daysFromSession = transactionDate && !Number.isNaN(sessionStartDateObj.getTime())
           ? Math.round((new Date(transactionDate).getTime() - sessionStartDateObj.getTime()) / (1000 * 60 * 60 * 24))
           : null;
+
+        // Use entity type name from database lookup, with fallback logic
+        let donorType = donation.entity_type_name || 'Unknown';
+
+        // If no entity type name, use fallback logic
+        if (!donation.entity_type_name) {
+          if (donation.is_pac) {
+            donorType = 'PAC';
+          } else if (donation.is_corporate) {
+            donorType = 'Business/Corporate';
+          } else if (donation.donation_type) {
+            donorType = donation.donation_type;
+          } else {
+            donorType = 'Individual';
+          }
+        }
+
         return {
-          name: donation.clean_donor_name || donation.donor_name || donation.received_from_or_paid_to || 'Unknown Donor',
-          employer: donation.transaction_employer || donation.donor_employer || null,
-          occupation: donation.transaction_occupation || donation.donor_occupation || null,
-          type: donation.donor_type || donation.entity_type || donation.entity_description || 'Unknown',
+          name: donation.donor_name || 'Unknown Donor',
+          employer: donation.donor_employer || null,
+          occupation: donation.donor_occupation || null,
+          type: donorType,
           amount: amountNumber,
-          donation_id: donation.donation_id || donation.transaction_id || donation.id || null,
+          donation_id: donation.id || null,
           transaction_date: transactionDate,
           days_from_session: daysFromSession,
+          donation_type: donation.donation_type,
+          is_pac: donation.is_pac,
+          is_corporate: donation.is_corporate,
         };
       });
 
@@ -1541,7 +2576,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
     const singlePrompt = `${customBlockSingle}Single-Pass Investigative Analysis\n\n` +
       `You are an investigative journalist investigating links between campaign donors and legislative activity for ${currentLegislator}.\n` +
-      `You may call the provided tools (resolve_legislator, get_sessions, get_votes, get_donations, get_sponsorships, get_bill_details, get_bill_rts).\n` +
+      `You may call the provided tools (resolve_legislator, get_sessions, get_votes, get_donations, get_sponsorships, get_bill_details, get_bill_texts_array, get_bill_rts).\n` +
       `Always cite evidence directly from bill details and RTS positions when making claims.\n` +
       `Focus on identifying THEMES tying donors to bills, rather than individual donor-bill pairs.\n` +
       `For each theme, list every relevant bill and every related donor exhaustively.\n` +
@@ -1606,7 +2641,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       return fn.handler(args || {});
     };
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${singleCallModel}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
     const contents: any[] = [
       {
@@ -1625,7 +2660,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         tools: toolDeclarations,
         generationConfig: {
           temperature: baseGenerationConfig.temperature,
-          maxOutputTokens: baseGenerationConfig.maxOutputTokens,
+          maxOutputTokens: getMaxOutputTokens(singleCallModel),
         },
       };
 
@@ -1706,41 +2741,658 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
     }
 
     const jsonSlice = sanitized.slice(firstBrace, lastBrace + 1);
-    const report = parseJsonLoose(jsonSlice);
+      const report = parseJsonLoose(jsonSlice);
 
-    const summaryName = analysisMode === 'singleCall' && selectedSessions.length > 1
-      ? 'Combined Single-Pass Analysis'
-      : (availableSessions.find(s => s.id === selectedSessions[0])?.name || 'Single-Pass Analysis');
+      const summaryName = analysisMode === 'singleCall' && selectedSessions.length > 1
+        ? 'Combined Single-Pass Analysis'
+        : (availableSessions.find(s => s.id === selectedSessions[0])?.name || 'Single-Pass Analysis');
 
-    setAnalysisResults([{ sessionName: summaryName, report }]);
-    setProgressPercent(100);
-    setProgressText('Single-pass analysis complete');
-    setCurrentStep('results');
+      setAnalysisResults([{ sessionName: summaryName, report }]);
+      setProgressPercent(100);
+      setProgressText('Single-pass analysis complete');
+      setCurrentStep('results');
+
+      logger.success({ summaryName, hasReport: Boolean(report) });
+    } catch (singleError: any) {
+      logger.failure(singleError);
+      throw singleError;
+    }
+  };
+
+  const runDonorThemePreparation = async () => {
+    const logger = startFunctionLog('runDonorThemePreparation', {
+      selectedSessions,
+      currentLegislator,
+      currentLegislatorIds,
+      primaryLegislatorId,
+    });
+
+    try {
+      const numericSessions = selectedSessions.filter((s): s is number => typeof s === 'number');
+      if (!numericSessions.length) {
+        throw new Error('Please select a specific session for donor analysis.');
+      }
+
+      const sessionId = numericSessions[0];
+      const sessionMeta = availableSessions.find((s) => s.id === sessionId);
+      if (!sessionMeta) {
+        throw new Error('Session metadata unavailable. Please refresh and try again.');
+      }
+
+      const sessionSpecificIds = sessionLegislatorMap[sessionId] ?? [];
+      const legislatorPool = sessionSpecificIds.length ? sessionSpecificIds : currentLegislatorIds;
+      const legislatorId = legislatorPool[0] ?? primaryLegislatorId;
+      if (!legislatorId) {
+        throw new Error('No legislator ID resolved for this person.');
+      }
+
+      setDonorThemeProgress({ text: 'Gathering donor data...', percent: 15 });
+
+      let entityIds = currentEntityIds;
+      if (!entityIds.length) {
+        try {
+          const entityRows = await callSupabaseRpc<{ entity_id: number }[]>('recipient_entity_ids_for_legislator', {
+            p_legislator_id: legislatorId,
+          });
+          entityIds = Array.from(new Set((entityRows || []).map((row) => Number(row.entity_id)).filter((id) => Number.isFinite(id))));
+          setCurrentEntityIds(entityIds);
+        } catch (err) {
+          console.warn('Failed to load legislator recipient entities via Supabase RPC:', err);
+          try {
+            const proxyRows = await callMcpToolProxy<{ entity_id: number }[]>('recipient_entity_ids_for_legislator', {
+              p_legislator_id: legislatorId,
+            });
+            entityIds = Array.from(new Set((proxyRows || []).map((row) => Number(row.entity_id)).filter((id) => Number.isFinite(id))));
+            setCurrentEntityIds(entityIds);
+          } catch (proxyError) {
+            console.warn('MCP fallback for recipient_entity_ids_for_legislator failed:', proxyError);
+            entityIds = [];
+          }
+        }
+      }
+
+      const donorArgs: Record<string, unknown> = {
+        p_person_id: currentPersonId,
+        p_recipient_entity_ids: entityIds.length ? entityIds : null,
+        p_session_id: sessionId,
+        p_days_before: 90,  // Match updated database function default
+        p_days_after: 45,
+        p_min_amount: 100,  // Only donations over $100
+        p_limit: 500,      // Reduce limit
+        p_query_vec: null,
+      };
+
+      let donors: DonorRecord[] = [];
+      try {
+        donors = (await callSupabaseRpc<DonorRecord[]>('search_donor_totals_window', donorArgs)) || [];
+      } catch (primaryError) {
+        console.warn('search_donor_totals_window RPC failed, attempting MCP fallback:', primaryError);
+        try {
+          donors = await callMcpToolProxy<DonorRecord[]>('search_donor_totals_window', donorArgs);
+        } catch (proxyError) {
+          console.error('MCP fallback for search_donor_totals_window failed:', proxyError);
+          throw primaryError;
+        }
+      }
+
+      if (!donors.length) {
+        throw new Error('No donors found for the selected legislator and session.');
+      }
+
+      const sortedDonors = donors.sort((a, b) => Number(b.total_to_recipient ?? 0) - Number(a.total_to_recipient ?? 0));
+      // Limit to top 100 donors for Gemini processing to avoid token limits
+      const topDonors = sortedDonors.slice(0, 100);
+      const topDonorIds = topDonors.map((donor) => Number(donor.transaction_entity_id)).filter((id) => Number.isFinite(id));
+
+      let donorTransactions: DonorTransaction[] = [];
+      const transactionPayload = buildTransactionWindowPayload({
+        personId: currentPersonId,
+        recipientEntityIds: entityIds,
+        sessionId,
+        includeTransactionEntityIds: topDonorIds,
+      });
+      try {
+        donorTransactions = await listDonorTransactionsWindow({
+          personId: currentPersonId,
+          recipientEntityIds: entityIds,
+          sessionId,
+          includeTransactionEntityIds: topDonorIds,
+        });
+      } catch (primaryTxError) {
+        console.warn('list_donor_transactions_window RPC failed, attempting MCP fallback:', primaryTxError, transactionPayload);
+        try {
+          donorTransactions = await callMcpToolProxy<DonorTransaction[]>('list_donor_transactions_window', transactionPayload);
+        } catch (proxyTxError) {
+          console.warn('MCP fallback for list_donor_transactions_window failed:', proxyTxError);
+          donorTransactions = [];
+        }
+      }
+
+      const filteredTransactions = donorTransactions
+        .filter((txn) => topDonorIds.includes(Number(txn.transaction_entity_id)))
+        .filter((txn) => Number(txn.amount) >= 100); // Only transactions over $100 for Gemini processing
+
+      // Further limit transactions to avoid token limits - take largest transactions per donor
+      const transactionsForGemini = filteredTransactions
+        .sort((a, b) => Number(b.amount) - Number(a.amount))
+        .slice(0, 300); // Limit to top 300 transactions
+
+      setDonorThemeProgress({ text: 'Deriving donor themes...', percent: 45 });
+
+      const themePrompt = `You are identifying donor themes for legislator ${currentLegislator || 'Unknown legislator'} during ${sessionMeta.name}.
+
+INPUT:
+donor_totals = ${JSON.stringify(topDonors, null, 2)}
+
+donor_transactions = ${JSON.stringify(transactionsForGemini, null, 2)}
+
+TASK:
+Produce 5-15 donor themes that account for ALL major donors provided. Sort themes by total dollar amount (highest first). Build themes across multiple lenses and DO NOT collapse distinct sectors into one bucket. Every significant donor should be placed in a theme - do not leave major donors unaccounted for.
+
+Theme discovery lenses (use ALL that apply):
+1) Industry/Sector clusters: homebuilders/real estate developers; construction contractors; private prisons & corrections; law enforcement associations; health systems; health insurers; specialty medical PACs; pharmaceutical & PBM; nursing homes & assisted living; dentists & dental PACs; optometry/ophthalmology; utilities/power; gas; telecom/cable/broadband; data centers; mining; water/agriculture/irrigation; banks/finance/insurance; payday/title lending; car dealers & auto services; hospitality/alcohol; funeral services; education (charter/private schools, school mgmt companies); tribal governments & gaming; technology; logistics/rail/trucking; municipalities/zoning/annexation; chambers/trade associations.
+2) Corporate & Family networks: same employer family (e.g., Robson Communities); repeated surnames with same address or employer; officers/owners across multiple entities.
+3) PAC families/affiliates: e.g., Realtors, hospitals, utilities, telecom, builders, private corrections, insurers, pharma, etc.
+4) Geography: out-of-state donors (by state), in-state clusters (Phoenix/Scottsdale/Tucson, etc.).
+5) Timing patterns: donation clusters in the 30-60 days before/after key bill votes affecting that sector.
+6) Contribution size: max-out amounts, repeated medium contributions across a network.
+
+OUTPUT (STRICT JSON):
+{
+  "themes": [
+    {
+      "id": "kebab-case-unique",
+      "title": "concise title",
+      "description": "3-5 sentences explaining the pattern and why it matters",
+      "industry_tags": ["sector","subsector","keywords"],
+      "heuristics_used": ["industry_cluster","family_network","pac_family","geography","timing","size_pattern"],
+      "donor_ids": [transaction_entity_id,...],
+      "donor_names": ["..."],
+      "donor_totals": [5000.00, 2500.00, ...],
+      "evidence": [
+        "Short bullets citing donors and data points (amounts/dates/relationships)."
+      ],
+      "query_suggestions": ["..."],
+      "confidence": 0.0-1.0
+    }
+  ]
+}
+
+Notes:
+- Use the individual transactions to justify grouping (e.g., date clusters, repeat donors, same employer).
+- Do not include excluded donors (CCEC, 'Multiple Contributors', candidate's own committees).
+- CRITICAL: Include donor_totals array with the total donation amount for each donor (must match the order of donor_names)
+- Sort themes by total theme value (sum of all donor_totals in theme)
+- Account for ALL major donors - every donor over $1000 should appear in a theme
+- Generate 5-10 broad query_suggestions per theme (use general policy areas, not specific jargon).
+`;
+
+      const themesResponse = await callGeminiJson<{ themes?: DonorTheme[] }>(themePrompt, {
+        system: DONOR_THEME_SYSTEM_PROMPT,
+        temperature: 0.25,
+        model: themeGenerationModel,
+      });
+
+      const themes = (themesResponse?.themes || []).map((theme, idx) => ({
+        id: (theme.id || `THEME_${idx + 1}`).trim(),
+        title: (theme.title || `Theme ${idx + 1}`).trim(),
+        description: (theme.description || '').trim(),
+        summary: theme.summary?.trim() || '',
+        industry_tags: (theme.industry_tags || []).map((tag: string) => tag.trim()).filter(Boolean),
+        heuristics_used: (theme.heuristics_used || []).map((h: string) => h.trim()).filter(Boolean),
+        evidence: (theme.evidence || []).map((line: string) => line.trim()).filter(Boolean),
+        query_suggestions: uniqueStrings(theme.query_suggestions || []),
+        donor_ids: Array.from(new Set((theme.donor_ids || []).map((id: number) => Number(id)).filter((id) => Number.isFinite(id)))),
+        donor_names: (theme.donor_names || []).map((name: string) => name.trim()).filter(Boolean),
+        donor_totals: (theme.donor_totals || []).map((total: number) => Number(total)).filter((total) => Number.isFinite(total)),
+        confidence: typeof theme.confidence === 'number' ? Math.max(0, Math.min(1, theme.confidence)) : undefined,
+      })).filter((theme) => theme.title);
+
+      if (!themes.length) {
+        throw new Error('Gemini did not produce any donor themes.');
+      }
+
+      setDonorThemes(themes);
+      setDonorThemeContext({
+        legislatorName: currentLegislator || '',
+        sessionId,
+        sessionName: sessionMeta.name,
+        sessionIdsForBills: [sessionId],
+        entityIds,
+        legislatorIds: currentLegislatorIds,
+        primaryLegislatorId: legislatorId,
+        sessionLegislatorMap,
+        donors: topDonors,
+        transactions: filteredTransactions,
+        daysBefore: 90,
+        daysAfter: 45,
+        sessionStartDate: sessionMeta.startDate,
+        sessionEndDate: sessionMeta.endDate,
+      });
+
+      setDonorThemeProgress(null);
+      setCurrentStep('donorThemeThemes');
+
+      // Load existing reports for themes after setting the themes
+      setTimeout(() => loadExistingReportsForThemes(), 100);
+
+      logger.success({
+        themeCount: themes.length,
+        donorCount: topDonors.length,
+        transactionCount: filteredTransactions.length,
+      });
+    } catch (err) {
+      logger.failure(err);
+      throw err;
+    }
+  };
+
+  const runDonorThemeAnalysis = async (theme: DonorTheme) => {
+    if (!donorThemeContext) {
+      throw new Error('Donor theme context is missing. Please restart the analysis.');
+    }
+
+    if (!currentPersonId) {
+      throw new Error('No person ID available for bill search.');
+    }
+
+    const logger = startFunctionLog('runDonorThemeAnalysis', {
+      themeId: theme.id,
+      themeTitle: theme.title,
+      sessionId: donorThemeContext.sessionId,
+      personId: currentPersonId,
+    });
+
+    try {
+      setDonorThemeProgress({ text: 'Generating bill search queries...', percent: 15 });
+
+      // Intentionally not used in the expansion prompt to keep it concise.
+
+      let queries = uniqueStrings(theme.query_suggestions || []);
+
+      const needsExpansion = queries.length < 10;
+      if (needsExpansion) {
+        try {
+          const expansionPrompt = `For THEME "${theme.title}" create 5-8 broad search queries that combine:
+ - sector jargon and synonyms,
+ - Arizona statute phrasing (A.R.S., section, amend, repeal),
+ - bill lifecycle terms (introduced, engrossed, enrolled),
+ - committee names that touch this sector.
+
+Keep each query as a short, plain phrase about the topic; avoid quotes, boolean operators, and broad Title references. Add short legal phrasing likely to appear in statutes or regulations (e.g., requirement, compliance, permitting, exemption, enforcement).
+
+Theme description: ${theme.description}
+Industry tags: ${(theme.industry_tags || []).join(', ') || 'n/a'}
+
+Return JSON {"queries": ["..."]}.`;
+          const expansionResponse = await callGeminiJson<{ queries?: string[] }>(expansionPrompt, {
+            system: DONOR_THEME_SYSTEM_PROMPT,
+            temperature: 0.2,
+            model: queryExpansionModel,
+          });
+          queries = uniqueStrings([...queries, ...(expansionResponse?.queries || [])]);
+        } catch (expansionError) {
+          console.warn('Query expansion failed, proceeding with base queries.', expansionError);
+        }
+      }
+
+      if (!queries.length) {
+        queries = uniqueStrings([theme.title, theme.description].filter(Boolean));
+      }
+
+      if (queries.length > 20) {
+        queries = queries.slice(0, 20);
+      }
+
+      const MAX_BATCH_SIZE = 5;
+      const SCORE_THRESHOLDS = [0.35, 0.25, 0.15, 0.10];
+      const MAX_BILLS = 1000;
+      const MAX_STAGNATION = 2;
+      const MIN_NEW_RESULTS_THRESHOLD = 5;
+
+      const batches = chunkArray(queries, MAX_BATCH_SIZE);
+      const billMap = new Map<number, any>();
+      const queriesUsedSet = new Set<string>();
+
+      let scoreIndex = 0;
+      let stagnationCount = 0;
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        const rawBatch = batches[batchIndex];
+        const batch = rawBatch
+          .map((q) => sanitizeSearchQuery(q))
+          .filter(Boolean);
+        if (!batch.length) continue;
+
+        batch.forEach((q) => queriesUsedSet.add(q));
+
+        setDonorThemeProgress({
+          text: `Searching bills (batch ${batchIndex + 1}/${batches.length})...`,
+          percent: Math.min(25 + (batchIndex * 5), 60),
+        });
+
+        const queryVectors = await Promise.all(batch.map(async (query) => {
+          try {
+            const embedding = await embeddingService.generateQueryEmbedding(query);
+            return {
+              query,
+              vector: embedding.length ? embeddingService.formatForPgVector(embedding) : null,
+            };
+          } catch (embeddingError) {
+            console.warn('Embedding generation failed for query:', query, embeddingError);
+            return { query, vector: null };
+          }
+        }));
+
+        const batchResults: any[] = [];
+        const threshold = SCORE_THRESHOLDS[scoreIndex];
+
+        try {
+          const searchTermsArray = batch.length ? batch : null;
+          const vectorArray = queryVectors
+            .map((item) => item.vector)
+            .filter((vec): vec is string => Boolean(vec));
+
+          console.debug('Bill search batch payload', {
+            sessionId: donorThemeContext.sessionId,
+            personId: currentPersonId,
+            threshold,
+            searchTerms: searchTermsArray,
+            vectorCount: vectorArray.length,
+          });
+
+          const results = await searchBillsForLegislatorRpc({
+            sessionId: donorThemeContext.sessionId,
+            personId: currentPersonId!,
+            searchTerms: searchTermsArray,
+            queryVectors: vectorArray.length ? vectorArray : null,
+            minScore: threshold,
+            limit: 80,
+            offset: 0,
+          });
+          batchResults.push(...(results || []));
+        } catch (searchError) {
+          console.warn('search_bills_for_legislator_optimized batch failed', searchError, {
+            sessionId: donorThemeContext.sessionId,
+            personId: currentPersonId,
+            batch,
+            threshold,
+          });
+        }
+
+        const newBills: any[] = [];
+        batchResults.forEach((bill: any) => {
+          const id = Number(bill.bill_id ?? bill.id);
+          if (!Number.isFinite(id)) return;
+          if (!billMap.has(id)) {
+            billMap.set(id, bill);
+            newBills.push(bill);
+          }
+        });
+
+        if (newBills.length === 0) {
+          stagnationCount += 1;
+        } else {
+          stagnationCount = 0;
+        }
+
+        if (newBills.length < MIN_NEW_RESULTS_THRESHOLD && scoreIndex < SCORE_THRESHOLDS.length - 1) {
+          scoreIndex += 1;
+        }
+
+        if (stagnationCount >= MAX_STAGNATION || billMap.size >= MAX_BILLS) {
+          break;
+        }
+      }
+
+      const allBills = Array.from(billMap.values());
+      if (!allBills.length) {
+        throw new Error('No bills were found for the selected theme.');
+      }
+
+      setDonorThemeProgress({ text: 'Retrieving bill details...', percent: 65 });
+
+      const detailedBills: any[] = [];
+      const limitedBills = allBills
+        .sort((a: any, b: any) => Number(b.score ?? 0) - Number(a.score ?? 0))
+        .slice(0, 150);
+
+      for (let i = 0; i < limitedBills.length; i += 1) {
+        const bill = limitedBills[i];
+        const billId = Number(bill.bill_id ?? bill.id);
+        if (!Number.isFinite(billId)) continue;
+
+        setDonorThemeProgress({
+          text: `Retrieving bill details (${i + 1}/${limitedBills.length})...`,
+          percent: 65 + Math.min(20, Math.floor((i / Math.max(limitedBills.length - 1, 1)) * 20)),
+        });
+
+        const [billTextResult, voteRollupResult] = await Promise.all([
+          supabase.rpc('get_bill_text', { p_bill_id: billId }),
+          supabase.rpc('get_bill_vote_rollup', { p_bill_id: billId }),
+        ]);
+
+        const billText = billTextResult.error ? null : (billTextResult.data as any);
+        const voteRollup = voteRollupResult.error ? [] : ((voteRollupResult.data as any[]) || []);
+
+        let stakeholders: any[] = [];
+        try {
+          const themeVector = await embeddingService.generateQueryEmbedding(theme.title || theme.description || '');
+          const { data: stakeholderData, error: stakeholderError } = await supabase.rpc('search_rts_by_vector', {
+            p_bill_id: billId,
+            p_session_id: donorThemeContext.sessionId,
+            p_limit: 20,
+            p_query_vec: themeVector.length ? embeddingService.formatForPgVector(themeVector) : null,
+          });
+          if (stakeholderError) throw stakeholderError;
+          stakeholders = stakeholderData || [];
+        } catch (stakeholderError) {
+          stakeholders = [];
+        }
+
+        detailedBills.push({
+          bill_id: billId,
+          bill_number: bill.bill_number || bill.billno,
+          title: bill.summary_title || bill.bill_title || '',
+          score: bill.score ?? null,
+          vote: bill.vote ?? bill.vote_value ?? null,
+          vote_date: bill.vote_date ?? null,
+          is_sponsor: bill.is_sponsor ?? false,
+          is_party_outlier: bill.is_party_outlier ?? false,
+          party_breakdown: bill.party_breakdown ?? null,
+          statutes: bill.statutes ?? [],
+          summary_excerpt: bill.summary_excerpt ?? billText?.bill_summary ?? '',
+          full_excerpt: bill.full_excerpt ?? billText?.bill_text ?? '',
+          vote_rollup: voteRollup,
+          stakeholders,
+        });
+      }
+
+      // detailedBills prepared; proceed to synthesis without storing intermediate theme bill list.
+
+      const queriesUsed = uniqueStrings(Array.from(queriesUsedSet));
+      const relevantTransactions = (donorThemeContext.transactions || []).filter((txn) => theme.donor_ids.includes(Number(txn.transaction_entity_id)));
+      const relevantDonors = donorThemeContext.donors.filter((donor) => theme.donor_ids.includes(Number(donor.transaction_entity_id)));
+
+      setDonorThemeProgress({ text: 'Synthesizing final report...', percent: 90 });
+
+      const reportPayload = {
+        legislator: donorThemeContext.legislatorName,
+        session: {
+          id: donorThemeContext.sessionId,
+          name: donorThemeContext.sessionName,
+        },
+        theme,
+        queries_used: queriesUsed,
+        donors: relevantDonors,
+        bills: detailedBills,
+        donor_transactions: relevantTransactions,
+      };
+
+      const reportPrompt = `Assemble the final donor theme report using the provided data.
+
+IMPORTANT:
+1. Each bill in the data includes a bill_summary. For deeper analysis of specific bills, you can call get_bill_texts_array([bill_id1, bill_id2, ...]) to retrieve the full bill text for multiple bills at once. Use this when you need to analyze specific statutory provisions, legal language, or detailed bill mechanics.
+2. Include employer, occupation, and type for each donor from the provided donor data. Do not leave these fields empty.
+3. KEEP THE MARKDOWN SUMMARY CONCISE (1-2 pages max) to avoid token limits. Focus on the most significant findings and evidence.
+
+DATA:
+${JSON.stringify(reportPayload, null, 2)}
+
+Return STRICT JSON:
+{
+  "report": {
+    "overall_summary": "400-800+ word synthesis across all evidence",
+    "session_info": {"session_id": ${donorThemeContext.sessionId}, "session_name": "${donorThemeContext.sessionName}"},
+    "themes": [
+      {
+        "theme": "${theme.title}",
+        "description": "3-5 sentence overview of this theme",
+        "summary": "bullet-ready synopsis",
+        "confidence": 0.0-1.0,
+        "donors": [{"name": "Donor Name", "total": "$X,XXX", "employer": "Company/Organization", "occupation": "Job Title", "type": "Individual/PAC/Business", "notes": "brief justification" }],
+        "queries_used": ["..."],
+        "bills": [
+          {
+            "bill_id": 1234,
+            "bill_number": "HBXXXX",
+            "title": "short title",
+            "reason": "why this bill matches the theme",
+            "vote": "Y/N/NV",
+            "stakeholders": ["group or individual"],
+            "takeaways": "1-3 sentence takeaway"
+          }
+        ]
+      }
+    ],
+    "transactions_cited": [
+      { "public_transaction_id": 123456789, "donor": "Donor Name", "date": "YYYY-MM-DD", "amount": 5300.00, "linked_bills": ["HBXXXX", "SBYYYY"] }
+    ],
+    "markdown_summary": "1-2 pages of focused narrative organized by theme with key citations (keep concise to avoid token limits)"
+  }
+}
+
+Rules:
+- Cite individual transactions (public_transaction_id, donor, amount, date) anywhere evidence is used.
+- Every bill referenced must include statutes/excerpts and legislator vote context.
+- Use takeaways to connect statutes/excerpts to donor interests.
+- Do not omit any donors or transactions supplied in the data.`;
+
+      const reportData = await callGeminiJson<{ report?: any }>(reportPrompt, {
+        system: DONOR_THEME_SYSTEM_PROMPT,
+        temperature: 0.2,
+        model: finalReportModel,
+      });
+
+      if (!reportData?.report) {
+        throw new Error('Failed to generate donor theme report.');
+      }
+
+      setAnalysisResults([
+        {
+          sessionName: `${donorThemeContext.sessionName} -- ${theme.title}`,
+          report: reportData.report,
+        },
+      ]);
+      setCurrentStep('results');
+      // Save the analysis result and mark theme as completed
+      setDonorThemeAnalysisResult(reportData);
+      setCompletedThemes(prev => new Set([...prev, theme.id]));
+      setCurrentStep('donorThemeResults');
+      setDonorThemeProgress(null);
+
+      // Auto-save the report to database
+      await saveReportToDatabase(theme.id, reportData);
+
+      logger.success({
+        reportGenerated: Boolean(reportData.report),
+        detailedBills: detailedBills.length,
+        queriesUsed: queriesUsed.length,
+        totalBillsDiscovered: billMap.size,
+      });
+    } catch (err) {
+      logger.failure(err);
+      throw err;
+    }
+  };
+
+  const handleDonorThemeSelection = async (theme: DonorTheme) => {
+    const logger = startFunctionLog('handleDonorThemeSelection', {
+      themeId: theme.id,
+      themeTitle: theme.title,
+    });
+    try {
+      setAnalyzing(true);
+      setDonorThemeProgress({ text: 'Analyzing selected theme...', percent: 10 });
+      setCurrentStep('donorThemeProgress');
+      await runDonorThemeAnalysis(theme);
+      logger.success('Theme analysis completed');
+    } catch (analysisError: any) {
+      console.error('Donor theme analysis failed:', analysisError);
+      setError(analysisError.message || 'Failed to analyze the selected theme.');
+      setCurrentStep('donorThemeThemes');
+      // Reload existing reports when returning to themes after error
+      setTimeout(() => loadExistingReportsForThemes(), 100);
+      logger.failure(analysisError);
+    } finally {
+      setDonorThemeProgress(null);
+      setAnalyzing(false);
+    }
   };
 
   const startAnalysis = async () => {
+    const logger = startFunctionLog('startAnalysis', {
+      analysisMode,
+      selectedSessionsCount: selectedSessions.length,
+      currentPersonId,
+    });
+
     if (selectedSessions.length === 0) {
+      logger.failure('No sessions selected');
       alert('Please select at least one session or the combined option');
       return;
     }
 
     if (!GEMINI_API_KEY) {
+      logger.failure('Missing Gemini API key');
       setError('Missing Gemini API key. Please set VITE_GOOGLE_API_KEY or VITE_GEMINI_API_KEY in environment variables.');
       return;
     }
 
     if (!currentPersonId) {
+      logger.failure('No person selected for analysis');
       setError('No person selected for analysis');
       return;
     }
 
-    setCurrentStep('progress');
     setAnalyzing(true);
-    setProgressText('Starting analysis...');
-    setProgressPercent(5);
     setError(null);
     setPhase1Previews({});
+    setAnalysisResults(null);
     setActivePhaseView('phase2');
+
+    if (analysisMode === 'donorTheme') {
+      setAnalysisResults(null);
+      setDonorThemes(null);
+      setDonorThemeProgress({ text: 'Preparing donor theme workflow...', percent: 5 });
+      setCurrentStep('donorThemeProgress');
+      try {
+        await runDonorThemePreparation();
+        logger.success('Donor theme preparation completed');
+      } catch (analysisError: any) {
+        console.error('Donor theme analysis setup failed:', analysisError);
+        setError(analysisError.message || 'Failed to start donor theme analysis.');
+        setCurrentStep('sessions');
+        logger.failure(analysisError);
+      } finally {
+        setAnalyzing(false);
+      }
+      return;
+    }
+
+    setCurrentStep('progress');
+    setProgressText('Starting analysis...');
+    setProgressPercent(5);
 
     try {
       if (analysisMode === 'singleCall') {
@@ -1748,9 +3400,11 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       } else {
         await runTwoPhaseAnalysisInternal();
       }
+      logger.success({ mode: analysisMode });
     } catch (analysisError: any) {
       console.error('Analysis error:', analysisError);
       setError(analysisError.message || 'Analysis failed. Please try again.');
+      logger.failure(analysisError);
     } finally {
       setAnalyzing(false);
     }
@@ -1761,7 +3415,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}>Campaign Finance Report Generator</h1>
       <p style={{ marginBottom: 24, color: '#555' }}>
         Generate detailed analyses of potential conflicts of interest between campaign donations and legislative activity.
-        Select a legislator, choose sessions, and let the AI perform a two-phase analysis.
+        Select a legislator, choose sessions, and let the AI identify donor themes and find relevant bills.
       </p>
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
         <button
@@ -1905,7 +3559,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
               onClick={() => setCurrentStep('search')}
               style={{ padding: '4px 8px', fontSize: '0.9em', background: '#6b7280', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >
-              ← Change Person
+              Back to Search
             </button>
           </div>
           <div style={{ marginBottom: 16 }}>
@@ -1927,20 +3581,98 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <input
                 type="radio"
-                checked={analysisMode === 'twoPhase'}
-                onChange={() => setAnalysisMode('twoPhase')}
+                checked={analysisMode === 'donorTheme'}
+                onChange={() => setAnalysisMode('donorTheme')}
+                readOnly
               />
-              <span>Two-Phase (pairs + deep dives)</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="radio"
-                checked={analysisMode === 'singleCall'}
-                onChange={() => setAnalysisMode('singleCall')}
-              />
-              <span>Single Call (themes & bill evidence)</span>
+              <span>Donor Themes to Bills (interactive)</span>
             </label>
           </div>
+
+          {/* Model Selection */}
+          {analysisMode === 'donorTheme' && (
+            <div style={{
+              marginBottom: 16,
+              padding: 12,
+              border: '1px solid #e5e7eb',
+              borderRadius: 6,
+              backgroundColor: '#f9fafb'
+            }}>
+              <h4 style={{ margin: '0 0 12px 0', fontSize: '0.9em', fontWeight: 600 }}>Model Selection</h4>
+
+              {analysisMode === 'donorTheme' && (
+                <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.85em', fontWeight: 500, marginBottom: 4 }}>
+                      Theme Generation:
+                    </label>
+                    <select
+                      value={themeGenerationModel}
+                      onChange={(e) => setThemeGenerationModel(e.target.value as any)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 4,
+                        fontSize: '0.85em'
+                      }}
+                    >
+                      <option value="gemini-2.5-flash">2.5 Flash (Fast & Current)</option>
+                      <option value="gemini-2.5-pro">2.5 Pro (Best Quality)</option>
+                      <option value="gemini-2.0-flash-exp">2.0 Flash Experimental</option>
+                      <option value="gemini-2.0-flash-thinking-exp-01-21">2.0 Thinking (Deep Analysis)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.85em', fontWeight: 500, marginBottom: 4 }}>
+                      Query Expansion:
+                    </label>
+                    <select
+                      value={queryExpansionModel}
+                      onChange={(e) => setQueryExpansionModel(e.target.value as any)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 4,
+                        fontSize: '0.85em'
+                      }}
+                    >
+                      <option value="gemini-2.5-flash">2.5 Flash (Fast & Current)</option>
+                      <option value="gemini-2.5-pro">2.5 Pro (Best Quality)</option>
+                      <option value="gemini-2.0-flash-exp">2.0 Flash Experimental</option>
+                      <option value="gemini-2.0-flash-thinking-exp-01-21">2.0 Thinking (Deep Analysis)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.85em', fontWeight: 500, marginBottom: 4 }}>
+                      Final Report:
+                    </label>
+                    <select
+                      value={finalReportModel}
+                      onChange={(e) => setFinalReportModel(e.target.value as any)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 4,
+                        fontSize: '0.85em'
+                      }}
+                    >
+                      <option value="gemini-2.5-flash">2.5 Flash (Fast & Current)</option>
+                      <option value="gemini-2.5-pro">2.5 Pro (Best Quality)</option>
+                      <option value="gemini-2.0-flash-exp">2.0 Flash Experimental</option>
+                      <option value="gemini-2.0-flash-thinking-exp-01-21">2.0 Thinking (Deep Analysis)</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: '0.75em', color: '#6b7280', marginTop: 8 }}>
+                💡 2.5 models are current generation. Flash = faster/cheaper, Pro = best quality. 2.0 models are experimental with Thinking = deep reasoning.
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'grid', gap: 8 }}>
             {availableSessions.map((s) => (
               <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1951,9 +3683,9 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                 />
                 <div>
                   <div style={{ fontWeight: 600 }}>{s.name}</div>
-                  <div style={{ fontSize: '0.9em', color: '#666' }}>{s.dateRange || `${s.start_date || ''} to ${s.end_date || ''}`}</div>
-                  {typeof s.vote_count === 'number' && (
-                    <div style={{ fontSize: '0.85em', color: '#888' }}>{s.vote_count} votes</div>
+                  <div style={{ fontSize: '0.9em', color: '#666' }}>{s.dateRange || `${s.startDate || ''} to ${s.endDate || ''}`}</div>
+                  {typeof s.voteCount === 'number' && (
+                    <div style={{ fontSize: '0.85em', color: '#888' }}>{s.voteCount} votes</div>
                   )}
                 </div>
               </label>
@@ -1992,6 +3724,297 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         </div>
       )}
 
+      {currentStep === 'donorThemeProgress' && (
+        <div style={{ marginTop: 24 }}>
+          <h3 style={{ marginBottom: 8 }}>Donor Theme Analysis</h3>
+          <div style={{ height: 12, backgroundColor: '#e5e7eb', borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ width: `${donorThemeProgress?.percent ?? 5}%`, height: '100%', backgroundColor: '#2563eb', transition: 'width 0.3s ease' }} />
+          </div>
+          <div style={{ marginTop: 12, color: '#555' }}>{donorThemeProgress?.text || 'Preparing donor analysis...'}</div>
+          <div style={{ marginTop: 16, display: 'flex', gap: 12 }}>
+            <button
+              onClick={() => setCurrentStep('sessions')}
+              disabled={analyzing}
+              style={{ padding: '8px 16px', backgroundColor: '#6b7280', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+            >
+              Back to Sessions
+            </button>
+          </div>
+        </div>
+      )}
+
+      {currentStep === 'donorThemeThemes' && donorThemes && donorThemeContext && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <h3 style={{ margin: 0 }}>Select a Donor Theme</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={generateThemeListPDF}
+                style={{
+                  padding: '6px 12px',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 500
+                }}
+                title="Download PDF of all themes"
+              >
+                📄 Export PDF
+              </button>
+            </div>
+          </div>
+          <p style={{ marginBottom: 16, color: '#4b5563' }}>
+            Gemini grouped top donors for <strong>{donorThemeContext.legislatorName}</strong> during <strong>{donorThemeContext.sessionName}</strong>.
+            Choose a theme to investigate the most relevant legislation.
+          </p>
+          <div style={{ display: 'grid', gap: 16 }}>
+            {donorThemes.map((theme) => {
+              const isCompleted = completedThemes.has(theme.id);
+              const hasSavedReport = savedReports.has(theme.id);
+              return (
+              <div
+                key={theme.id}
+                style={{
+                  border: `1px solid ${hasSavedReport ? '#8b5cf6' : isCompleted ? '#10b981' : '#d1d5db'}`,
+                  borderRadius: 8,
+                  padding: 16,
+                  backgroundColor: hasSavedReport ? '#f3e8ff' : isCompleted ? '#ecfdf5' : '#f9fafb',
+                  position: 'relative'
+                }}
+              >
+                {hasSavedReport && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    padding: '4px 8px',
+                    backgroundColor: '#8b5cf6',
+                    color: 'white',
+                    borderRadius: 4,
+                    fontSize: 12,
+                    fontWeight: 600
+                  }}>
+                    📄 SAVED
+                  </div>
+                )}
+                {isCompleted && !hasSavedReport && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    padding: '4px 8px',
+                    backgroundColor: '#10b981',
+                    color: 'white',
+                    borderRadius: 4,
+                    fontSize: 12,
+                    fontWeight: 600
+                  }}>
+                    ✓ COMPLETED
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                  <div>
+                    <h4 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 6px 0' }}>{theme.title}</h4>
+                    {theme.description && (
+                      <div style={{ color: '#374151', marginBottom: 8 }}>{theme.description}</div>
+                    )}
+                    {theme.summary && (
+                      <div style={{ fontSize: 13, color: '#4b5563', marginBottom: 8 }}>
+                        <strong>Summary:</strong> {theme.summary}
+                      </div>
+                    )}
+                    {theme.confidence !== undefined && (
+                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+                        Confidence: {(theme.confidence * 100).toFixed(0)}%
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {hasSavedReport && (
+                      <button
+                        onClick={() => loadSavedReport(theme.id)}
+                        style={{
+                          padding: '8px 16px',
+                          backgroundColor: '#8b5cf6',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontWeight: 500
+                        }}
+                      >
+                        📄 View Report
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDonorThemeSelection(theme)}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: hasSavedReport ? '#6b7280' : '#2563eb',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {hasSavedReport ? 'Re-analyze' : 'Investigate Theme'}
+                    </button>
+                  </div>
+                </div>
+                {(theme.donor_names && theme.donor_names.length > 0) && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Donors ({theme.donor_names.length}):</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
+                      {theme.donor_names.map((name, idx) => {
+                        const total = theme.donor_totals?.[idx];
+                        const displayTotal = total ? `$${total.toLocaleString()}` : 'Unknown';
+
+                        // Try to get donor info from the context for employer/occupation/type
+                        const donorInfo = donorThemeContext?.donors?.find(d =>
+                          d.entity_name === name
+                        );
+
+                        const donorType = donorInfo?.entity_type_name || 'Unknown';
+                        const employer = donorInfo?.top_employer || null;
+                        const occupation = donorInfo?.top_occupation || null;
+
+                        // Color coding for donor types
+                        const getTypeColor = (type: string) => {
+                          const typeStr = type.toLowerCase();
+                          if (typeStr.includes('pac') || typeStr.includes('committee')) return '#dc2626'; // red
+                          if (typeStr.includes('individual') || typeStr.includes('person')) return '#16a34a'; // green
+                          if (typeStr.includes('business') || typeStr.includes('corporation')) return '#2563eb'; // blue
+                          if (typeStr.includes('organization') || typeStr.includes('nonprofit')) return '#7c3aed'; // purple
+                          return '#64748b'; // gray
+                        };
+
+                        return (
+                          <div key={idx} style={{
+                            padding: 8,
+                            backgroundColor: '#fefefe',
+                            borderRadius: 6,
+                            border: '1px solid #e2e8f0',
+                            fontSize: 11,
+                            boxShadow: '0 1px 2px 0 rgba(0,0,0,0.05)'
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                              <div style={{ fontWeight: 500, color: '#1e293b', flex: 1 }}>{name}</div>
+                              <div style={{
+                                fontSize: 9,
+                                padding: '2px 4px',
+                                backgroundColor: getTypeColor(donorType),
+                                color: 'white',
+                                borderRadius: 3,
+                                fontWeight: 500
+                              }}>
+                                {donorType.toUpperCase()}
+                              </div>
+                            </div>
+                            <div style={{ color: '#059669', fontWeight: 600, marginBottom: 2 }}>{displayTotal}</div>
+                            {(employer || occupation) && (
+                              <div style={{ color: '#64748b', fontSize: 10, lineHeight: 1.3 }}>
+                                {employer && <div>{employer}</div>}
+                                {occupation && <div style={{ fontStyle: 'italic' }}>{occupation}</div>}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {(theme.query_suggestions && theme.query_suggestions.length > 0) && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>Suggested Search Phrases:</div>
+                      <button
+                        onClick={() => startEditingQueries(theme.id, theme.query_suggestions)}
+                        style={{
+                          fontSize: 11,
+                          padding: '2px 6px',
+                          backgroundColor: '#e5e7eb',
+                          border: '1px solid #d1d5db',
+                          borderRadius: 4,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                    {editingThemeId === theme.id ? (
+                      <div style={{ marginBottom: 8 }}>
+                        <textarea
+                          value={editingQueries}
+                          onChange={(e) => setEditingQueries(e.target.value)}
+                          placeholder="Enter search phrases, one per line"
+                          style={{
+                            width: '100%',
+                            minHeight: 100,
+                            padding: 8,
+                            fontSize: 12,
+                            border: '1px solid #d1d5db',
+                            borderRadius: 4,
+                            fontFamily: 'monospace'
+                          }}
+                        />
+                        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                          <button
+                            onClick={saveEditedQueries}
+                            style={{
+                              fontSize: 11,
+                              padding: '4px 8px',
+                              backgroundColor: '#10b981',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: 4,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={cancelEditingQueries}
+                            style={{
+                              fontSize: 11,
+                              padding: '4px 8px',
+                              backgroundColor: '#6b7280',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: 4,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: 12 }}>
+                        {theme.query_suggestions.map((query, idx) => {
+                          return <li key={`${theme.id}-query-${idx}`}>{query}</li>;
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <button
+              onClick={() => setCurrentStep('sessions')}
+              style={{ padding: '8px 16px', backgroundColor: '#6b7280', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+            >
+              Back to Sessions
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Progress */}
       {currentStep === 'progress' && (
         <div style={{ marginTop: 24 }}>
@@ -2016,9 +4039,9 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600 }}>Phase 1 Preview — {preview.sessionName}</div>
+                    <div style={{ fontWeight: 600 }}>Phase 1 Preview -- {preview.sessionName}</div>
                     <div style={{ fontSize: 12, color: '#6b7280' }}>
-                      {preview.billIds.length} bills • {preview.donationIds.length} donations
+                      {preview.billIds.length} bills * {preview.donationIds.length} donations
                     </div>
                   </div>
 
@@ -2028,7 +4051,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                       {`Votes ${preview.summaryStats.total_votes ?? 0}, Sponsors ${preview.summaryStats.total_sponsorships ?? 0}, Donations ${preview.summaryStats.total_donations ?? 0}`}
                     </span>
                     <span style={{ marginLeft: 10 }}>
-                      {`Confidence — High ${preview.summaryStats.high_confidence_pairs ?? 0} • Medium ${preview.summaryStats.medium_confidence_pairs ?? 0} • Low ${preview.summaryStats.low_confidence_pairs ?? 0}`}
+                      {`Confidence -- High ${preview.summaryStats.high_confidence_pairs ?? 0} * Medium ${preview.summaryStats.medium_confidence_pairs ?? 0} * Low ${preview.summaryStats.low_confidence_pairs ?? 0}`}
                     </span>
                   </div>
 
@@ -2038,11 +4061,11 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                       {preview.groups.map((group: any, groupIdx: number) => (
                         <div key={`${preview.sessionKey}-group-${groupIdx}`} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, backgroundColor: '#fff' }}>
                           <div style={{ fontWeight: 600, fontSize: 13 }}>
-                            {group.bill_number || 'Unknown Bill'} — {group.bill_title || 'Untitled Bill'}
+                            {group.bill_number || 'Unknown Bill'} -- {group.bill_title || 'Untitled Bill'}
                           </div>
                           <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                            {group.vote_or_sponsorship || 'vote'} • {group.vote_value || 'N/A'} • {group.vote_date || 'Unknown date'}
-                            {group.is_party_outlier ? ' • Party Outlier' : ''}
+                            {group.vote_or_sponsorship || 'vote'} * {group.vote_value || 'N/A'} * {group.vote_date || 'Unknown date'}
+                            {group.is_party_outlier ? ' * Party Outlier' : ''}
                           </div>
                           {group.connection_reason && (
                             <div style={{ fontSize: 12, color: '#374151', marginTop: 4 }}>
@@ -2055,8 +4078,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                               <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: 12 }}>
                                 {group.donors.map((donor: any, donorIdx: number) => (
                                   <li key={`${preview.sessionKey}-group-${groupIdx}-donor-${donorIdx}`}>
-                                    <strong>{donor.name}</strong> — ${Number(donor.amount ?? 0).toLocaleString()} ({donor.type || 'Unknown'})
-                                    {donor.transaction_date && ` • ${donor.transaction_date}`}
+                                    <strong>{donor.name}</strong> -- ${Number(donor.amount ?? 0).toLocaleString()} ({donor.type || 'Unknown'})
+                                    {donor.transaction_date && ` * ${donor.transaction_date}`}
                                   </li>
                                 ))}
                               </ul>
@@ -2084,20 +4107,20 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                   onClick={() => setActivePhaseView((prev) => (prev === 'phase1' ? 'phase2' : 'phase1'))}
                   style={{ padding: '6px 12px', fontSize: '0.9em', background: '#0f172a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
                 >
-                  {activePhaseView === 'phase1' ? '→ View Phase 2 Results' : '← View Phase 1 Preview'}
+                  {activePhaseView === 'phase1' ? 'View Phase 2 Results' : 'View Phase 1 Preview'}
                 </button>
               )}
               <button
                 onClick={() => setCurrentStep('sessions')}
                 style={{ padding: '6px 12px', fontSize: '0.9em', background: '#6b7280', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
               >
-                ← New Analysis
+                New Analysis
               </button>
               <button
                 onClick={() => setCurrentStep('search')}
                 style={{ padding: '6px 12px', fontSize: '0.9em', background: '#374151', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
               >
-                ← Change Person
+                Change Person
               </button>
             </div>
           </div>
@@ -2108,7 +4131,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                 const phase1 = result.phase1;
                 return (
                   <div key={`phase1-${idx}`} style={{ padding: 16, border: '1px solid #d1d5db', borderRadius: 8, backgroundColor: '#f9fafb' }}>
-                    <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{result.sessionName} — Phase 1 Preview</h3>
+                    <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{result.sessionName} -- Phase 1 Preview</h3>
                     {result.error && (
                       <div style={{ marginBottom: 12, padding: 8, borderRadius: 6, backgroundColor: '#fee2e2', color: '#b91c1c' }}>
                         {result.error}
@@ -2122,22 +4145,22 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                         </span>
                       </div>
                       <div style={{ fontSize: 12, color: '#6b7280' }}>
-                        {phase1.billIds.length} bills • {phase1.donationIds.length} donations
-                        {phase1.phase1ReportId ? ` • Saved ID ${phase1.phase1ReportId}` : ''}
+                        {phase1.billIds.length} bills * {phase1.donationIds.length} donations
+                        {phase1.phase1ReportId ? ` * Saved ID ${phase1.phase1ReportId}` : ''}
                       </div>
                     </div>
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-                      Confidence — High {phase1.summaryStats.high_confidence_pairs ?? 0} • Medium {phase1.summaryStats.medium_confidence_pairs ?? 0} • Low {phase1.summaryStats.low_confidence_pairs ?? 0}
+                      Confidence -- High {phase1.summaryStats.high_confidence_pairs ?? 0} * Medium {phase1.summaryStats.medium_confidence_pairs ?? 0} * Low {phase1.summaryStats.low_confidence_pairs ?? 0}
                     </div>
                     <div style={{ display: 'grid', gap: 10 }}>
                       {phase1.groups.map((group: any, groupIdx: number) => (
                         <div key={`${phase1.sessionKey}-phase1-${groupIdx}`} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 10, backgroundColor: '#fff' }}>
                           <div style={{ fontWeight: 600, fontSize: 13 }}>
-                            {group.bill_number || 'Unknown Bill'} — {group.bill_title || 'Untitled Bill'}
+                            {group.bill_number || 'Unknown Bill'} -- {group.bill_title || 'Untitled Bill'}
                           </div>
                           <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                            {group.vote_or_sponsorship || 'vote'} • {group.vote_value || 'N/A'} • {group.vote_date || 'Unknown date'}
-                            {group.is_party_outlier ? ' • Party Outlier' : ''}
+                            {group.vote_or_sponsorship || 'vote'} * {group.vote_value || 'N/A'} * {group.vote_date || 'Unknown date'}
+                            {group.is_party_outlier ? ' * Party Outlier' : ''}
                           </div>
                           {group.connection_reason && (
                             <div style={{ fontSize: 12, color: '#374151', marginTop: 4 }}>
@@ -2150,8 +4173,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                               <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: 12 }}>
                                 {group.donors.map((donor: any, donorIdx: number) => (
                                   <li key={`${phase1.sessionKey}-phase1-${groupIdx}-donor-${donorIdx}`}>
-                                    <strong>{donor.name}</strong> — ${Number(donor.amount ?? 0).toLocaleString()} ({donor.type || 'Unknown'})
-                                    {donor.transaction_date && ` • ${donor.transaction_date}`}
+                                    <strong>{donor.name}</strong> -- ${Number(donor.amount ?? 0).toLocaleString()} ({donor.type || 'Unknown'})
+                                    {donor.transaction_date && ` * ${donor.transaction_date}`}
                                   </li>
                                 ))}
                               </ul>
@@ -2198,7 +4221,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                           <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
                             {(theme.bills || []).map((bill: any, billIdx: number) => (
                               <li key={billIdx} style={{ marginBottom: 6 }}>
-                                <div><strong>{bill.bill_number}</strong> — {bill.bill_title}</div>
+                                <div><strong>{bill.bill_number}</strong> -- {bill.bill_title}</div>
                                 {bill.vote_value && (
                                   <div style={{ fontSize: 12, color: '#6b7280' }}>Vote: {bill.vote_value}{bill.is_outlier ? ' (OUTLIER)' : ''}</div>
                                 )}
@@ -2235,9 +4258,16 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                           <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
                             {(theme.donors || []).map((donor: any, donorIdx: number) => (
                               <li key={donorIdx}>
-                                <div><strong>{donor.name}</strong> — ${Number(donor.total_amount ?? donor.amount ?? 0).toLocaleString()}</div>
+                                <div><strong>{donor.name}</strong> -- {(() => {
+                                  // Handle both string ($5,000) and number formats
+                                  let amount = donor.total_amount ?? donor.amount ?? donor.total ?? 0;
+                                  if (typeof amount === 'string') {
+                                    amount = Number(amount.replace(/[$,]/g, ''));
+                                  }
+                                  return `$${Number(amount).toLocaleString()}`;
+                                })()}</div>
                                 <div style={{ fontSize: 12, color: '#6b7280' }}>
-                                  {donor.type || 'Unknown type'} • {donor.employer || 'Unknown employer'} • {donor.occupation || 'Unknown occupation'}
+                                  {donor.type || 'Unknown type'} * {donor.employer || 'Unknown employer'} * {donor.occupation || 'Unknown occupation'}
                                 </div>
                                 {donor.notes && (
                                   <div style={{ fontSize: 12, color: '#4b5563' }}>{donor.notes}</div>
@@ -2278,7 +4308,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                     {result.report.confirmedConnections?.length > 0 && (
                       <div style={{ marginBottom: 12 }}>
                         <h4 style={{ fontSize: 14, fontWeight: 600, color: '#dc2626', marginBottom: 8 }}>
-                          ⚠️ Confirmed Conflicts of Interest ({result.report.confirmedConnections.length})
+                          WARNING Confirmed Conflicts of Interest ({result.report.confirmedConnections.length})
                         </h4>
                         {result.report.confirmedConnections.map((connection: any, connIdx: number) => (
                           <div key={connIdx} style={{ padding: 8, border: '1px solid #fca5a5', borderRadius: 4, marginBottom: 8, backgroundColor: '#fef2f2' }}>
@@ -2305,7 +4335,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
                     {result.report.rejectedConnections?.length > 0 && (
                       <div style={{ marginBottom: 12 }}>
                         <h4 style={{ fontSize: 14, fontWeight: 600, color: '#16a34a', marginBottom: 8 }}>
-                          ✅ Investigated but Rejected ({result.report.rejectedConnections.length})
+                          CHECK Investigated but Rejected ({result.report.rejectedConnections.length})
                         </h4>
                         {result.report.rejectedConnections.map((connection: any, connIdx: number) => (
                           <div key={connIdx} style={{ padding: 8, border: '1px solid #bbf7d0', borderRadius: 4, marginBottom: 8, backgroundColor: '#f0fdf4' }}>
@@ -2319,7 +4349,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
                     {(!result.report.confirmedConnections || result.report.confirmedConnections.length === 0) && (
                       <div style={{ padding: 8, backgroundColor: '#f0fdf4', borderRadius: 6, color: '#16a34a' }}>
-                        ✅ No conflicts of interest identified for this session.
+                        CHECK No conflicts of interest identified for this session.
                       </div>
                     )}
                   </>
@@ -2332,6 +4362,129 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
             </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Donor Theme Analysis Results */}
+      {currentStep === 'donorThemeResults' && donorThemeAnalysisResult && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <h3 style={{ margin: 0 }}>Theme Analysis Complete</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => generateFinalReportPDF(donorThemeAnalysisResult)}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500
+                }}
+                title="Download PDF of this report"
+              >
+                📄 Download PDF
+              </button>
+              <button
+                onClick={() => {
+                  setCurrentStep('donorThemeThemes');
+                  // Reload existing reports when going back to themes
+                  setTimeout(() => loadExistingReportsForThemes(), 100);
+                }}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#2563eb',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500
+                }}
+                title="Go back to theme list"
+              >
+                ← Back to Themes
+              </button>
+            </div>
+          </div>
+
+          {/* Display the final report */}
+          <div style={{ backgroundColor: '#fefefe', padding: 20, borderRadius: 8, border: '1px solid #e5e7eb' }}>
+            <h4 style={{ color: '#1e40af', marginBottom: 16 }}>
+              Session {donorThemeAnalysisResult.report?.session_info?.session_id} -- {donorThemeAnalysisResult.report?.themes?.[0]?.theme}
+            </h4>
+
+            <div style={{ marginBottom: 20 }}>
+              <h5 style={{ marginBottom: 8 }}>Overall Summary:</h5>
+              <p style={{ lineHeight: 1.6, color: '#374151' }}>
+                {donorThemeAnalysisResult.report?.overall_summary}
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <strong>Session Info:</strong> {JSON.stringify(donorThemeAnalysisResult.report?.session_info)}
+            </div>
+
+            {donorThemeAnalysisResult.report?.themes?.map((theme: any, themeIdx: number) => (
+              <div key={themeIdx} style={{ marginBottom: 25, padding: 16, backgroundColor: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                <h6 style={{ color: '#1e40af', marginBottom: 8 }}>{theme.theme}</h6>
+                <div style={{ marginBottom: 12, color: '#6b7280', fontStyle: 'italic' }}>
+                  {theme.description}
+                </div>
+                <div style={{ marginBottom: 8, fontSize: 14 }}>
+                  <strong>Summary:</strong> {theme.summary}
+                </div>
+                <div style={{ marginBottom: 8, fontSize: 14 }}>
+                  <strong>Confidence:</strong> {Math.round((theme.confidence || 0) * 100)}%
+                </div>
+
+                <div style={{ marginTop: 16 }}>
+                  <strong>Bills ({theme.bills?.length || 0}):</strong>
+                  <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
+                    {(theme.bills || []).map((bill: any, billIdx: number) => (
+                      <li key={billIdx} style={{ marginBottom: 8 }}>
+                        <div><strong>{bill.bill_number}</strong> -- {bill.title}</div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                          Vote: {bill.vote} | Reason: {bill.reason}
+                        </div>
+                        {bill.takeaways && (
+                          <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4, fontStyle: 'italic' }}>
+                            <strong>Takeaways:</strong> {bill.takeaways}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div style={{ marginTop: 16 }}>
+                  <strong>Donors ({theme.donors?.length || 0}):</strong>
+                  <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
+                    {(theme.donors || []).map((donor: any, donorIdx: number) => (
+                      <li key={donorIdx}>
+                        <div><strong>{donor.name}</strong> -- {(() => {
+                          // Handle both string ($5,000) and number formats
+                          let amount = donor.total_amount ?? donor.amount ?? donor.total ?? 0;
+                          if (typeof amount === 'string') {
+                            amount = Number(amount.replace(/[$,]/g, ''));
+                          }
+                          return `$${Number(amount).toLocaleString()}`;
+                        })()}</div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>
+                          {donor.type || 'Unknown type'} * {donor.employer || 'Unknown employer'} * {donor.occupation || 'Unknown occupation'}
+                        </div>
+                        {donor.notes && (
+                          <div style={{ fontSize: 12, color: '#4b5563', marginTop: 2, fontStyle: 'italic' }}>{donor.notes}</div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
