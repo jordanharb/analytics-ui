@@ -23,7 +23,7 @@ interface Session {
   endDate: string | null;
 }
 
-type SessionSelection = number | 'combined';
+type SessionSelection = number;
 
 interface AnalysisResult {
   sessionName: string;
@@ -819,7 +819,7 @@ const nowMs = () => (typeof performance !== 'undefined' && typeof performance.no
   ? performance.now()
   : Date.now());
 
-const DONOR_THEME_SYSTEM_PROMPT = `You are an investigative analyst producing long-form, fully-cited reports.
+const DONOR_THEME_SYSTEM_PROMPT = `You are a progressive investigative journalist producing long-form, fully-cited reports analyzing campaign finance to expose corporate influence and protect public interests.
 
 Hard rules:
 1) EXCLUDE funding from the Citizens Clean Elections Commission, EXCLUDE "Multiple Contributors," and EXCLUDE the candidate's own committees. Do not mention them.
@@ -831,10 +831,10 @@ Hard rules:
    * Geography (out-of-state vs in-state, specific cities/regions)
    * Timing patterns (donation clusters around bill/vote dates)
    * Contribution size patterns (max-out donors, frequent small donors--excluding CCEC)
-4) For each theme, generate 15-30 search queries mixing jargon, synonyms, and statute phrasing (e.g., "A.R.S.", "section", "statute", "amend", "repeal", "exemption", "fee", "preemption").
+4) For each theme, generate 15-30 search queries mixing jargon, synonyms, and statute phrasing (e.g., "A.R.S.", "section", "statute", "amend", "repeal", "exemption", "fee", "preemption"). PRIORITIZE identifying potentially harmful bills that could undermine public interests, harm marginalized communities, or benefit wealthy donors at the expense of ordinary citizens.
 5) Iteratively call tools to run EXHAUSTIVE bill searches until two consecutive iterations yield no new bills or ~1000 bills are accumulated. Lower p_min_text_score stepwise: 0.35->0.25->0.15->0.10 when needed.
 6) Every cited bill must include at least one statute reference and one excerpt (from bills.bill_summary or bills.bill_text), plus the legislator's vote/sponsor context.
-7) Return STRICT JSON exactly matching the requested schema when asked. Prefer detailed, long outputs.`;
+7) Return STRICT JSON exactly matching the requested schema when asked. Write concisely but as exhaustively as possible.`;
 
 const chunkArray = <T,>(values: T[], size: number): T[][] => {
   if (size <= 0) return [values];
@@ -1523,7 +1523,7 @@ const searchLegislator = async (selectedPerson?: Person) => {
         generationConfig: baseGenerationConfig,
         systemInstruction: {
           role: 'system',
-          parts: [{ text: 'You are an investigative journalist. Think exhaustively before replying and use the maximum internal reasoning budget available.' }],
+          parts: [{ text: 'You are a progressive investigative journalist analyzing campaign finance to expose corporate influence and protect public interests. When analyzing bills, prioritize identifying potentially harmful legislation that could undermine public interests, harm marginalized communities, or benefit wealthy/corporate donors at the expense of ordinary citizens. Think exhaustively before replying and use the maximum internal reasoning budget available.' }],
         },
       });
 
@@ -1536,7 +1536,7 @@ const searchLegislator = async (selectedPerson?: Person) => {
       // Process each selected session
       for (let i = 0; i < selectedSessions.length; i++) {
         const sessionId = selectedSessions[i];
-        const isCombined = typeof sessionId === 'string';
+        const isCombined = selectedSessions.length > 1;
         const sessionStartTime = nowMs();
 
         let sessionName: string;
@@ -1737,10 +1737,10 @@ const searchLegislator = async (selectedPerson?: Person) => {
           summary_stats: summaryStats
         }, null, 2);
 
-const phase1Prompt = `${customBlock}Phase 1 Prompt Template
+const phase1Prompt = `${customBlock}Phase 1 Progressive Investigation Template
 This prompt is designed to generate a broad list of potential connections using metadata only.
 
-You are an investigative journalist analyzing potential conflicts of interest between campaign donations and legislative activity. Work only with the structured metadata provided. DO NOT call any other tools or read full bill text during Phase 1.
+You are a progressive investigative journalist analyzing potential conflicts of interest between corporate/special interest donors and legislative activity. PRIORITIZE bills that could harm public interests or benefit wealthy donors. Work only with the structured metadata provided. DO NOT call any other tools or read full bill text during Phase 1.
 
 PHASE 1 OUTPUT REQUIREMENTS:
 
@@ -2048,17 +2048,23 @@ Output ONLY the JSON object that follows the schema above. No prose, no markdown
               ? group.group_reasons
               : [group.connection_reason ?? group.group_reason ?? ''].filter(Boolean);
 
-            const phase2Prompt = `${customBlock}You are an investigative journalist doing a DEEP DIVE analysis of potential donor-bill connections.
+            const phase2Prompt = `${customBlock}You are a progressive investigative journalist doing a DEEP DIVE analysis of potential donor-bill connections that may serve corporate/special interests over public good.
 
 You have been given a list of ${highConfidenceGroups.length} potential groups to investigate (each group contains one bill with all associated donors).
 
+CRITICAL FOCUS: Prioritize connections where corporate/special interest money may be buying harmful legislation that:
+- Benefits wealthy donors/corporations at the expense of ordinary citizens
+- Weakens protections for workers, consumers, environment, civil rights, or democracy
+- Provides special tax breaks, deregulation, or privileges to wealthy interests
+- Undermines public services, education, healthcare access, or social programs
+
 PRIORITY DONORS TO SCRUTINIZE:
-- Lobbyists and lobbying firms (check occupation field)
-- Political Action Committees (PACs) and organizations
-- Major corporate executives, CEOs, presidents (check occupation field)
-- High-dollar donors ($500+ for individuals, $1000+ for organizations)
-- Interest groups and trade associations
-- Donors employed by companies with legislative interests
+- Lobbyists and lobbying firms (check occupation field) - especially representing corporate interests
+- Corporate PACs and business organizations seeking regulatory advantages
+- Major corporate executives, CEOs, presidents (check occupation field) - especially from industries seeking legislative favor
+- High-dollar donors ($500+ for individuals, $1000+ for organizations) - focus on those seeking policy benefits
+- Industry trade associations and special interest groups
+- Donors employed by companies with direct legislative interests that would benefit from the bills
 
 YOUR MISSION: Validate or reject each connection by examining the actual bill text.
 
@@ -2497,10 +2503,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       }))
     }];
 
-    let numericSessions = selectedSessions.filter((s): s is number => typeof s === 'number');
-    if (!numericSessions.length && selectedSessions.includes('combined')) {
-      numericSessions = availableSessions.map(s => s.id);
-    }
+    let numericSessions = selectedSessions;
     const sessionMetadata = availableSessions
       .filter(s => numericSessions.includes(s.id));
 
@@ -2563,7 +2566,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
     for (let i = 0; i < selectedSessions.length; i++) {
       const selection = selectedSessions[i];
-      const isCombined = typeof selection === 'string';
+      const isCombined = selectedSessions.length > 1;
 
       let sessionName: string;
       let startDate: string;
@@ -2571,11 +2574,10 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       let sessionIdsForQuery: number[] = [];
 
       if (isCombined) {
-        const combinedNumeric = selectedSessions.filter((s): s is number => typeof s === 'number');
-        const combinedSessions = (await Promise.all(combinedNumeric.map(fetchSessionMeta))).filter((s): s is Session => !!s);
+        const combinedSessions = (await Promise.all(selectedSessions.map(fetchSessionMeta))).filter((s): s is Session => !!s);
 
         if (combinedSessions.length === 0) {
-          throw new Error('No sessions selected for combined analysis');
+          throw new Error('No sessions selected for analysis');
         }
 
         sessionName = 'Combined Sessions';
@@ -2596,9 +2598,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       }
 
       if (isCombined) {
-        const combinedNumeric = selectedSessions.filter((s): s is number => typeof s === 'number');
         sessionIdsForQuery = Array.from(new Set(
-          await Promise.all(combinedNumeric.map(async (id) => {
+          await Promise.all(selectedSessions.map(async (id) => {
             const session = await fetchSessionMeta(id);
             return session?.id;
           }))
@@ -2740,12 +2741,19 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       ? `================================\nCUSTOM CRITICAL INSTRUCTIONS AND CONTEXT - These Override all other rules:\n${customInstructions}\n================================\n\n`
       : '';
 
-    const singlePrompt = `${customBlockSingle}Single-Pass Investigative Analysis\n\n` +
-      `You are an investigative journalist investigating links between campaign donors and legislative activity for ${currentLegislator}.\n` +
+    const singlePrompt = `${customBlockSingle}Progressive Campaign Finance Investigation\n\n` +
+      `You are an investigative journalist analyzing campaign finance from a progressive perspective, investigating links between corporate/special interest donors and legislative activity for ${currentLegislator}.\n` +
+      `CRITICAL FOCUS: Prioritize identifying bills that could harm marginalized communities, undermine public interests, or benefit wealthy/corporate donors at the expense of ordinary citizens.\n` +
+      `Emphasize connections where donors may be buying influence for legislation that:\n` +
+      `- Weakens environmental protections, worker rights, civil rights, voting access, healthcare access, or consumer protections\n` +
+      `- Provides tax breaks, deregulation, or special benefits to wealthy donors or corporations\n` +
+      `- Restricts reproductive rights, LGBTQ+ rights, or other progressive priorities\n` +
+      `- Undermines public education, social services, or democratic institutions\n` +
       `You may call the provided tools (resolve_legislator, get_sessions, get_votes, get_donations, get_sponsorships, get_bill_details, get_bill_texts_array, get_bill_rts).\n` +
       `Always cite evidence directly from bill details and RTS positions when making claims.\n` +
-      `Focus on identifying THEMES tying donors to bills, rather than individual donor-bill pairs.\n` +
-      `For each theme, list every relevant bill and every related donor exhaustively.\n` +
+      `Focus on identifying THEMES tying donors to potentially harmful bills, rather than individual donor-bill pairs.\n` +
+      `PRIORITIZE themes where corporate/special interest money appears connected to legislation that serves donor interests over public good.\n` +
+      `For each theme, list every relevant bill and every related donor exhaustively, emphasizing the most concerning connections first.\n` +
       `Each bill must appear only once with every relevant donor nested under that bill entry.\n` +
       `Selected sessions: ${JSON.stringify(sessionMetadata)}. Combined range: ${combinedSessionRange.start || 'unknown'} to ${combinedSessionRange.end || 'unknown'}.\n` +
       `Baseline dataset for reference (metadata only):\n\`\`\`json\n${datasetJson}\n\`\`\`\n` +
@@ -2821,7 +2829,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         contents,
         systemInstruction: {
           role: 'system',
-          parts: [{ text: 'You are an investigative journalist. Use the maximum available thinking budget before delivering conclusions.' }]
+          parts: [{ text: 'You are a progressive investigative journalist analyzing campaign finance to expose corporate influence and protect public interests. When analyzing bills, prioritize identifying potentially harmful legislation that could undermine public interests, harm marginalized communities, or benefit wealthy/corporate donors at the expense of ordinary citizens. Use the maximum available thinking budget before delivering conclusions.' }]
         },
         tools: toolDeclarations,
         generationConfig: {
@@ -2979,7 +2987,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
 
       const donorArgs: Record<string, unknown> = {
         p_person_id: currentPersonId,
-        p_recipient_entity_ids: entityIds.length ? entityIds : null,
+        // Don't pass p_recipient_entity_ids when p_person_id is provided -
+        // the function gets entity IDs automatically from mv_entities_search
         p_session_id: sessionId,
         p_days_before: 90,  // Match updated database function default
         p_days_after: 45,
@@ -3412,7 +3421,7 @@ Response format: [12345, 67890, ...]`;
             const { data: stakeholderData, error: stakeholderError } = await supabase.rpc('search_rts_by_vector', {
               p_bill_id: billId,
               p_session_id: donorThemeContext.sessionId,
-              p_limit: 20,
+              p_limit: 35,
               p_query_vec: embeddingService.formatForPgVector(themeVector),
             });
             if (!stakeholderError) {
@@ -3467,7 +3476,7 @@ Response format: [12345, 67890, ...]`;
 IMPORTANT:
 1. Each bill in the data includes a bill_summary. For deeper analysis of specific bills, you can call get_bill_texts_array([bill_id1, bill_id2, ...]) to retrieve the full bill text for multiple bills at once. Use this when you need to analyze specific statutory provisions, legal language, or detailed bill mechanics.
 2. Include employer, occupation, and type for each donor from the provided donor data. Do not leave these fields empty.
-3. KEEP THE MARKDOWN SUMMARY CONCISE (1-2 pages max) to avoid token limits. Focus on the most significant findings and evidence.
+3. Write the markdown summary concisely but as exhaustively as possible to cover all significant findings and evidence.
 
 DATA:
 ${JSON.stringify(reportPayload, null, 2)}
@@ -3501,7 +3510,7 @@ Return STRICT JSON:
     "transactions_cited": [
       { "public_transaction_id": 123456789, "donor": "Donor Name", "date": "YYYY-MM-DD", "amount": 5300.00, "linked_bills": ["HBXXXX", "SBYYYY"] }
     ],
-    "markdown_summary": "1-2 pages of focused narrative organized by theme with key citations (keep concise to avoid token limits)"
+    "markdown_summary": "Comprehensive narrative organized by theme with key citations (write concisely but exhaustively)"
   }
 }
 
@@ -3926,17 +3935,20 @@ Rules:
           </div>
 
           {availableSessions.length > 1 && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-              <input
-                type="checkbox"
-                checked={selectedSessions.includes('combined')}
-                onChange={() => toggleSession('combined')}
-              />
-              <div>
-                <div style={{ fontWeight: 600 }}>Combined Analysis</div>
-                <div style={{ fontSize: '0.9em', color: '#666' }}>Analyze all selected sessions together</div>
+            <div style={{
+              marginTop: 12,
+              padding: 8,
+              background: '#f8fafc',
+              borderRadius: 6,
+              border: '1px solid #e2e8f0'
+            }}>
+              <div style={{ fontSize: '0.9em', color: '#475569', fontWeight: 500 }}>
+                📊 Multi-Session Analysis
               </div>
-            </label>
+              <div style={{ fontSize: '0.85em', color: '#64748b', marginTop: 4 }}>
+                When multiple sessions are selected, the analysis will combine all donation and voting data across the selected time periods to identify comprehensive patterns and relationships.
+              </div>
+            </div>
           )}
 
           {/* Existing Theme Lists Section */}

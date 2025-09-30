@@ -9,14 +9,16 @@ This is the Analytics UI for a TPUSA Social Monitoring platform with integrated 
 ## Commands
 
 ### Development
-- `npm run dev` - Start development server with Vite
+- `npm run dev` or `npm start` - Start development server with Vite at http://localhost:5173
 - `npm run build` - Build for production (with TypeScript checks)
 - `npm run build:no-typecheck` - Build without TypeScript checks (for deployments with build errors)
+- `npm run vercel-build` - Vercel-specific build command (uses no-typecheck)
 - `npm run lint` - Run ESLint
 - `npm run preview` - Preview production build locally
 
 ### Testing
 - No test framework currently configured - use development server for testing
+- Testing libraries are installed (@testing-library/react, @testing-library/jest-dom) but not configured
 
 ### Database Operations
 - SQL files in `/sql/` directory contain database functions and migrations
@@ -25,10 +27,27 @@ This is the Analytics UI for a TPUSA Social Monitoring platform with integrated 
 
 ## Architecture
 
+### Tech Stack
+- **React 19.1**: UI framework with lazy loading and Suspense
+- **TypeScript 5.8**: Type-safe development
+- **Vite 7.1**: Fast build tool with hot reload
+- **TailwindCSS 4.1**: Utility-first styling
+- **React Router 7.8**: Client-side routing
+- **Zustand 5.0**: Lightweight state management
+- **Supabase**: Database and authentication
+- **Mapbox GL**: Interactive mapping
+
 ### Core Structure
 - **Analytics UI Main App** (`/src/`): Social monitoring interface with map view, directory, chat functionality
 - **Legislature Module** (`/src/legislature/`): Campaign finance analysis tools (appears as separate app within main app)
 - **SQL Functions** (`/sql/`): Database stored procedures for campaign finance analysis
+
+### Application Architecture
+The app has a dual-structure design:
+1. **Main Application (Woke Palantir)**: Social monitoring with MapView, DirectoryView, ChatView, EntityView
+2. **Legislature Module**: Completely separate React app for campaign finance analysis, mounted at `/legislature/*`
+
+Both apps share the same build system but have separate routing and state management.
 
 ### Key Components
 
@@ -132,10 +151,37 @@ This is the Analytics UI for a TPUSA Social Monitoring platform with integrated 
 
 ## Key Files to Understand
 
-- `src/legislature/ReportGeneratorPage.tsx` - Main analysis interface (needs fixing)
-- `src/lib/supabase2.ts` - Database client configuration
+### Essential Configuration
+- `vite.config.ts` - Build configuration with chunk splitting and MCP proxy
+- `src/App.tsx` - Main router with lazy loading and conditional header display
+- `src/lib/supabase2.ts` - Database client configuration for campaign finance DB
+- `src/lib/supabase.ts` - Main database client configuration
+
+### Legislature Module Core Files
+- `src/legislature/LegislatureApp.tsx` - Legislature module router and layout
+- `src/legislature/ReportGeneratorPage.tsx` - Original AI analysis interface (needs fixing)
+- `src/legislature/ReportGeneratorPageV2.tsx` - Newer version with streaming support
+- `src/legislature/HomePage.tsx` - Search interface for legislators and candidates
+
+### Database & Analysis
 - `sql/update_report_functions_fixed.sql` - Latest database function definitions
 - Original analysis script: `/Users/jordanharb/Desktop/az-campaign-analyzer-app/backend/scripts/analysis.mjs`
+
+### Build & Deployment
+- `vercel.json` - Client-side routing configuration for Vercel
+- `package.json` - Contains vercel-build script for deployment
+
+## Development Workflow
+
+### MCP Integration
+- Local MCP server runs on port 5175 during development
+- Vite proxy forwards `/api/mcp` requests to MCP server
+- MCP SDK is excluded from optimization to prevent import issues
+
+### Build Process
+- Uses manual chunk splitting for optimal loading (react-vendor, ai-vendor, etc.)
+- TypeScript checks can be bypassed for deployments using `build:no-typecheck`
+- CommonJS compatibility for node_modules
 
 ## Restoration Priority
 1. Fix Gemini API integration in ReportGeneratorPage

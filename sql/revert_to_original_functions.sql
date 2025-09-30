@@ -1,63 +1,14 @@
+-- Revert to original working functions with fixed session_window
+-- This reverts the complex multi-session approach back to simple single-session analysis
 
-search_people_with_sessions
-- the go to way to find the people_id for legislators which is used as the canonical for all other commands pertaining to one. 
-BEGIN
-  IF p_search_term IS NULL OR p_search_term = '' THEN
-    -- Return all people if no search term
-    RETURN QUERY
-    SELECT
-      m.person_id,
-      m.display_name,
-      m.all_session_ids,
-      m.all_entity_ids,
-      m.all_legislator_ids,
-      m.entity_id AS primary_entity_id,
-      m.primary_committee_name,
-      m.primary_candidate_name,
-      m.total_income_all_records AS total_income,
-      m.total_expense_all_records AS total_expense,
-      m.party,
-      m.body,
-      m.district
-    FROM mv_entities_search m
-    ORDER BY m.display_name
-    LIMIT 100;
-  ELSE
-    -- Search using full text search
-    RETURN QUERY
-    SELECT
-      m.person_id,
-      m.display_name,
-      m.all_session_ids,
-      m.all_entity_ids,
-      m.all_legislator_ids,
-      m.entity_id AS primary_entity_id,
-      m.primary_committee_name,
-      m.primary_candidate_name,
-      m.total_income_all_records AS total_income,
-      m.total_expense_all_records AS total_expense,
-      m.party,
-      m.body,
-      m.district
-    FROM mv_entities_search m
-    WHERE m.search_vector @@ plainto_tsquery('english', p_search_term)
-       OR LOWER(m.display_name) LIKE LOWER('%' || p_search_term || '%')
-    ORDER BY
-      CASE
-        WHEN LOWER(m.display_name) LIKE LOWER(p_search_term || '%') THEN 1
-        WHEN LOWER(m.display_name) LIKE LOWER('%' || p_search_term || '%') THEN 2
-        ELSE 3
-      END,
-      m.display_name
-    LIMIT 100;
-  END IF;
-END;
+-- First, fix the session_window function to handle arrays (for future multi-session support)
+-- but keep the current single-session approach in the main functions
 
+-- Drop existing broken versions
+DROP FUNCTION IF EXISTS public.search_donor_totals_window(bigint, integer[], integer[], integer, integer, integer[], vector, numeric, date, date, integer);
+DROP FUNCTION IF EXISTS public.search_donor_totals_window(bigint, integer[], integer, integer, integer, integer[], vector, numeric, date, date, integer);
 
-search_donor_totals_window
-
-DROP FUNCTION IF EXISTS public.search_donor_totals_window(integer[], integer, integer, integer, text[], vector, numeric, date, date, integer);
-
+-- Revert search_donor_totals_window to original working version
 CREATE OR REPLACE FUNCTION public.search_donor_totals_window(
   p_person_id                     bigint    DEFAULT NULL,
   p_recipient_entity_ids          integer[] DEFAULT NULL,
@@ -102,6 +53,7 @@ BEGIN
     v_entity_ids := p_recipient_entity_ids;
   END IF;
 
+  -- Use session_window for date calculation (now fixed to work properly)
   IF p_session_id IS NOT NULL THEN
     SELECT from_date, to_date INTO v_from, v_to
     FROM public.session_window(p_session_id, p_days_before, p_days_after);
@@ -181,9 +133,8 @@ BEGIN
 END;
 $$;
 
-search_bills_for_legislator_optimized
-
-DROP FUNCTION IF EXISTS public.search_bills_for_legislator_optimized(integer, integer, text[], vector[], double precision, integer, integer);
+-- Revert search_bills_for_legislator_optimized to original working version
+DROP FUNCTION IF EXISTS public.search_bills_for_legislator_optimized(bigint, integer, text[], vector[], double precision, integer, integer);
 
 CREATE OR REPLACE FUNCTION public.search_bills_for_legislator_optimized(
   p_person_id     bigint,
@@ -380,210 +331,11 @@ LIMIT p_limit
 OFFSET p_offset;
 $$;
 
+-- Grant permissions
+GRANT EXECUTE ON FUNCTION search_donor_totals_window(bigint, integer[], integer, integer, integer, integer[], vector, numeric, date, date, integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION search_donor_totals_window(bigint, integer[], integer, integer, integer, integer[], vector, numeric, date, date, integer) TO anon;
+GRANT EXECUTE ON FUNCTION search_donor_totals_window(bigint, integer[], integer, integer, integer, integer[], vector, numeric, date, date, integer) TO service_role;
 
-
-get_bill_text
-
-CREATE OR REPLACE FUNCTION public.get_bill_text(
-  p_bill_id integer
-)
-RETURNS TABLE (
-  bill_id       integer,
-  bill_number   text,
-  session_id    integer,
-  summary_title text,
-  bill_summary  text,
-  full_doc_type text,
-  bill_text     text
-)
-LANGUAGE sql STABLE AS
-$$
-  SELECT
-    b.bill_id,
-    b.bill_number::text,
-    b.session_id,
-    b.summary_title,
-    COALESCE(b.bill_summary, '') AS bill_summary,
-    b.full_doc_type,
-    COALESCE(b.bill_text, '') AS bill_text
-  FROM public.bills b
-  WHERE b.bill_id = p_bill_id;
-$$;
-
-get_bill_texts_array
-
-CREATE OR REPLACE FUNCTION public.get_bill_texts_array(
-  p_bill_ids integer[]
-)
-RETURNS TABLE (
-  bill_id       integer,
-  bill_number   text,
-  session_id    integer,
-  summary_title text,
-  bill_summary  text,
-  full_doc_type text,
-  bill_text     text
-)
-LANGUAGE sql STABLE AS
-$$
-  SELECT
-    b.bill_id,
-    b.bill_number::text,
-    b.session_id,
-    b.summary_title,
-    COALESCE(b.bill_summary, '') AS bill_summary,
-    b.full_doc_type,
-    COALESCE(b.bill_text, '') AS bill_text
-  FROM public.bills b
-  WHERE b.bill_id = ANY(p_bill_ids)
-  ORDER BY b.bill_id;
-$$;
-
-
-get_bill_vote_rollup
-  SELECT v.vote, COUNT(*)::int
-  FROM public.votes v
-  WHERE v.bill_id = p_bill_id
-  GROUP BY v.vote
-  ORDER BY count DESC;
-
-search_rts_by_vector
-
-  SELECT
-    r.position_id,
-    r.bill_id,
-    r.entity_name,
-    r.position AS rts_position,                         -- avoid reserved word in RETURNS list
-    1 - (r.embedding <=> p_query_vec) AS score
-  FROM public.rts_positions r
-  JOIN public.bills b ON b.bill_id = r.bill_id
-  WHERE r.embedding IS NOT NULL
-    AND (p_bill_id IS NULL OR r.bill_id = p_bill_id)
-    AND (p_session_id IS NULL OR b.session_id = p_session_id)
-  ORDER BY r.embedding <=> p_query_vec
-  LIMIT p_limit;
-
-
-DROP FUNCTION IF EXISTS public.list_donor_transactions_window(
-  integer[], integer, integer[], integer, integer, integer[], text[], boolean, numeric, date, date
-);
-DROP FUNCTION IF EXISTS public.list_donor_transactions_window(
-  bigint, integer[], integer, integer[], integer, integer, integer[], text[], boolean, numeric, date, date
-);
-
-CREATE OR REPLACE FUNCTION public.list_donor_transactions_window(
-  p_person_id                     bigint    DEFAULT NULL,
-  p_recipient_entity_ids          integer[] DEFAULT NULL,
-  p_session_id                    integer   DEFAULT NULL,
-  p_include_transaction_entity_ids integer[] DEFAULT NULL,
-  p_days_before                   integer   DEFAULT 90,  -- Changed to 90 before as requested
-  p_days_after                    integer   DEFAULT 45,  -- Keep 45 after as requested
-  p_exclude_entity_ids            integer[] DEFAULT ARRAY[-1, -2],
-  p_exclude_name_patterns         text[]    DEFAULT ARRAY['citizens clean election%', 'multiple contributor%'],
-  p_exclude_self_committees       boolean   DEFAULT TRUE,
-  p_min_amount                    numeric   DEFAULT 0,
-  p_from                          date      DEFAULT NULL,
-  p_to                            date      DEFAULT NULL
-)
-RETURNS TABLE (
-  public_transaction_id   bigint,
-  transaction_id          bigint,
-  transaction_date        date,
-  transaction_entity_id   integer,
-  transaction_entity_name character varying,  -- Match actual database type
-  amount                  numeric,
-  recipient_entity_id     integer,
-  recipient_name          character varying   -- Match actual database type
-)
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-  v_entity_ids integer[];
-  v_from_date date;
-  v_to_date date;
-BEGIN
-  -- Get entity IDs from person_id if provided (simplified approach)
-  IF p_person_id IS NOT NULL THEN
-    SELECT COALESCE(m.all_entity_ids, ARRAY[]::integer[]) INTO v_entity_ids
-    FROM mv_entities_search m
-    WHERE m.person_id = p_person_id;
-
-    -- Add any additional recipient entity IDs
-    IF p_recipient_entity_ids IS NOT NULL THEN
-      v_entity_ids := v_entity_ids || p_recipient_entity_ids;
-    END IF;
-  ELSE
-    v_entity_ids := COALESCE(p_recipient_entity_ids, ARRAY[]::integer[]);
-  END IF;
-
-  -- Get session window dates if session provided
-  IF p_session_id IS NOT NULL THEN
-    SELECT from_date, to_date INTO v_from_date, v_to_date
-    FROM public.session_window(p_session_id, p_days_before, p_days_after);
-  ELSE
-    v_from_date := p_from;
-    v_to_date := p_to;
-  END IF;
-
-  -- Return transactions with optimized query
-  RETURN QUERY
-  SELECT
-    t.public_transaction_id,
-    t.transaction_id,
-    t.transaction_date,
-    t.transaction_entity_id,
-    d.entity_name,
-    t.amount,
-    t.entity_id,
-    COALESCE(r.primary_candidate_name, r.primary_committee_name)
-  FROM public.cf_transactions t
-  JOIN public.cf_transaction_entities d ON d.entity_id = t.transaction_entity_id
-  LEFT JOIN public.cf_entities r ON r.entity_id = t.entity_id
-  WHERE
-    -- Basic filters first (most selective)
-    t.transaction_type_disposition_id = 1
-    AND t.amount >= p_min_amount
-
-    -- Date filters
-    AND (v_from_date IS NULL OR t.transaction_date >= v_from_date)
-    AND (v_to_date IS NULL OR t.transaction_date < v_to_date)
-
-    -- Entity filters (use arrays for efficiency)
-    AND (
-      cardinality(v_entity_ids) = 0
-      OR t.entity_id = ANY(v_entity_ids)
-    )
-
-    -- Include specific transaction entities if provided
-    AND (
-      p_include_transaction_entity_ids IS NULL
-      OR t.transaction_entity_id = ANY(p_include_transaction_entity_ids)
-    )
-
-    -- Exclude specific entities
-    AND (
-      p_exclude_entity_ids IS NULL
-      OR NOT (t.transaction_entity_id = ANY(p_exclude_entity_ids))
-    )
-
-    -- Exclude by name patterns (simplified)
-    AND (
-      p_exclude_name_patterns IS NULL
-      OR NOT EXISTS (
-        SELECT 1
-        FROM unnest(p_exclude_name_patterns) AS pattern
-        WHERE LOWER(d.entity_name) LIKE LOWER(pattern)
-      )
-    )
-
-    -- Self-committee exclusion
-    AND (
-      NOT p_exclude_self_committees
-      OR cardinality(v_entity_ids) = 0
-      OR NOT (t.transaction_entity_id = ANY(v_entity_ids))
-    )
-
-  ORDER BY t.amount DESC, t.transaction_date DESC;
-END;
-$$;
+GRANT EXECUTE ON FUNCTION search_bills_for_legislator_optimized(bigint, integer, text[], vector[], double precision, integer, integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION search_bills_for_legislator_optimized(bigint, integer, text[], vector[], double precision, integer, integer) TO anon;
+GRANT EXECUTE ON FUNCTION search_bills_for_legislator_optimized(bigint, integer, text[], vector[], double precision, integer, integer) TO service_role;
