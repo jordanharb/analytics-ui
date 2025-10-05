@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 
 // Initialize Supabase client
-const supabaseUrl = process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
+const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
 const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
 
 const supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
@@ -605,7 +605,7 @@ export default async function handler(req, res) {
 
     console.log('🧹 Cleaned messages count:', cleanedMessages.length);
 
-    const apiKey = process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
       console.log('❌ No API key found');
       return res.status(500).json({ error: 'Google API key not configured' });

@@ -18,8 +18,8 @@ export default function handler(req, res) {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: {
-      hasSupabaseUrl: !!process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL,
-      hasApiKey: !!(process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY)
+      hasSupabaseUrl: !!(process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL),
+      hasApiKey: !!(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY)
     }
   });
 }

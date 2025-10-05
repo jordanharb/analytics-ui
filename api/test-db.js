@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     console.log('🔍 Testing database functions...');
 
     // Initialize Supabase client
-    const supabaseUrl = process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
+    const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
     const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
 
     const supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
