@@ -13,10 +13,28 @@ export default async function handler(req, res) {
   try {
     // Check environment variables
     const envCheck = {
-      hasSupabaseUrl: !!process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL,
-      hasSupabaseKey: !!process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY,
-      hasGoogleKey: !!(process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+      // Campaign Finance Database
+      hasCampaignFinanceUrl: !!(process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL),
+      hasCampaignFinanceKey: !!process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY,
+
+      // Main Database
+      hasMainSupabaseUrl: !!process.env.VITE_SUPABASE_URL,
+      hasMainSupabaseKey: !!process.env.VITE_SUPABASE_ANON_KEY,
+
+      // AI Keys
+      hasGoogleKey: !!(process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
       hasOpenAIKey: !!(process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY),
+
+      // All available environment variables (filtered for security)
+      availableEnvVars: Object.keys(process.env).filter(key =>
+        key.includes('SUPABASE') ||
+        key.includes('GOOGLE') ||
+        key.includes('GEMINI') ||
+        key.includes('OPENAI') ||
+        key.includes('VITE')
+      ).sort(),
+
+      // System info
       nodeVersion: process.version,
       method: req.method,
       hasBody: !!req.body,

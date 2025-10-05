@@ -10,14 +10,21 @@ let openai;
 
 function initializeClients() {
   if (!supabase2) {
-    const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
-    const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
+    // Try campaign finance specific vars first, then fall back to main database vars
+    const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL ||
+                       process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL ||
+                       process.env.VITE_SUPABASE_URL;
+
+    const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY ||
+                              process.env.VITE_SUPABASE_ANON_KEY;
 
     if (!supabaseUrl) {
-      throw new Error('CAMPAIGN_FINANCE_SUPABASE_URL environment variable is required');
+      const availableVars = Object.keys(process.env).filter(key => key.includes('SUPABASE')).join(', ');
+      throw new Error(`Supabase URL not found. Available environment variables: ${availableVars}. Looking for: CAMPAIGN_FINANCE_SUPABASE_URL, VITE_CAMPAIGN_FINANCE_SUPABASE_URL, or VITE_SUPABASE_URL`);
     }
     if (!supabaseServiceKey) {
-      throw new Error('CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY environment variable is required');
+      const availableVars = Object.keys(process.env).filter(key => key.includes('SUPABASE')).join(', ');
+      throw new Error(`Supabase service key not found. Available environment variables: ${availableVars}. Looking for: CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY or VITE_SUPABASE_ANON_KEY`);
     }
 
     supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
