@@ -3189,11 +3189,18 @@ Notes:
         try {
           const expansionPrompt = `For THEME "${theme.title}" create 5-8 broad search queries that combine:
  - sector jargon and synonyms,
- - Arizona statute phrasing (A.R.S., section, amend, repeal),
+ - statute phrasing (section, amend, repeal, subsection, paragraph),
  - bill lifecycle terms (introduced, engrossed, enrolled),
  - committee names that touch this sector.
 
-Keep each query as a short, plain phrase about the topic; avoid quotes, boolean operators, and broad Title references. Add short legal phrasing likely to appear in statutes or regulations (e.g., requirement, compliance, permitting, exemption, enforcement).
+CRITICAL: DO NOT include any of these redundant terms since all bills are already Arizona statutes:
+- "Arizona" or "AZ"
+- "A.R.S." or "ARS"
+- "Arizona Revised Statutes"
+- "Arizona statute"
+- Any state-specific references
+
+Keep each query as a short, plain phrase about the topic; avoid quotes, boolean operators, and broad Title references.
 
 Theme description: ${theme.description}
 Industry tags: ${(theme.industry_tags || []).join(', ') || 'n/a'}
