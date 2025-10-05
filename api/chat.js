@@ -638,13 +638,17 @@ export default async function handler(req, res) {
 
     console.log('🧹 Cleaned messages count:', cleanedMessages.length);
 
-    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
       console.log('❌ No API key found');
       return res.status(500).json({ error: 'Google API key not configured' });
     }
 
     console.log('🔑 Using API key:', apiKey.substring(0, 10) + '...');
+
+    // Set the environment variable that the Google SDK expects
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = apiKey;
+
     const model = google('gemini-2.5-pro', { apiKey });
 
     console.log('🚀 Starting streamText...');
