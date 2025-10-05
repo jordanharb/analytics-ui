@@ -2988,13 +2988,12 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       const donorArgs: Record<string, unknown> = {
         p_person_id: currentPersonId,
         // Don't pass p_recipient_entity_ids when p_person_id is provided -
-        // the function gets entity IDs automatically from mv_entities_search
+        // the function gets entity IDs automatically from mv_legislators_search
         p_session_id: sessionId,
         p_days_before: 90,  // Match updated database function default
         p_days_after: 45,
         p_min_amount: 100,  // Only donations over $100
         p_limit: 500,      // Reduce limit
-        p_query_vec: null,
       };
 
       let donors: DonorRecord[] = [];
