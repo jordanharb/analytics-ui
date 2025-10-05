@@ -23,6 +23,19 @@ export default async function handler(req, res) {
     const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
     const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
 
+    if (!supabaseUrl) {
+      return res.status(500).json({
+        error: 'CAMPAIGN_FINANCE_SUPABASE_URL environment variable is required',
+        availableEnvVars: Object.keys(process.env).filter(key => key.includes('SUPABASE'))
+      });
+    }
+    if (!supabaseServiceKey) {
+      return res.status(500).json({
+        error: 'CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY environment variable is required',
+        availableEnvVars: Object.keys(process.env).filter(key => key.includes('SUPABASE'))
+      });
+    }
+
     const supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
       auth: {
         persistSession: false,

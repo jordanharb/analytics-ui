@@ -4,20 +4,40 @@ import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 
-// Initialize Supabase client
-const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
-const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
+// Supabase client will be initialized per request
+let supabase2;
+let openai;
 
-const supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    persistSession: false,
+function initializeClients() {
+  if (!supabase2) {
+    const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL || process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
+    const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
+
+    if (!supabaseUrl) {
+      throw new Error('CAMPAIGN_FINANCE_SUPABASE_URL environment variable is required');
+    }
+    if (!supabaseServiceKey) {
+      throw new Error('CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY environment variable is required');
+    }
+
+    supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        persistSession: false,
+      }
+    });
   }
-});
 
-// Initialize OpenAI for embeddings
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY
-});
+  if (!openai) {
+    const openaiKey = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+    if (openaiKey) {
+      openai = new OpenAI({
+        apiKey: openaiKey
+      });
+    }
+  }
+
+  return { supabase2, openai };
+}
 
 // Auto-vectorization helper function
 const createEmbedding = async (text) => {
@@ -584,6 +604,12 @@ export default async function handler(req, res) {
 
   console.log('📩 Received chat request');
   try {
+    // Initialize clients with environment variables
+    const { supabase2: supabaseClient, openai: openaiClient } = initializeClients();
+
+    // Make clients available to tools by updating the global variables
+    supabase2 = supabaseClient;
+    openai = openaiClient;
     const { messages } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
