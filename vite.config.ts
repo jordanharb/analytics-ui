@@ -23,24 +23,26 @@ export default defineConfig({
       include: [/node_modules/]
     }
   },
-  optimizeDeps: {
-    exclude: ['@modelcontextprotocol/sdk', '@modelcontextprotocol/sdk/client/index.js', '@modelcontextprotocol/sdk/client/streamableHttp.js']
-  },
   define: {
     global: 'globalThis',
   },
   server: {
     proxy: {
-      // Proxy MCP API requests to the local MCP server during development
-      '/api/mcp': {
-        target: 'http://localhost:5175',
+      // Proxy API requests to Vercel development server when running locally
+      '/api': {
+        target: 'http://localhost:3000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/mcp/, '/api/mcp')
-      },
-      // Proxy AI SDK API requests to development server
-      '/api/ai-sdk-chat': {
-        target: 'http://localhost:3001',
-        changeOrigin: true
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.log('Proxy error:', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('Sending Request to the Target:', req.method, req.url);
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
+          });
+        },
       }
     }
   }

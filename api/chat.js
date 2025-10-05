@@ -1,21 +1,8 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
 import { google } from '@ai-sdk/google';
 import { streamText, tool } from 'ai';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
-
-// Load environment variables
-dotenv.config();
-
-const app = express();
-const PORT = 3001;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
 
 // Initialize Supabase client
 const supabaseUrl = process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
@@ -579,8 +566,22 @@ const campaignFinanceTools = {
   })
 };
 
-// AI SDK Chat endpoint
-app.post('/api/ai-sdk-chat', async (req, res) => {
+// Vercel serverless function
+export default async function handler(req, res) {
+  // Handle CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   console.log('📩 Received chat request');
   try {
     const { messages } = req.body;
@@ -639,7 +640,6 @@ app.post('/api/ai-sdk-chat', async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Access-Control-Allow-Origin', '*');
 
     console.log('📤 Starting stream to response...');
     // Stream the response
@@ -653,66 +653,5 @@ app.post('/api/ai-sdk-chat', async (req, res) => {
       details: error.message
     });
   }
-});
+}
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    env: {
-      hasSupabaseUrl: !!process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL,
-      hasApiKey: !!(process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY)
-    }
-  });
-});
-
-// Test database functions
-app.get('/test-db', async (req, res) => {
-  try {
-    console.log('🔍 Testing database functions...');
-
-    // Test if we can list functions
-    const { data: functions, error: funcError } = await supabase2
-      .from('information_schema.routines')
-      .select('routine_name')
-      .eq('routine_type', 'FUNCTION')
-      .ilike('routine_name', '%search%');
-
-    if (funcError) {
-      console.log('❌ Function query error:', funcError);
-    } else {
-      console.log('📋 Available search functions:', functions);
-    }
-
-    // Test a simple query to verify connection
-    const { data: testData, error: testError } = await supabase2
-      .from('mv_legislators_search')
-      .select('*')
-      .limit(1);
-
-    if (testError) {
-      console.log('❌ Table query error:', testError);
-    } else {
-      console.log('✅ Table query successful, sample:', testData?.[0]);
-    }
-
-    res.json({
-      functions: functions || [],
-      testData: testData || [],
-      errors: {
-        funcError: funcError?.message,
-        testError: testError?.message
-      }
-    });
-  } catch (error) {
-    console.error('💥 Database test error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Development API server running on http://localhost:${PORT}`);
-  console.log(`📡 AI SDK Chat endpoint: http://localhost:${PORT}/api/ai-sdk-chat`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-});

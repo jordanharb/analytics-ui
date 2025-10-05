@@ -40,7 +40,7 @@ export const AISDKChatView: React.FC = () => {
     isLoading,
     stop
   } = useChat({
-    api: '/api/ai-sdk-chat'
+    api: '/api/chat'
   });
 
     // Clear progress indicators when not loading
