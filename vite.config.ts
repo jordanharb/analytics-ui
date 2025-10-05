@@ -36,6 +36,11 @@ export default defineConfig({
         target: 'http://localhost:5175',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/mcp/, '/api/mcp')
+      },
+      // Proxy AI SDK API requests to development server
+      '/api/ai-sdk-chat': {
+        target: 'http://localhost:3001',
+        changeOrigin: true
       }
     }
   }

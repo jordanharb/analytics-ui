@@ -12,7 +12,6 @@ const CandidatePage = lazy(() => import('./CandidatePage'));
 const ReportGeneratorPage = lazy(() => import('./ReportGeneratorPage'));
 const DeprecatedReportGeneratorPage = lazy(() => import('./deprecated_ReportGeneratorPageV2'));
 const PersonPage = lazy(() => import('./PersonPage'));
-const CampaignFinanceChatView = lazy(() => import('./chat/CampaignFinanceChatView'));
 const EntityPage = lazy(() => import('./finance/EntityPage'));
 
 const LegislatureApp: React.FC = () => {
@@ -78,8 +77,7 @@ const LegislatureApp: React.FC = () => {
               <Route path="/" element={<HomePage />} />
               <Route path="/bills" element={<BillsPage />} />
               <Route path="/bulk" element={<BulkPage />} />
-              <Route path="/reports-chat" element={<CampaignFinanceChatView />} />
-              <Route path="/reports-chat-legacy" element={<ReportsChatPage />} />
+              <Route path="/reports-chat" element={<ReportsChatPage />} />
               <Route path="/report-generator" element={<ReportGeneratorPage />} />
               <Route path="/report-generator-v2" element={<DeprecatedReportGeneratorPage />} />
               <Route path="/about" element={<AboutPage />} />
