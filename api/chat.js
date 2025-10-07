@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { google } from '@ai-sdk/google';
 import { streamText, tool } from 'ai';
 import { z } from 'zod';
@@ -17,16 +18,31 @@ function resolveGeminiApiKey() {
     process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 }
 
+function resolveSupabaseConfig() {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL?.trim() ||
+    process.env.SUPABASE_URL?.trim() || '';
+
+  const supabaseServiceKey = process.env.VITE_SUPABASE_SERVICE_KEY?.trim() ||
+    process.env.SUPABASE_SERVICE_KEY?.trim() || '';
+
+  return { supabaseUrl, supabaseServiceKey };
+}
+
 function initializeClients() {
   if (!supabase2) {
-    const supabaseUrl = process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
-    const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
+    const { supabaseUrl, supabaseServiceKey } = resolveSupabaseConfig();
 
     if (!supabaseUrl) {
-      throw new Error(`VITE_CAMPAIGN_FINANCE_SUPABASE_URL not found in environment`);
+      const available = Object.keys(process.env)
+        .filter(key => key.includes('SUPABASE'))
+        .map(key => ({ key, value: process.env[key]?.length ? 'set' : 'empty' }));
+      throw new Error(`VITE_SUPABASE_URL not found. SUPABASE env summary: ${JSON.stringify(available)}`);
     }
     if (!supabaseServiceKey) {
-      throw new Error(`CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY not found in environment`);
+      const available = Object.keys(process.env)
+        .filter(key => key.includes('SUPABASE'))
+        .map(key => ({ key, value: process.env[key]?.length ? 'set' : 'empty' }));
+      throw new Error(`SUPABASE_SERVICE_KEY not found. SUPABASE env summary: ${JSON.stringify(available)}`);
     }
 
     supabase2 = createClient(supabaseUrl, supabaseServiceKey, {

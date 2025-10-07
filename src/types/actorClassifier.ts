@@ -37,6 +37,7 @@ export interface UnknownActor {
   detected_username: string | null;
   profile_displayname: string | null;
   profile_bio: string | null;
+  profile_location?: string | null;
   platform: string | null;
   mention_count: number | null;
   author_count: number | null;
@@ -46,6 +47,7 @@ export interface UnknownActor {
   assigned_actor_id?: string | null;
   network_interactions?: number | null;
   x_profile_data?: Record<string, any> | null;
+  follower_count?: number | null;
 }
 
 export interface UnknownActorResponse {
@@ -88,4 +90,14 @@ export interface SearchExistingActorsOptions {
   region?: string;
   about?: string;
   limit?: number;
+}
+
+export interface FieldMapping {
+  id: string;
+  actor_type_id: string;
+  field_name: string;
+  column_name: string | null;
+  data_type: string;
+  is_indexed: boolean;
+  is_metadata: boolean;
 }

@@ -2,6 +2,7 @@ import { supabaseClient } from './supabaseClient';
 import type {
   ClassifierFilterConfig,
   ClassifierView,
+  FieldMapping,
   LinkActorPayload,
   PromoteActorPayload,
   PromoteLinkInput,
@@ -259,6 +260,47 @@ export async function searchExistingActors(
 
   if (error) throw error;
   return (data ?? []) as Actor[];
+}
+
+export async function fetchFieldMappings(actorType: string): Promise<FieldMapping[]> {
+  const { data: typeRow, error: typeError } = await supabaseClient
+    .from('v2_actor_types')
+    .select('id')
+    .eq('name', actorType)
+    .maybeSingle();
+
+  if (typeError) throw typeError;
+  if (!typeRow?.id) return [];
+
+  const { data, error } = await supabaseClient
+    .from('v2_actor_type_field_mappings')
+    .select('id,actor_type_id,field_name,column_name,data_type,is_indexed,is_metadata')
+    .eq('actor_type_id', typeRow.id)
+    .order('field_name', { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as FieldMapping[];
+}
+
+export async function fetchFieldExistingValues(columnName: string): Promise<string[]> {
+  try {
+    const { data, error } = await supabaseClient
+      .from('v2_actors')
+      .select(columnName)
+      .not(columnName, 'is', null)
+      .order(columnName, { ascending: true })
+      .limit(50);
+
+    if (error) throw error;
+    const values = ((data ?? []) as any[])
+      .map(row => row[columnName])
+      .filter((value: any) => value !== null && value !== undefined && String(value).trim() !== '')
+      .map((value: any) => String(value).trim());
+    return Array.from(new Set(values));
+  } catch (error) {
+    console.error(`Failed to fetch existing values for column ${columnName}`, error);
+    return [];
+  }
 }
 
 export async function fetchOrganizations(): Promise<Array<Pick<Actor, 'id' | 'name'>>> {
