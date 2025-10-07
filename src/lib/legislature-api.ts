@@ -259,13 +259,13 @@ export async function fetchRTSUserHistory(userId: number): Promise<RTSPosition[]
 
 // CSV Export APIs (these will open in new tabs)
 export function getEntityTransactionsCSVUrl(entityId: number): string {
-  return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_export_entity_transactions?p_entity_id=${entityId}`;
+  return `${import.meta.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL}/rest/v1/rpc/rs_export_entity_transactions?p_entity_id=${entityId}`;
 }
 
 export function getEntityDonationsCSVUrl(entityId: number): string {
-  return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_export_entity_donations?p_entity_id=${entityId}`;
+  return `${import.meta.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL}/rest/v1/rpc/rs_export_entity_donations?p_entity_id=${entityId}`;
 }
 
 export function getReportCSVUrl(reportId: number): string {
-  return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_export_report?p_report_id=${reportId}`;
+  return `${import.meta.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL}/rest/v1/rpc/rs_export_report?p_report_id=${reportId}`;
 }
