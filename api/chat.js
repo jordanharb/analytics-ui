@@ -19,21 +19,14 @@ function resolveGeminiApiKey() {
 
 function initializeClients() {
   if (!supabase2) {
-    // Try campaign finance specific vars first, then fall back to main database vars
-    const supabaseUrl = process.env.CAMPAIGN_FINANCE_SUPABASE_URL ||
-                       process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL ||
-                       process.env.VITE_SUPABASE_URL;
-
-    const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY ||
-                              process.env.VITE_SUPABASE_ANON_KEY;
+    const supabaseUrl = process.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL;
+    const supabaseServiceKey = process.env.CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY;
 
     if (!supabaseUrl) {
-      const availableVars = Object.keys(process.env).filter(key => key.includes('SUPABASE')).join(', ');
-      throw new Error(`Supabase URL not found. Available environment variables: ${availableVars}. Looking for: CAMPAIGN_FINANCE_SUPABASE_URL, VITE_CAMPAIGN_FINANCE_SUPABASE_URL, or VITE_SUPABASE_URL`);
+      throw new Error(`VITE_CAMPAIGN_FINANCE_SUPABASE_URL not found in environment`);
     }
     if (!supabaseServiceKey) {
-      const availableVars = Object.keys(process.env).filter(key => key.includes('SUPABASE')).join(', ');
-      throw new Error(`Supabase service key not found. Available environment variables: ${availableVars}. Looking for: CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY or VITE_SUPABASE_ANON_KEY`);
+      throw new Error(`CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY not found in environment`);
     }
 
     supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
