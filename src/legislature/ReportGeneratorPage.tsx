@@ -110,7 +110,6 @@ const ReportGeneratorPage: React.FC = () => {
   const [currentPersonId, setCurrentPersonId] = useState<number | null>(null);
 
   // Model selection for each analysis step
-  // @ts-ignore - Preserving for future restoration of single call analysis
   const [singleCallModel, setSingleCallModel] = useState<GeminiModel>('gemini-2.5-pro');
   const [themeGenerationModel, setThemeGenerationModel] = useState<GeminiModel>('gemini-2.5-flash');
   const [queryExpansionModel, setQueryExpansionModel] = useState<GeminiModel>('gemini-2.5-flash');
@@ -175,18 +174,28 @@ const ReportGeneratorPage: React.FC = () => {
   const [savedReports, setSavedReports] = useState<Map<string, any>>(new Map());
   const [themeListId, setThemeListId] = useState<number | null>(null);
   const [existingThemeLists, setExistingThemeLists] = useState<any[]>([]);
+  const [existingAnalysisReports, setExistingAnalysisReports] = useState<any[]>([]);
   // const [loadingExistingThemes, setLoadingExistingThemes] = useState(false);
 
-  // Check for existing theme lists when person or sessions change
+  // Check for existing theme lists and analysis reports when person or sessions change
   useEffect(() => {
     const checkExisting = async () => {
       if (currentPersonId && selectedSessions.length > 0) {
         // setLoadingExistingThemes(true);
         const existing = await checkExistingThemeLists();
         setExistingThemeLists(existing);
+
+        // Load existing analysis reports for single sessions
+        if (selectedSessions.length === 1 && typeof selectedSessions[0] === 'number') {
+          const reports = await loadExistingAnalysisReports(currentPersonId, selectedSessions[0]);
+          setExistingAnalysisReports(reports);
+        } else {
+          setExistingAnalysisReports([]);
+        }
         // setLoadingExistingThemes(false);
       } else {
         setExistingThemeLists([]);
+        setExistingAnalysisReports([]);
       }
     };
 
@@ -708,6 +717,38 @@ const ReportGeneratorPage: React.FC = () => {
     }
   };
 
+  // Function to load existing analysis reports (both two-phase and single-call)
+  const loadExistingAnalysisReports = async (personId: number, sessionId: number): Promise<any[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('rs_analysis_phase2_reports')
+        .select(`
+          id,
+          created_at,
+          session_id,
+          is_combined,
+          custom_instructions,
+          phase1_report_id,
+          analysis_duration_ms,
+          report_data
+        `)
+        .eq('person_id', personId)
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (error) {
+        console.error('Error loading existing analysis reports:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (err) {
+      console.error('Error loading analysis reports:', err);
+      return [];
+    }
+  };
+
   // Function to check for existing theme lists for the current person and sessions
   const checkExistingThemeLists = async (): Promise<any[]> => {
     if (!currentPersonId || selectedSessions.length === 0) return [];
@@ -834,7 +875,7 @@ Hard rules:
 4) For each theme, generate 15-30 search queries mixing jargon, synonyms, and statute phrasing (e.g., "A.R.S.", "section", "statute", "amend", "repeal", "exemption", "fee", "preemption"). PRIORITIZE identifying potentially harmful bills that could undermine public interests, harm marginalized communities, or benefit wealthy donors at the expense of ordinary citizens.
 5) Iteratively call tools to run EXHAUSTIVE bill searches until two consecutive iterations yield no new bills or ~1000 bills are accumulated. Lower p_min_text_score stepwise: 0.35->0.25->0.15->0.10 when needed.
 6) Every cited bill must include at least one statute reference and one excerpt (from bills.bill_summary or bills.bill_text), plus the legislator's vote/sponsor context.
-7) Return STRICT JSON exactly matching the requested schema when asked. Write concisely but as exhaustively as possible.`;
+7) Return STRICT JSON exactly matching the requested schema when asked. Write as exhaustively and comprehensively as possible, including extensive bill text quotes and detailed analysis. Prioritize thoroughness over brevity.`;
 
 const chunkArray = <T,>(values: T[], size: number): T[][] => {
   if (size <= 0) return [values];
@@ -1684,7 +1725,7 @@ const searchLegislator = async (selectedPerson?: Person) => {
         const sessionStartDateObj = new Date(startDate);
         const donorRecords = donations.map((donation: any) => {
           const transactionDate = donation.donation_date;
-          const amountNumber = Number(donation.donation_amt ?? 0);
+          const amountNumber = Number(donation.amount ?? donation.donation_amt ?? 0);
           const daysFromSession = transactionDate && !Number.isNaN(sessionStartDateObj.getTime())
             ? Math.round((new Date(transactionDate).getTime() - sessionStartDateObj.getTime()) / (1000 * 60 * 60 * 24))
             : null;
@@ -2308,6 +2349,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       currentLegislatorIds,
       currentEntityIds,
     });
+    const analysisStartTime = nowMs();
+    (window as any).__analysisStartTime = analysisStartTime;
 
     try {
       if (!GEMINI_API_KEY) throw new Error('Missing Gemini API key');
@@ -2674,7 +2717,7 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
       const sessionStartDateObj = new Date(startDate);
       const baselineDonations = (donations || []).map((donation: any) => {
         const transactionDate = donation.donation_date;
-        const amountNumber = Number(donation.donation_amt ?? 0);
+        const amountNumber = Number(donation.amount ?? donation.donation_amt ?? 0);
         const daysFromSession = transactionDate && !Number.isNaN(sessionStartDateObj.getTime())
           ? Math.round((new Date(transactionDate).getTime() - sessionStartDateObj.getTime()) / (1000 * 60 * 60 * 24))
           : null;
@@ -2921,6 +2964,43 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         ? 'Combined Single-Pass Analysis'
         : (availableSessions.find(s => s.id === selectedSessions[0])?.name || 'Single-Pass Analysis');
 
+      // Save single-call report to database
+      let savedReportId: number | undefined;
+      try {
+        setProgressText('Saving single-pass analysis to database...');
+        const isCombined = selectedSessions.length > 1;
+        const sessionIdsForQuery = selectedSessions.filter((s): s is number => typeof s === 'number');
+
+        const { data: saveData, error: saveError } = await supabase.rpc('save_phase2_analysis_report', {
+          p_person_id: currentPersonId,
+          p_session_id: isCombined ? null : sessionIdsForQuery[0],
+          p_report_data: report,
+          p_bill_ids: [], // Single-call doesn't track specific bill IDs
+          p_donation_ids: [], // Single-call doesn't track specific donation IDs
+          p_is_combined: isCombined,
+          p_custom_instructions: customInstructions ? `SINGLE-CALL ANALYSIS: ${customInstructions}` : 'SINGLE-CALL ANALYSIS',
+          p_analysis_duration_ms: Math.round(nowMs() - (window as any).__analysisStartTime || 0),
+          p_report_id: null,
+          p_phase1_report_id: null, // NULL indicates this is a single-call report
+        });
+
+        if (saveError) {
+          console.warn('Failed to save single-call report:', saveError);
+        } else {
+          const savedReportIdRaw = Array.isArray(saveData) ? saveData[0] : saveData;
+          if (savedReportIdRaw !== null && savedReportIdRaw !== undefined) {
+            savedReportId = Number.parseInt(String(savedReportIdRaw), 10);
+            if (!Number.isNaN(savedReportId)) {
+              (report as any).reportId = savedReportId;
+              console.log('Single-call report saved with ID:', savedReportId);
+            }
+          }
+        }
+      } catch (saveErr) {
+        console.warn('Error saving single-call report:', saveErr);
+        // Continue even if save fails
+      }
+
       setAnalysisResults([{ sessionName: summaryName, report }]);
       setProgressPercent(100);
       setProgressText('Single-pass analysis complete');
@@ -2990,8 +3070,8 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         // Don't pass p_recipient_entity_ids when p_person_id is provided -
         // the function gets entity IDs automatically from mv_legislators_search
         p_session_id: sessionId,
-        p_days_before: 90,  // Match updated database function default
-        p_days_after: 45,
+        p_days_before: 180,  // Expanded search window for comprehensive theme analysis
+        p_days_after: 180,
         p_min_amount: 100,  // Only donations over $100
         p_limit: 500,      // Reduce limit
       };
@@ -3406,37 +3486,12 @@ Response format: [12345, 67890, ...]`;
         votesMap.set(billId, votes);
       });
 
-      // Get stakeholders for theme (only generate embedding once)
-      let themeVector: number[] = [];
-      try {
-        themeVector = await embeddingService.generateQueryEmbedding(theme.title || theme.description || '');
-      } catch (error) {
-        console.warn('Failed to generate theme embedding for stakeholder search:', error);
-      }
-
       const detailedBills: any[] = [];
 
       for (const billId of selectedBillIds) {
         const billText = billTextsMap.get(billId);
         const votes = votesMap.get(billId) || [];
         const candidateBill = candidateBills.find((b: any) => Number(b.bill_id) === billId);
-
-        let stakeholders: any[] = [];
-        if (themeVector.length) {
-          try {
-            const { data: stakeholderData, error: stakeholderError } = await supabase.rpc('search_rts_by_vector', {
-              p_bill_id: billId,
-              p_session_id: donorThemeContext.sessionId,
-              p_limit: 35,
-              p_query_vec: embeddingService.formatForPgVector(themeVector),
-            });
-            if (!stakeholderError) {
-              stakeholders = stakeholderData || [];
-            }
-          } catch (stakeholderError) {
-            console.warn(`Failed to get stakeholders for bill ${billId}:`, stakeholderError);
-          }
-        }
 
         detailedBills.push({
           bill_id: billId,
@@ -3452,7 +3507,6 @@ Response format: [12345, 67890, ...]`;
           summary_excerpt: candidateBill?.summary_excerpt ?? billText?.bill_summary ?? '',
           full_excerpt: candidateBill?.full_excerpt ?? billText?.bill_text ?? '',
           vote_rollup: votes,
-          stakeholders,
         });
       }
 
@@ -3482,7 +3536,7 @@ Response format: [12345, 67890, ...]`;
 IMPORTANT:
 1. Each bill in the data includes a bill_summary. For deeper analysis of specific bills, you can call get_bill_texts_array([bill_id1, bill_id2, ...]) to retrieve the full bill text for multiple bills at once. Use this when you need to analyze specific statutory provisions, legal language, or detailed bill mechanics.
 2. Include employer, occupation, and type for each donor from the provided donor data. Do not leave these fields empty.
-3. Write the markdown summary concisely but as exhaustively as possible to cover all significant findings and evidence.
+3. Write the markdown summary as exhaustively and comprehensively as possible. Include extensive quotes from bill text, detailed statutory analysis, and comprehensive evidence for each connection. List as many relevant bills as possible that fit the theme and relate to the donors mentioned. Prioritize thorough analysis over brevity.
 
 DATA:
 ${JSON.stringify(reportPayload, null, 2)}
@@ -3490,7 +3544,7 @@ ${JSON.stringify(reportPayload, null, 2)}
 Return STRICT JSON:
 {
   "report": {
-    "overall_summary": "400-800+ word synthesis across all evidence",
+    "overall_summary": "1500-3000+ word comprehensive analysis with extensive bill quotes and detailed statutory connections covering as many relevant bills as possible",
     "session_info": {"session_id": ${donorThemeContext.sessionId}, "session_name": "${donorThemeContext.sessionName}"},
     "themes": [
       {
@@ -3516,7 +3570,7 @@ Return STRICT JSON:
     "transactions_cited": [
       { "public_transaction_id": 123456789, "donor": "Donor Name", "date": "YYYY-MM-DD", "amount": 5300.00, "linked_bills": ["HBXXXX", "SBYYYY"] }
     ],
-    "markdown_summary": "Comprehensive narrative organized by theme with key citations (write concisely but exhaustively)"
+    "markdown_summary": "Comprehensive narrative organized by theme with extensive bill text quotes, detailed statutory analysis, and thorough coverage of all relevant bills and donors (write exhaustively and comprehensively)"
   }
 }
 
@@ -3831,14 +3885,21 @@ Rules:
                 type="radio"
                 checked={analysisMode === 'donorTheme'}
                 onChange={() => setAnalysisMode('donorTheme')}
-                readOnly
               />
               <span>Donor Themes to Bills (interactive)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="radio"
+                checked={analysisMode === 'singleCall'}
+                onChange={() => setAnalysisMode('singleCall')}
+              />
+              <span>Single-Pass Analysis (function calling)</span>
             </label>
           </div>
 
           {/* Model Selection */}
-          {analysisMode === 'donorTheme' && (
+          {(analysisMode === 'donorTheme' || analysisMode === 'singleCall') && (
             <div style={{
               marginBottom: 16,
               padding: 12,
@@ -3915,8 +3976,40 @@ Rules:
                   </div>
                 </div>
               )}
+
+              {analysisMode === 'singleCall' && (
+                <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.85em', fontWeight: 500, marginBottom: 4 }}>
+                      Single-Pass Model:
+                    </label>
+                    <select
+                      value={singleCallModel}
+                      onChange={(e) => setSingleCallModel(e.target.value as any)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 4,
+                        fontSize: '0.85em'
+                      }}
+                    >
+                      <option value="gemini-2.5-flash">2.5 Flash (Fast & Current)</option>
+                      <option value="gemini-2.5-pro">2.5 Pro (Best Quality)</option>
+                      <option value="gemini-2.0-flash-exp">2.0 Flash Experimental</option>
+                      <option value="gemini-2.0-flash-thinking-exp-01-21">2.0 Thinking (Deep Analysis)</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: '0.75em', color: '#6b7280', marginTop: 8 }}>
                 💡 2.5 models are current generation. Flash = faster/cheaper, Pro = best quality. 2.0 models are experimental with Thinking = deep reasoning.
+                {analysisMode === 'singleCall' && (
+                  <div style={{ marginTop: 4, fontStyle: 'italic' }}>
+                    Single-Pass uses function calling to gather data and analyze in one comprehensive pass.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -4008,6 +4101,70 @@ Rules:
                     </button>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Existing Analysis Reports */}
+          {existingAnalysisReports.length > 0 && (
+            <div style={{ marginTop: 16, marginBottom: 16, padding: 16, backgroundColor: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+              <h4 style={{ margin: '0 0 12px 0', fontSize: '0.95em', fontWeight: 600, color: '#374151' }}>
+                Previous Analysis Reports ({existingAnalysisReports.length})
+              </h4>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {existingAnalysisReports.map((report, idx) => {
+                  const reportDate = new Date(report.created_at).toLocaleDateString();
+                  const reportTime = new Date(report.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                  const isSingleCall = report.phase1_report_id === null;
+                  const analysisType = isSingleCall ? 'Single-Pass' : 'Two-Phase';
+                  const duration = report.analysis_duration_ms ? `${Math.round(report.analysis_duration_ms / 1000)}s` : '';
+
+                  return (
+                    <div key={report.id} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      backgroundColor: '#ffffff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 6,
+                      fontSize: '0.9em'
+                    }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 500, color: '#374151' }}>
+                          {analysisType} Analysis
+                        </div>
+                        <div style={{ fontSize: '0.85em', color: '#6b7280', marginTop: 2 }}>
+                          {reportDate} at {reportTime}
+                          {duration && ` • ${duration}`}
+                          {report.custom_instructions && report.custom_instructions !== 'SINGLE-CALL ANALYSIS' && (
+                            <span> • Custom instructions</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setAnalysisResults([{
+                            sessionName: availableSessions.find(s => s.id === report.session_id)?.name || 'Unknown Session',
+                            report: report.report_data
+                          }]);
+                          setCurrentStep('results');
+                        }}
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '0.85em',
+                          backgroundColor: '#2563eb',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: 4,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        View Report
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -4416,6 +4573,16 @@ Rules:
                   {activePhaseView === 'phase1' ? 'View Phase 2 Results' : 'View Phase 1 Preview'}
                 </button>
               )}
+              <button
+                onClick={() => {
+                  if (analysisResults && analysisResults.length > 0) {
+                    generateFinalReportPDF({ report: analysisResults[0].report });
+                  }
+                }}
+                style={{ padding: '6px 12px', fontSize: '0.9em', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+              >
+                Generate PDF
+              </button>
               <button
                 onClick={() => setCurrentStep('sessions')}
                 style={{ padding: '6px 12px', fontSize: '0.9em', background: '#6b7280', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
