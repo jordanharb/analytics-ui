@@ -19,11 +19,11 @@ function resolveGeminiApiKey() {
 }
 
 function resolveSupabaseConfig() {
-  const supabaseUrl = process.env.VITE_SUPABASE_URL?.trim() ||
-    process.env.SUPABASE_URL?.trim() || '';
+  const supabaseUrl = process.env.VITE_SUPABASE2_URL?.trim() ||
+    process.env.SUPABASE2_URL?.trim() || '';
 
-  const supabaseServiceKey = process.env.VITE_SUPABASE_SERVICE_KEY?.trim() ||
-    process.env.SUPABASE_SERVICE_KEY?.trim() || '';
+  const supabaseServiceKey = process.env.VITE_SUPABASE2_SERVICE_KEY?.trim() ||
+    process.env.SUPABASE2_SERVICE_KEY?.trim() || '';
 
   return { supabaseUrl, supabaseServiceKey };
 }
@@ -36,13 +36,13 @@ function initializeClients() {
       const available = Object.keys(process.env)
         .filter(key => key.includes('SUPABASE'))
         .map(key => ({ key, value: process.env[key]?.length ? 'set' : 'empty' }));
-      throw new Error(`VITE_SUPABASE_URL not found. SUPABASE env summary: ${JSON.stringify(available)}`);
+      throw new Error(`VITE_SUPABASE2_URL not found. SUPABASE env summary: ${JSON.stringify(available)}`);
     }
     if (!supabaseServiceKey) {
       const available = Object.keys(process.env)
         .filter(key => key.includes('SUPABASE'))
         .map(key => ({ key, value: process.env[key]?.length ? 'set' : 'empty' }));
-      throw new Error(`SUPABASE_SERVICE_KEY not found. SUPABASE env summary: ${JSON.stringify(available)}`);
+      throw new Error(`VITE_SUPABASE2_SERVICE_KEY not found. SUPABASE env summary: ${JSON.stringify(available)}`);
     }
 
     supabase2 = createClient(supabaseUrl, supabaseServiceKey, {
