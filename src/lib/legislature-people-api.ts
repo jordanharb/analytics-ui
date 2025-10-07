@@ -293,7 +293,7 @@ export function getPersonTransactionsCSVUrl(personId: number, entityIds: number[
     person_id: String(personId),
     entity_ids: entityIds.join(',')
   });
-  return `${import.meta.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL}/rest/v1/rpc/rs_queue_transactions_export?${params}`;
+  return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_queue_transactions_export?${params}`;
 }
 
 export async function fetchPersonVotesInSession(personId: number, sessionId: number) {
@@ -311,5 +311,5 @@ export function getPersonReportsCSVUrl(personId: number, entityIds: number[]): s
     person_id: String(personId),
     entity_ids: entityIds.join(',')
   });
-  return `${import.meta.env.VITE_CAMPAIGN_FINANCE_SUPABASE_URL}/rest/v1/rpc/rs_queue_reports_export?${params}`;
+  return `${import.meta.env.VITE_SUPABASE2_URL}/rest/v1/rpc/rs_queue_reports_export?${params}`;
 }
