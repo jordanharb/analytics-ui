@@ -36,7 +36,9 @@ export class MCPClient {
     }
 
     // Initialize Gemini if API key exists (env or local override)
-    const geminiKey = getGeminiKey() || import.meta.env.VITE_GOOGLE_API_KEY;
+    const geminiKey = getGeminiKey() ||
+      import.meta.env.VITE_GEMINI_API_KEY ||
+      import.meta.env.VITE_GOOGLE_API_KEY;
     if (geminiKey) {
       try {
         const geminiProvider = new GeminiProvider(geminiKey);

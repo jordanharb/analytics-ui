@@ -4112,7 +4112,7 @@ Rules:
                 Previous Analysis Reports ({existingAnalysisReports.length})
               </h4>
               <div style={{ display: 'grid', gap: 8 }}>
-                {existingAnalysisReports.map((report, idx) => {
+                {existingAnalysisReports.map((report) => {
                   const reportDate = new Date(report.created_at).toLocaleDateString();
                   const reportTime = new Date(report.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                   const isSingleCall = report.phase1_report_id === null;

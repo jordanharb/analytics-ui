@@ -28,6 +28,22 @@ export const Header: React.FC = () => {
           List View
         </NavLink>
         <NavLink
+          to="/actors"
+          className={({ isActive }) =>
+            `nav-tab ${isActive ? 'active' : ''}`
+          }
+        >
+          Actors
+        </NavLink>
+        <NavLink
+          to="/actor-classifier"
+          className={({ isActive }) =>
+            `nav-tab ${isActive ? 'active' : ''}`
+          }
+        >
+          Actor Classifier
+        </NavLink>
+        <NavLink
           to="/chat"
           className={({ isActive }) =>
             `nav-tab ${isActive ? 'active' : ''}`

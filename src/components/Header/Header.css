@@ -75,6 +75,7 @@
   padding: 4px;
   border-radius: 8px;
   height: 40px;
+  overflow-x: auto;
 }
 
 .nav-tab {

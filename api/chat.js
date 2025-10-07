@@ -8,6 +8,15 @@ import OpenAI from 'openai';
 let supabase2;
 let openai;
 
+function resolveGeminiApiKey() {
+  // Prefer the same Vite-prefixed variables used across the client app
+  return process.env.VITE_GEMINI_API_KEY ||
+    process.env.VITE_GOOGLE_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+}
+
 function initializeClients() {
   if (!supabase2) {
     // Try campaign finance specific vars first, then fall back to main database vars
@@ -638,7 +647,7 @@ export default async function handler(req, res) {
 
     console.log('🧹 Cleaned messages count:', cleanedMessages.length);
 
-    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    const apiKey = resolveGeminiApiKey();
     if (!apiKey) {
       console.log('❌ No API key found');
       return res.status(500).json({ error: 'Google API key not configured' });
@@ -691,4 +700,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
