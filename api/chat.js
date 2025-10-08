@@ -635,7 +635,7 @@ export default async function handler(req, res) {
     // Make clients available to tools by updating the global variables
     supabase2 = supabaseClient;
     openai = openaiClient;
-    const { messages } = req.body;
+    const { messages, reportContext } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       console.log('❌ Invalid messages array');
@@ -669,10 +669,15 @@ export default async function handler(req, res) {
 
     const model = google('gemini-2.5-pro', { apiKey });
 
+    // Build system prompt with optional report context
+    const finalSystemPrompt = reportContext
+      ? `${reportContext}\n\n${systemPrompt}`
+      : systemPrompt;
+
     console.log('🚀 Starting streamText...');
     const result = await streamText({
       model,
-      system: systemPrompt,
+      system: finalSystemPrompt,
       messages: cleanedMessages,
       tools: campaignFinanceTools,
       toolChoice: 'auto',

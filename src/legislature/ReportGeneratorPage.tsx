@@ -7,6 +7,7 @@ import { searchPeopleWithSessions } from './lib/search';
 import { GoogleGenerativeAI, SchemaType, type Tool } from '@google/generative-ai';
 import { getGeminiKey, setGeminiKey } from '../lib/../lib/aiKeyStore';
 import { embeddingService } from '../services/embeddingService';
+import { ReportChatView } from './chat/ReportChatView';
 
 const GEMINI_API_KEY = getGeminiKey() || import.meta.env.VITE_GOOGLE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
 
@@ -4958,6 +4959,19 @@ Rules:
               </div>
             ))}
           </div>
+
+          {/* Chat Interface for Follow-up Questions */}
+          {analysisResults && analysisResults.length > 0 && (
+            <div style={{ marginTop: 32, borderTop: '2px solid #e5e7eb', paddingTop: 24 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, color: '#374151' }}>
+                Ask Follow-up Questions About This Report
+              </h3>
+              <ReportChatView
+                reportContent={JSON.stringify(analysisResults, null, 2)}
+                reportTitle={`Analysis for ${selectedPerson?.display_name || 'Selected Person'}`}
+              />
+            </div>
+          )}
         </div>
       )}
 
