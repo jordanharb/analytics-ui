@@ -1,20 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  fetchActorDetails,
-  fetchActorEvents,
-  fetchActorMembers,
-  fetchActorRelationships,
-  fetchActorUsernames,
-  fetchActors,
-  fetchDirectoryStats,
-} from '../../api/actorsDirectoryService';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { fetchActors, fetchDirectoryStats } from '../../api/actorsDirectoryService';
 import type {
   Actor,
   ActorDirectoryFilters,
-  ActorEvent,
-  ActorMember,
-  ActorRelationship,
-  ActorUsername,
   DirectoryStats,
 } from '../../types/actorsDirectory';
 
@@ -29,16 +18,6 @@ const TYPE_FILTERS: Array<{ id: string; label: string }> = [
   { id: 'chapter', label: 'Chapters' },
 ];
 
-interface ModalState {
-  actor?: Actor;
-  usernames: ActorUsername[];
-  relationships: ActorRelationship[];
-  events: ActorEvent[];
-  members: ActorMember[];
-  isLoading: boolean;
-  error?: string;
-}
-
 const initialFilters: ActorDirectoryFilters = {
   type: 'all',
   search: '',
@@ -51,149 +30,9 @@ const LoadingOverlay: React.FC<{ message?: string }> = ({ message }) => (
   </div>
 );
 
-const ActorDetailModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  modalState: ModalState;
-}> = ({ isOpen, onClose, modalState }) => {
-  if (!isOpen) return null;
-
-  const { actor, usernames, relationships, events, members, isLoading, error } = modalState;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/25 backdrop-blur-sm">
-      <div className="relative flex h-[90vh] w-[min(1100px,94vw)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-start justify-between border-b border-slate-200 bg-slate-50 px-6 py-4">
-          <div>
-            <h2 className="text-xl font-semibold text-slate-900">{actor?.name ?? 'Actor Details'}</h2>
-            <p className="text-sm text-slate-500">
-              {actor?.actor_type ? actor.actor_type.toUpperCase() : '—'}
-              {actor?.city ? ` • ${actor.city}${actor.state ? `, ${actor.state}` : ''}` : ''}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-md border border-slate-300 px-3 py-1 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900"
-          >
-            Close
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto bg-white px-6 py-6">
-          {isLoading ? (
-            <div className="flex h-full items-center justify-center">
-              <LoadingOverlay message="Loading actor profile" />
-            </div>
-          ) : error ? (
-            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700">
-              {error}
-            </div>
-          ) : (
-            <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
-              <section className="space-y-4">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Overview</h3>
-                  <dl className="mt-3 grid grid-cols-2 gap-3 text-sm text-slate-600">
-                    <div>
-                      <dt className="text-slate-500">Type</dt>
-                      <dd>{actor?.actor_type ?? '—'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Region</dt>
-                      <dd>{actor?.region ?? '—'}</dd>
-                    </div>
-                    <div className="col-span-2">
-                      <dt className="text-slate-500">About</dt>
-                      <dd className="mt-1 whitespace-pre-wrap text-slate-700">
-                        {actor?.about?.trim() || 'No description available.'}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <header className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Events</h3>
-                    <span className="text-xs text-slate-500">{events.length} linked</span>
-                  </header>
-                  {events.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-500">No events found for this actor.</p>
-                  ) : (
-                    <ul className="mt-3 space-y-3">
-                      {events.slice(0, 15).map(event => (
-                        <li key={event.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                          <div className="flex flex-wrap items-center gap-2 text-slate-800">
-                            <span className="font-medium">{event.v2_events?.title ?? 'Untitled Event'}</span>
-                            <span className="text-xs text-slate-500">{event.event_date ? new Date(event.event_date).toLocaleDateString() : 'No date'}</span>
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            {[event.city, event.state].filter(Boolean).join(', ') || 'No location'}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </section>
-
-              <section className="space-y-4">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Social Handles</h3>
-                  {usernames.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-500">No handles linked.</p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm">
-                      {usernames.map(handle => (
-                        <li key={handle.id} className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2">
-                          <span className="font-medium text-slate-800">@{handle.username}</span>
-                          <span className="text-xs uppercase tracking-wide text-slate-500">{handle.platform}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Relationships</h3>
-                  {relationships.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-500">No relationships recorded.</p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm text-slate-600">
-                      {relationships.map(rel => (
-                        <li key={rel.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                          <div className="text-slate-800">{rel.to_actor?.name ?? rel.to_actor_id}</div>
-                          <div className="text-xs text-slate-500">
-                            {rel.relationship ?? 'relationship'}
-                            {rel.role ? ` • ${rel.role}` : ''}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                {members.length > 0 && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Members</h3>
-                    <ul className="mt-3 space-y-2 text-sm text-slate-600">
-                      {members.slice(0, 15).map(member => (
-                        <li key={member.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                          <div className="text-slate-800">{member.member_actor?.name ?? member.member_actor_id}</div>
-                          <div className="text-xs text-slate-500">{member.role ?? 'Member'}</div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
 export const ActorsDirectoryView: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [filters, setFilters] = useState<ActorDirectoryFilters>(initialFilters);
   const [actors, setActors] = useState<Actor[]>([]);
   const [total, setTotal] = useState<number>(0);
@@ -205,14 +44,6 @@ export const ActorsDirectoryView: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [stats, setStats] = useState<DirectoryStats | null>(null);
-  const [modalOpen, setModalOpen] = useState<boolean>(false);
-  const [modalState, setModalState] = useState<ModalState>({
-    usernames: [],
-    relationships: [],
-    events: [],
-    members: [],
-    isLoading: false,
-  });
 
   const hasMore = actors.length < total;
 
@@ -269,42 +100,12 @@ export const ActorsDirectoryView: React.FC = () => {
     }
   }, []);
 
-  const openActorModal = useCallback(async (actorId: string) => {
-    setModalOpen(true);
-    setModalState({
-      isLoading: true,
-      usernames: [],
-      relationships: [],
-      events: [],
-      members: [],
-    });
-
-    try {
-      const [actor, usernames, relationships, events, members] = await Promise.all([
-        fetchActorDetails(actorId),
-        fetchActorUsernames(actorId),
-        fetchActorRelationships(actorId),
-        fetchActorEvents(actorId),
-        fetchActorMembers(actorId),
-      ]);
-
-      setModalState({
-        actor: actor ?? undefined,
-        usernames,
-        relationships,
-        events,
-        members,
-        isLoading: false,
-      });
-    } catch (error: any) {
-      console.error('Failed to load actor modal data', error);
-      setModalState(prev => ({
-        ...prev,
-        isLoading: false,
-        error: error?.message ?? 'Failed to load actor',
-      }));
-    }
-  }, []);
+  const handleSelectActor = useCallback(
+    (actorId: string) => {
+      navigate(`/entity/actor/${actorId}`, { state: { from: location.pathname + location.search } });
+    },
+    [location.pathname, location.search, navigate],
+  );
 
   const statsDisplay = useMemo(() => {
     if (!stats) return null;
@@ -395,9 +196,9 @@ export const ActorsDirectoryView: React.FC = () => {
                 </p>
               </div>
             ) : viewMode === 'table' ? (
-              <ActorsTable actors={actors} onSelect={openActorModal} />
+              <ActorsTable actors={actors} onSelect={handleSelectActor} />
             ) : (
-              <ActorsCardGrid actors={actors} onSelect={openActorModal} />
+              <ActorsCardGrid actors={actors} onSelect={handleSelectActor} />
             )}
           </div>
           {hasMore && (
@@ -413,8 +214,6 @@ export const ActorsDirectoryView: React.FC = () => {
           )}
         </section>
       </div>
-
-      <ActorDetailModal isOpen={modalOpen} onClose={() => setModalOpen(false)} modalState={modalState} />
     </div>
   );
 };
@@ -527,3 +326,5 @@ function truncate(value: string, length: number) {
   if (value.length <= length) return value;
   return `${value.slice(0, length)}…`;
 }
+
+export default ActorsDirectoryView;

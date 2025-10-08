@@ -6,6 +6,7 @@ export interface Actor {
   state: string | null;
   region: string | null;
   about: string | null;
+  should_scrape?: boolean | null;
   event_count?: number | null;
   state_count?: number | null;
   created_at?: string | null;
@@ -24,12 +25,15 @@ export interface ActorUsername {
 export interface ActorEvent {
   id: string;
   event_id: string;
+  actor_id: string | null;
+  actor_handle?: string | null;
+  platform?: string | null;
   event_date: string | null;
   city: string | null;
   state: string | null;
   confidence_score: number | null;
   verified: boolean | null;
-  v2_events?: Record<string, any>;
+  v2_events?: Record<string, unknown>;
 }
 
 export interface ActorRelationship {
@@ -38,6 +42,10 @@ export interface ActorRelationship {
   to_actor_id: string;
   relationship: string | null;
   role: string | null;
+  role_category?: string | null;
+  is_primary?: boolean | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
   to_actor?: Actor;
 }
 
@@ -46,6 +54,10 @@ export interface ActorMember {
   actor_id: string;
   member_actor_id: string;
   role: string | null;
+  relationship?: string | null;
+  role_category?: string | null;
+  is_primary?: boolean | null;
+  created_at?: string | null;
   member_actor?: Actor;
 }
 

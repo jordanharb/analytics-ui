@@ -126,7 +126,7 @@ Identify potential influence signals by correlating roll-call voting with campai
 - **searchPeopleWithSessions**: Find legislators with their session information and participation details
 - **sessionWindow**: Compute date window around a legislative session
 - **findDonorsByName**: Fuzzy resolve canonical donors by name
-- **searchDonorTotalsWindow**: Find donors for a person using person_id directly (no need for entity IDs)
+- **searchDonorTotalsWindow**: Find donors for a person using person_id directly (no need for entity IDs). Can search specific sessions OR across all time by setting session_id to null.
 - **searchBillsForLegislator**: Bills a person voted on, ranked by bill vectors with auto-vectorization
 - **getBillText**: Fetch bill's stored summary/title and full text snapshot
 - **getBillVotes**: Detailed roll-call rows for a bill
@@ -145,6 +145,8 @@ A donation is "politically relevant" if any:
 ### A) Donor themes around a session for a person
 1. Use person_id from searchPeopleWithSessions result directly.
 2. Call searchDonorTotalsWindow(p_person_id, p_session_id, p_days_before, p_days_after, p_query_vec, p_min_amount, p_limit).
+   - For specific session analysis: provide the session_id
+   - For broad/all-time analysis: set p_session_id to null
 3. Function automatically gets all entity IDs for the person.
 4. Summarize by: top employers/occupations, total amounts, donation counts; optionally cluster by employer/occupation strings.
 
@@ -161,6 +163,7 @@ A donation is "politically relevant" if any:
 ## Filtering rules of thumb
 * Always provide date/session filters for transaction analyses:
   * Prefer p_session_id + p_days_before/after when the ask is "±X days around session".
+  * For broad analysis across all time periods, use p_session_id=null.
   * Otherwise use explicit p_from/p_to (remember p_to is exclusive).
 * Use p_group_numbers to focus on categories (if the user mentions them).
 * Use p_min_amount to cut noise when needed.
@@ -293,11 +296,11 @@ const campaignFinanceTools = {
   }),
 
   searchDonorTotalsWindow: tool({
-    description: 'Find donors who gave to a person during a specified time window. Uses the definitive search_donor_totals_window function.',
+    description: 'Find donors who gave to a person during a specified time window. Uses the definitive search_donor_totals_window function. Can search for specific sessions OR across all time by setting session_id to null.',
     parameters: z.object({
       p_person_id: z.number().describe('Person ID to find donors for'),
       p_recipient_entity_ids: z.array(z.number()).optional().describe('Optional explicit recipient entity IDs'),
-      p_session_id: z.number().optional().describe('Session ID for date window'),
+      p_session_id: z.number().nullable().optional().describe('Session ID for date window, or null to search across all time periods'),
       p_days_before: z.number().optional().describe('Days before session start'),
       p_days_after: z.number().optional().describe('Days after session end'),
       p_from: z.string().optional().describe('Start date (YYYY-MM-DD format)'),
@@ -319,7 +322,7 @@ const campaignFinanceTools = {
       p_limit = 100
     }) => {
       try {
-        console.log(`💰 Searching donors for person ${p_person_id}, session ${p_session_id || 'any'}`);
+        console.log(`💰 Searching donors for person ${p_person_id}, session ${p_session_id === null ? 'ALL TIME' : p_session_id || 'any'}`);
 
         const { data, error } = await supabase2
           .rpc('search_donor_totals_window', {
@@ -345,7 +348,7 @@ const campaignFinanceTools = {
           success: true,
           donors: data,
           count: data?.length || 0,
-          summary: `Found ${data?.length || 0} donors for person ${p_person_id}${p_session_id ? ` in session ${p_session_id}` : ''}`
+          summary: `Found ${data?.length || 0} donors for person ${p_person_id}${p_session_id === null ? ' across all time' : p_session_id ? ` in session ${p_session_id}` : ''}`
         };
       } catch (error) {
         console.log('💥 Donor totals error:', error);

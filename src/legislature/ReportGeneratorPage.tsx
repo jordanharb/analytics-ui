@@ -132,7 +132,7 @@ const ReportGeneratorPage: React.FC = () => {
   const [progressText, setProgressText] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[] | null>(null);
-  const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results' | 'donorThemeThemes' | 'donorThemeProgress' | 'donorThemeResults'>('search');
+  const [currentStep, setCurrentStep] = useState<'search' | 'sessions' | 'progress' | 'results' | 'donorThemeThemes' | 'donorThemeProgress'>('search');
   const [analysisMode, setAnalysisMode] = useState<'twoPhase' | 'singleCall' | 'donorTheme'>('donorTheme');
   const [phase1Previews, setPhase1Previews] = useState<Record<string, Phase1RenderData>>({});
   const [activePhaseView, setActivePhaseView] = useState<'phase1' | 'phase2'>('phase2');
@@ -171,11 +171,13 @@ const ReportGeneratorPage: React.FC = () => {
   const [donorThemes, setDonorThemes] = useState<DonorTheme[] | null>(null);
   const [donorThemeContext, setDonorThemeContext] = useState<DonorThemeContext | null>(null);
   const [completedThemes, setCompletedThemes] = useState<Set<string>>(new Set());
-  const [donorThemeAnalysisResult, setDonorThemeAnalysisResult] = useState<any>(null);
   const [savedReports, setSavedReports] = useState<Map<string, any>>(new Map());
   const [themeListId, setThemeListId] = useState<number | null>(null);
   const [existingThemeLists, setExistingThemeLists] = useState<any[]>([]);
   const [existingAnalysisReports, setExistingAnalysisReports] = useState<any[]>([]);
+  const [expandedBills, setExpandedBills] = useState<Set<number>>(new Set());
+  const [billDetails, setBillDetails] = useState<Map<number, any>>(new Map());
+  const [loadingBillDetails, setLoadingBillDetails] = useState<Set<number>>(new Set());
   // const [loadingExistingThemes, setLoadingExistingThemes] = useState(false);
 
   // Check for existing theme lists and analysis reports when person or sessions change
@@ -624,8 +626,11 @@ const ReportGeneratorPage: React.FC = () => {
       // If reportData is already loaded, use it directly
       if (savedReport.reportData) {
         console.log('Using cached report data');
-        setDonorThemeAnalysisResult(savedReport.reportData);
-        setCurrentStep('donorThemeResults');
+        setAnalysisResults([{
+          sessionName: `Theme Analysis`,
+          report: savedReport.reportData
+        }]);
+        setCurrentStep('results');
         return;
       }
 
@@ -709,9 +714,11 @@ const ReportGeneratorPage: React.FC = () => {
         return;
       }
 
-      console.log('Loaded full report:', fullReport.report_json);
-      setDonorThemeAnalysisResult(fullReport.report_json);
-      setCurrentStep('donorThemeResults');
+      setAnalysisResults([{
+        sessionName: `Theme Analysis`,
+        report: fullReport.report_json
+      }]);
+      setCurrentStep('results');
       console.log('Successfully loaded saved report for theme:', themeId);
     } catch (err) {
       console.error('Error loading saved report:', err);
@@ -791,6 +798,56 @@ const ReportGeneratorPage: React.FC = () => {
     } catch (err) {
       console.error('Error loading analysis reports:', err);
       return [];
+    }
+  };
+
+  // Function to fetch full bill details
+  const fetchBillDetails = async (billId: number) => {
+    if (billDetails.has(billId)) {
+      return billDetails.get(billId);
+    }
+
+    setLoadingBillDetails(prev => new Set(prev.add(billId)));
+
+    try {
+      const { data, error } = await supabase.rpc('get_bill_details', {
+        p_bill_id: billId
+      });
+
+      if (error) {
+        console.error('Error fetching bill details:', error);
+        return null;
+      }
+
+      setBillDetails(prev => new Map(prev.set(billId, data)));
+      return data;
+    } catch (err) {
+      console.error('Error fetching bill details:', err);
+      return null;
+    } finally {
+      setLoadingBillDetails(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(billId);
+        return newSet;
+      });
+    }
+  };
+
+  // Function to toggle bill expansion
+  const toggleBillExpansion = async (billId: number) => {
+    if (expandedBills.has(billId)) {
+      // Collapse
+      setExpandedBills(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(billId);
+        return newSet;
+      });
+    } else {
+      // Expand and fetch details if needed
+      setExpandedBills(prev => new Set(prev.add(billId)));
+      if (!billDetails.has(billId)) {
+        await fetchBillDetails(billId);
+      }
     }
   };
 
@@ -3636,17 +3693,13 @@ Rules:
         throw new Error('Failed to generate donor theme report.');
       }
 
-      setAnalysisResults([
-        {
-          sessionName: `${donorThemeContext.sessionName} -- ${theme.title}`,
-          report: reportData.report,
-        },
-      ]);
-      setCurrentStep('results');
       // Save the analysis result and mark theme as completed
-      setDonorThemeAnalysisResult(reportData);
+      setAnalysisResults([{
+        sessionName: `${donorThemeContext.sessionName} -- ${theme.title}`,
+        report: reportData
+      }]);
       setCompletedThemes(prev => new Set([...prev, theme.id]));
-      setCurrentStep('donorThemeResults');
+      setCurrentStep('results');
       setDonorThemeProgress(null);
 
       // Auto-save the report to database
@@ -4106,10 +4159,10 @@ Rules:
               backgroundColor: '#f9fafb'
             }}>
               <h4 style={{ margin: '0 0 8px 0', fontSize: '0.9em', fontWeight: 600, color: '#374151' }}>
-                📋 Existing Analysis Reports
+                📋 Saved Theme Lists
               </h4>
               <p style={{ margin: '0 0 12px 0', fontSize: '0.85em', color: '#6b7280' }}>
-                Found {existingThemeLists.length} previous analysis{existingThemeLists.length !== 1 ? 'es' : ''} for this person and session combination.
+                Found {existingThemeLists.length} saved theme list{existingThemeLists.length !== 1 ? 's' : ''} - load to continue analysis with different themes.
               </p>
               <div style={{ display: 'grid', gap: 8 }}>
                 {existingThemeLists.map((themeList) => (
@@ -4143,7 +4196,7 @@ Rules:
                         fontWeight: 500
                       }}
                     >
-                      Load Report
+                      Load Themes
                     </button>
                   </div>
                 ))}
@@ -4155,7 +4208,7 @@ Rules:
           {existingAnalysisReports.length > 0 && (
             <div style={{ marginTop: 16, marginBottom: 16, padding: 16, backgroundColor: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
               <h4 style={{ margin: '0 0 12px 0', fontSize: '0.95em', fontWeight: 600, color: '#374151' }}>
-                Previous Analysis Reports ({existingAnalysisReports.length})
+                📄 Completed Reports ({existingAnalysisReports.length})
               </h4>
               <div style={{ display: 'grid', gap: 8 }}>
                 {existingAnalysisReports.map((report) => {
@@ -4192,7 +4245,7 @@ Rules:
                         onClick={() => {
                           setAnalysisResults([{
                             sessionName: availableSessions.find(s => s.id === report.session_id)?.name || 'Unknown Session',
-                            report: report.report_data
+                            report: report.report_json
                           }]);
                           setCurrentStep('results');
                         }}
@@ -4619,6 +4672,20 @@ Rules:
                   {activePhaseView === 'phase1' ? 'View Phase 2 Results' : 'View Phase 1 Preview'}
                 </button>
               )}
+              {/* Show Back to Themes button for theme reports */}
+              {(analysisResults ?? []).some((r) =>
+                Array.isArray(r.report?.themes) || Array.isArray(r.report?.report?.themes)
+              ) && (
+                <button
+                  onClick={() => {
+                    setCurrentStep('donorThemeThemes');
+                    setTimeout(() => loadExistingReportsForThemes(), 100);
+                  }}
+                  style={{ padding: '6px 12px', fontSize: '0.9em', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                >
+                  ← Back to Themes
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (analysisResults && analysisResults.length > 0) {
@@ -4716,20 +4783,26 @@ Rules:
               <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{result.sessionName}</h3>
 
               {typeof result.report === 'object' && result.report ? (
-                Array.isArray(result.report?.themes) ? (
-                  <>
-                    <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}>
-                      {result.report.overall_summary && (
-                        <div><strong>Overall Summary:</strong> {result.report.overall_summary}</div>
-                      )}
-                      {result.report.session_info && (
-                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-                          <strong>Session Info:</strong> {JSON.stringify(result.report.session_info)}
-                        </div>
-                      )}
-                    </div>
+                Array.isArray(result.report?.themes) || Array.isArray(result.report?.report?.themes) ? (
+                  (() => {
+                    // Handle both direct themes array and nested report structure
+                    const reportData = result.report?.report || result.report;
+                    const themes = reportData?.themes || [];
 
-                    {(result.report.themes || []).map((theme: any, themeIdx: number) => (
+                    return (
+                      <>
+                        <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}>
+                          {reportData.overall_summary && (
+                            <div><strong>Overall Summary:</strong> {reportData.overall_summary}</div>
+                          )}
+                          {reportData.session_info && (
+                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                              <strong>Session Info:</strong> {JSON.stringify(reportData.session_info)}
+                            </div>
+                          )}
+                        </div>
+
+                        {themes.map((theme: any, themeIdx: number) => (
                       <div key={themeIdx} style={{ marginBottom: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 6 }}>
                         <h4 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{theme.theme}</h4>
                         {theme.description && <div style={{ color: '#374151', marginBottom: 6 }}>{theme.description}</div>}
@@ -4738,11 +4811,45 @@ Rules:
                         <div style={{ marginBottom: 8 }}>
                           <strong>Bills ({theme.bills?.length || 0}):</strong>
                           <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
-                            {(theme.bills || []).map((bill: any, billIdx: number) => (
-                              <li key={billIdx} style={{ marginBottom: 6 }}>
-                                <div><strong>{bill.bill_number}</strong> -- {bill.bill_title}</div>
-                                {bill.vote_value && (
-                                  <div style={{ fontSize: 12, color: '#6b7280' }}>Vote: {bill.vote_value}{bill.is_outlier ? ' (OUTLIER)' : ''}</div>
+                            {(theme.bills || []).map((bill: any, billIdx: number) => {
+                              return (
+                              <li key={billIdx} style={{ marginBottom: 12, border: '1px solid #e5e7eb', borderRadius: 6, padding: 8 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                  <div><strong>{bill.bill_number}</strong> -- {bill.bill_title || bill.title}</div>
+                                  {bill.bill_id && (
+                                    <button
+                                      onClick={() => toggleBillExpansion(bill.bill_id)}
+                                      disabled={loadingBillDetails.has(bill.bill_id)}
+                                      style={{
+                                        padding: '2px 6px',
+                                        fontSize: '10px',
+                                        backgroundColor: expandedBills.has(bill.bill_id) ? '#dc2626' : '#2563eb',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: 3,
+                                        cursor: loadingBillDetails.has(bill.bill_id) ? 'not-allowed' : 'pointer',
+                                        opacity: loadingBillDetails.has(bill.bill_id) ? 0.6 : 1
+                                      }}
+                                    >
+                                      {loadingBillDetails.has(bill.bill_id) ? '...' :
+                                       expandedBills.has(bill.bill_id) ? 'Hide Details' : 'Show Details'}
+                                    </button>
+                                  )}
+                                </div>
+                                {(bill.vote_value || bill.vote) && (
+                                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                                    Vote: {bill.vote_value || bill.vote}{bill.is_outlier ? ' (OUTLIER)' : ''}
+                                  </div>
+                                )}
+                                {bill.reason && (
+                                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                                    <strong>Reason:</strong> {bill.reason}
+                                  </div>
+                                )}
+                                {bill.takeaways && (
+                                  <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4, fontStyle: 'italic' }}>
+                                    <strong>Takeaways:</strong> {bill.takeaways}
+                                  </div>
                                 )}
                                 {Array.isArray(bill.citations) && bill.citations.length > 0 && (
                                   <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4 }}>
@@ -4764,11 +4871,152 @@ Rules:
                                     </ul>
                                   </div>
                                 )}
-                                {bill.analysis && (
-                                  <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4 }}>{bill.analysis}</div>
+                                {(bill.analysis || bill.summary) && (
+                                  <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4 }}>
+                                    <strong>Analysis:</strong> {bill.analysis || bill.summary}
+                                  </div>
+                                )}
+
+                                {/* Expanded Bill Details */}
+                                {bill.bill_id && expandedBills.has(bill.bill_id) && (
+                                  <div style={{ marginTop: 8, padding: 8, backgroundColor: '#f8fafc', borderRadius: 4, borderLeft: '3px solid #2563eb' }}>
+                                    {billDetails.has(bill.bill_id) ? (
+                                      (() => {
+                                        const detailsArray = billDetails.get(bill.bill_id);
+                                        const details = Array.isArray(detailsArray) ? detailsArray[0] : detailsArray;
+                                        return (
+                                          <div style={{ fontSize: 11 }}>
+                                            <div style={{ fontWeight: 600, marginBottom: 6, color: '#1e40af' }}>
+                                              Full Bill Details
+                                            </div>
+
+                                            {details?.description && (
+                                              <div style={{ marginBottom: 6 }}>
+                                                <strong>Description:</strong>
+                                                <div style={{ marginTop: 2, lineHeight: 1.4 }}>{details.description}</div>
+                                              </div>
+                                            )}
+
+                                            {(() => {
+                                              // Check if bill_summary and bill_text are different
+                                              const hasDifferentText = details?.bill_text && details?.bill_summary &&
+                                                details.bill_text.trim() !== details.bill_summary.trim();
+
+                                              // Show legislative summary only if it's different from description and exists
+                                              const showSummary = details?.bill_summary &&
+                                                details.bill_summary !== details.description &&
+                                                details.bill_summary.trim().length > 0;
+
+                                              return (
+                                                <>
+                                                  {showSummary && (
+                                                    <div style={{ marginBottom: 8 }}>
+                                                      <div style={{ fontWeight: 600, color: '#374151', marginBottom: 4, fontSize: '11px' }}>
+                                                        Legislative Summary
+                                                      </div>
+                                                      <div style={{
+                                                        padding: 8,
+                                                        backgroundColor: '#ffffff',
+                                                        border: '1px solid #e5e7eb',
+                                                        borderRadius: 4,
+                                                        maxHeight: '250px',
+                                                        overflow: 'auto',
+                                                        lineHeight: 1.4,
+                                                        fontSize: '11px',
+                                                        fontFamily: 'system-ui, -apple-system, sans-serif'
+                                                      }}>
+                                                        {(() => {
+                                                          // Clean up the legislative summary formatting
+                                                          const text = details.bill_summary;
+                                                          if (!text) return '';
+
+                                                          return text
+                                                            // Remove excessive line breaks
+                                                            .replace(/\n\s*\n\s*\n/g, '\n\n')
+                                                            // Clean up weird spacing patterns
+                                                            .replace(/\n\s+/g, '\n')
+                                                            // Remove document footer sections
+                                                            .replace(/----------.*?---------[\s\S]*$/g, '')
+                                                            // Clean up numbered items spacing
+                                                            .replace(/(\d+)\.\s*\n\s*/g, '$1. ')
+                                                            // Clean up lettered items spacing
+                                                            .replace(/([a-z])\)\s*\n\s*/g, '$1) ')
+                                                            // Normalize whitespace
+                                                            .replace(/[ \t]+/g, ' ')
+                                                            .trim();
+                                                        })()}
+                                                      </div>
+                                                    </div>
+                                                  )}
+
+                                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: 6 }}>
+                                                    {details?.primary_sponsor && (
+                                                      <div>
+                                                        <strong>Primary Sponsor:</strong><br/>
+                                                        <span style={{ fontSize: '10px' }}>{details.primary_sponsor}</span>
+                                                      </div>
+                                                    )}
+
+                                                    {details?.date_introduced && (
+                                                      <div>
+                                                        <strong>Date Introduced:</strong><br/>
+                                                        <span style={{ fontSize: '10px' }}>{new Date(details.date_introduced).toLocaleDateString()}</span>
+                                                      </div>
+                                                    )}
+
+                                                    {details?.final_disposition && (
+                                                      <div>
+                                                        <strong>Final Disposition:</strong><br/>
+                                                        <span style={{ fontSize: '10px' }}>{details.final_disposition}</span>
+                                                      </div>
+                                                    )}
+
+                                                    {details?.governor_action && (
+                                                      <div>
+                                                        <strong>Governor Action:</strong><br/>
+                                                        <span style={{ fontSize: '10px', color: '#059669', fontWeight: 600 }}>{details.governor_action}</span>
+                                                      </div>
+                                                    )}
+                                                  </div>
+
+                                                  {hasDifferentText && (
+                                                    <details style={{ marginTop: 6 }}>
+                                                      <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#374151' }}>
+                                                        View Full Bill Text
+                                                      </summary>
+                                                      <div style={{
+                                                        marginTop: 4,
+                                                        padding: 8,
+                                                        backgroundColor: '#ffffff',
+                                                        border: '1px solid #d1d5db',
+                                                        borderRadius: 4,
+                                                        maxHeight: '300px',
+                                                        overflow: 'auto',
+                                                        whiteSpace: 'pre-wrap',
+                                                        fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                                                        fontSize: '10px',
+                                                        lineHeight: 1.4
+                                                      }}>
+                                                        {details.bill_text}
+                                                      </div>
+                                                    </details>
+                                                  )}
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        );
+                                      })()
+                                    ) : (
+                                      <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>
+                                        Loading bill details...
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
                               </li>
-                            ))}
+                            );
+                            })}
                           </ul>
                         </div>
 
@@ -4798,12 +5046,14 @@ Rules:
                       </div>
                     ))}
 
-                    {Array.isArray(result.report.data_sources) && result.report.data_sources.length > 0 && (
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>
-                        <strong>Data Sources:</strong> {result.report.data_sources.join('; ')}
-                      </div>
-                    )}
-                  </>
+                        {Array.isArray(reportData.data_sources) && reportData.data_sources.length > 0 && (
+                          <div style={{ fontSize: 12, color: '#6b7280' }}>
+                            <strong>Data Sources:</strong> {reportData.data_sources.join('; ')}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()
                 ) : (
                   <>
                     <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}>
@@ -4881,129 +5131,6 @@ Rules:
             </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Donor Theme Analysis Results */}
-      {currentStep === 'donorThemeResults' && donorThemeAnalysisResult && (
-        <div style={{ marginTop: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <h3 style={{ margin: 0 }}>Theme Analysis Complete</h3>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => generateFinalReportPDF(donorThemeAnalysisResult)}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#dc2626',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  fontWeight: 500
-                }}
-                title="Download PDF of this report"
-              >
-                📄 Download PDF
-              </button>
-              <button
-                onClick={() => {
-                  setCurrentStep('donorThemeThemes');
-                  // Reload existing reports when going back to themes
-                  setTimeout(() => loadExistingReportsForThemes(), 100);
-                }}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  fontWeight: 500
-                }}
-                title="Go back to theme list"
-              >
-                ← Back to Themes
-              </button>
-            </div>
-          </div>
-
-          {/* Display the final report */}
-          <div style={{ backgroundColor: '#fefefe', padding: 20, borderRadius: 8, border: '1px solid #e5e7eb' }}>
-            <h4 style={{ color: '#1e40af', marginBottom: 16 }}>
-              Session {donorThemeAnalysisResult.report?.session_info?.session_id} -- {donorThemeAnalysisResult.report?.themes?.[0]?.theme}
-            </h4>
-
-            <div style={{ marginBottom: 20 }}>
-              <h5 style={{ marginBottom: 8 }}>Overall Summary:</h5>
-              <p style={{ lineHeight: 1.6, color: '#374151' }}>
-                {donorThemeAnalysisResult.report?.overall_summary}
-              </p>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <strong>Session Info:</strong> {JSON.stringify(donorThemeAnalysisResult.report?.session_info)}
-            </div>
-
-            {donorThemeAnalysisResult.report?.themes?.map((theme: any, themeIdx: number) => (
-              <div key={themeIdx} style={{ marginBottom: 25, padding: 16, backgroundColor: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
-                <h6 style={{ color: '#1e40af', marginBottom: 8 }}>{theme.theme}</h6>
-                <div style={{ marginBottom: 12, color: '#6b7280', fontStyle: 'italic' }}>
-                  {theme.description}
-                </div>
-                <div style={{ marginBottom: 8, fontSize: 14 }}>
-                  <strong>Summary:</strong> {theme.summary}
-                </div>
-                <div style={{ marginBottom: 8, fontSize: 14 }}>
-                  <strong>Confidence:</strong> {Math.round((theme.confidence || 0) * 100)}%
-                </div>
-
-                <div style={{ marginTop: 16 }}>
-                  <strong>Bills ({theme.bills?.length || 0}):</strong>
-                  <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
-                    {(theme.bills || []).map((bill: any, billIdx: number) => (
-                      <li key={billIdx} style={{ marginBottom: 8 }}>
-                        <div><strong>{bill.bill_number}</strong> -- {bill.title}</div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                          Vote: {bill.vote} | Reason: {bill.reason}
-                        </div>
-                        {bill.takeaways && (
-                          <div style={{ fontSize: 12, color: '#4b5563', marginTop: 4, fontStyle: 'italic' }}>
-                            <strong>Takeaways:</strong> {bill.takeaways}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div style={{ marginTop: 16 }}>
-                  <strong>Donors ({theme.donors?.length || 0}):</strong>
-                  <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
-                    {(theme.donors || []).map((donor: any, donorIdx: number) => (
-                      <li key={donorIdx}>
-                        <div><strong>{donor.name}</strong> -- {(() => {
-                          // Handle both string ($5,000) and number formats
-                          let amount = donor.total_amount ?? donor.amount ?? donor.total ?? 0;
-                          if (typeof amount === 'string') {
-                            amount = Number(amount.replace(/[$,]/g, ''));
-                          }
-                          return `$${Number(amount).toLocaleString()}`;
-                        })()}</div>
-                        <div style={{ fontSize: 12, color: '#6b7280' }}>
-                          {donor.type || 'Unknown type'} * {donor.employer || 'Unknown employer'} * {donor.occupation || 'Unknown occupation'}
-                        </div>
-                        {donor.notes && (
-                          <div style={{ fontSize: 12, color: '#4b5563', marginTop: 2, fontStyle: 'italic' }}>{donor.notes}</div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            ))}
-          </div>
 
           {/* Chat Interface for Follow-up Questions */}
           {analysisResults && analysisResults.length > 0 && (
@@ -5019,6 +5146,7 @@ Rules:
           )}
         </div>
       )}
+
 
     </div>
   );
