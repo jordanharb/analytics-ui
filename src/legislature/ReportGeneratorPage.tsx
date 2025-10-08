@@ -3312,20 +3312,21 @@ Notes:
       const needsExpansion = queries.length < 10;
       if (needsExpansion) {
         try {
-          const expansionPrompt = `For THEME "${theme.title}" create 5-8 broad search queries that combine:
- - sector jargon and synonyms,
- - statute phrasing (section, amend, repeal, subsection, paragraph),
- - bill lifecycle terms (introduced, engrossed, enrolled),
- - committee names that touch this sector.
+          const expansionPrompt = `For THEME "${theme.title}" generate 8-10 simple keywords or short phrases (1-3 words) that would likely appear in bill text related to this theme.
 
-CRITICAL: DO NOT include any of these redundant terms since all bills are already Arizona statutes:
-- "Arizona" or "AZ"
-- "A.R.S." or "ARS"
-- "Arizona Revised Statutes"
-- "Arizona statute"
-- Any state-specific references
+Focus on:
+- Concrete nouns and terms (like "landlord", "tenant", "property tax")
+- Industry-specific terminology
+- Common legal/regulatory terms in this area
+- Simple descriptive phrases
 
-Keep each query as a short, plain phrase about the topic; avoid quotes, boolean operators, and broad Title references.
+Examples for "real estate" theme: homeowner association, property tax, landlord, tenant, eviction, affordable housing, building code, short-term rental, impact fee, eminent domain
+
+DO NOT use:
+- Complex policy concepts ("land reform", "comprehensive zoning overhaul")
+- Legal citations or statute references
+- Long descriptive phrases
+- Abstract concepts
 
 Theme description: ${theme.description}
 Industry tags: ${(theme.industry_tags || []).join(', ') || 'n/a'}
@@ -5012,7 +5013,7 @@ Rules:
               </h3>
               <ReportChatView
                 reportContent={JSON.stringify(analysisResults, null, 2)}
-                reportTitle={`Analysis for ${selectedPerson?.display_name || 'Selected Person'}`}
+                reportTitle={`Analysis for ${searchTerm || 'Selected Person'}`}
               />
             </div>
           )}
