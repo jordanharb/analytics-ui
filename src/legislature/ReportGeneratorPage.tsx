@@ -721,29 +721,73 @@ const ReportGeneratorPage: React.FC = () => {
   // Function to load existing analysis reports (both two-phase and single-call)
   const loadExistingAnalysisReports = async (personId: number, sessionId: number): Promise<any[]> => {
     try {
-      const { data, error } = await supabase
-        .from('rs_analysis_phase2_reports')
-        .select(`
-          id,
-          created_at,
-          session_id,
-          is_combined,
-          custom_instructions,
-          phase1_report_id,
-          analysis_duration_ms,
-          report_data
-        `)
-        .eq('person_id', personId)
-        .eq('session_id', sessionId)
-        .order('created_at', { ascending: false })
-        .limit(10);
+      // Check both theme analysis reports and single-step reports
+      const [themeReports, singleStepReports] = await Promise.all([
+        // Multi-step theme analysis reports
+        supabase
+          .from('cf_theme_analysis_reports')
+          .select(`
+            id,
+            created_at,
+            session_id,
+            theme_title,
+            model_used,
+            generation_date,
+            report_json,
+            confidence_score,
+            donor_count,
+            bill_count
+          `)
+          .eq('person_id', personId)
+          .eq('session_id', sessionId)
+          .order('created_at', { ascending: false })
+          .limit(5),
 
-      if (error) {
-        console.error('Error loading existing analysis reports:', error);
-        return [];
+        // Single-step reports (theme_list_id is null for single-step)
+        supabase
+          .from('cf_theme_analysis_reports')
+          .select(`
+            id,
+            created_at,
+            session_id,
+            theme_title,
+            model_used,
+            generation_date,
+            report_json,
+            confidence_score,
+            donor_count,
+            bill_count
+          `)
+          .eq('person_id', personId)
+          .eq('session_id', sessionId)
+          .is('theme_list_id', null)
+          .order('created_at', { ascending: false })
+          .limit(5)
+      ]);
+
+      const allReports = [];
+
+      if (themeReports.data) {
+        allReports.push(...themeReports.data.map(r => ({ ...r, report_type: 'theme_analysis' })));
       }
 
-      return data || [];
+      if (singleStepReports.data) {
+        allReports.push(...singleStepReports.data.map(r => ({ ...r, report_type: 'single_step' })));
+      }
+
+      if (themeReports.error) {
+        console.error('Error loading theme analysis reports:', themeReports.error);
+      }
+
+      if (singleStepReports.error) {
+        console.error('Error loading single-step reports:', singleStepReports.error);
+      }
+
+      // Sort combined results by created_at and return up to 10
+      return allReports
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 10);
+
     } catch (err) {
       console.error('Error loading analysis reports:', err);
       return [];
