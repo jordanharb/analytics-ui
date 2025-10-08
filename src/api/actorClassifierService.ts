@@ -48,6 +48,138 @@ function buildKeywordClause(keyword: string): string {
   ].join(',');
 }
 
+// Bio-only keyword clause for targeted classifier views (reduced OR fanout)
+function buildBioOnlyClause(keyword: string): string {
+  const sanitized = keyword.replace(/[,\s]+/g, ' ').trim();
+  if (!sanitized) return '';
+  const token = `*${sanitized}*`;
+  return `profile_bio.ilike.${token}`;
+}
+
+const KEYWORD_SCAN_BATCH = 200;
+const KEYWORD_SCAN_MULTIPLIER = 8;
+
+function sanitizeUnknownActors(rows: any[]): UnknownActor[] {
+  const filtered = (rows ?? []).filter((actor: any) => {
+    const placeholder = actor?.x_profile_data && actor.x_profile_data.is_placeholder === true;
+    const hasDisplay = Boolean(actor?.profile_displayname);
+    return !placeholder && hasDisplay;
+  }) as UnknownActor[];
+
+  return filtered.map(actor => ({
+    ...actor,
+    network_interactions: actor.network_interactions ?? actor.mention_count ?? 0,
+  }));
+}
+
+function shouldUseClientKeywordFiltering(config?: ClassifierFilterConfig): string[] | null {
+  if (!config) return null;
+  if (config.filter === 'keyword' && config.keywords && config.keywords.length > 0) {
+    return config.keywords;
+  }
+  return null;
+}
+
+async function fetchKeywordFilteredUnknownActors({
+  keywords,
+  offset,
+  limit,
+  platform,
+  searchTerm,
+}: {
+  keywords: string[];
+  offset: number;
+  limit: number;
+  platform?: string;
+  searchTerm?: string;
+}): Promise<UnknownActorResponse> {
+  const normalizedKeywords = keywords
+    .map(keyword => keyword.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (normalizedKeywords.length === 0) {
+    return { actors: [], hasMore: false, total: 0 };
+  }
+
+  const batchSize = Math.max(limit * KEYWORD_SCAN_MULTIPLIER, KEYWORD_SCAN_BATCH);
+  const maxRowsToScan = (offset + limit) * KEYWORD_SCAN_MULTIPLIER;
+
+  const collected: UnknownActor[] = [];
+  const seen = new Set<string>();
+  let skipped = 0;
+  let scanned = 0;
+  let totalCount: number | null = null;
+  let cursor = 0;
+
+  while (scanned < maxRowsToScan && collected.length < limit) {
+    let query = supabaseClient
+      .from('v2_unknown_actors')
+      .select('*', { count: 'exact' })
+      .eq('review_status', 'pending')
+      .order('mention_count', { ascending: false })
+      .range(cursor, cursor + batchSize - 1);
+
+    if (platform) {
+      query = query.eq('platform', platform);
+    }
+
+    if (searchTerm) {
+      const clause = buildKeywordClause(searchTerm);
+      if (clause) {
+        query = query.or(clause);
+      }
+    }
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    if (totalCount === null) {
+      totalCount = count ?? null;
+    }
+
+    const rows = data ?? [];
+    const sanitized = sanitizeUnknownActors(rows);
+    if (rows.length === 0) {
+      break;
+    }
+
+    for (const actor of sanitized) {
+      const bio = (actor.profile_bio ?? '').toLowerCase();
+      if (normalizedKeywords.some(keyword => bio.includes(keyword))) {
+        if (skipped < offset) {
+          skipped += 1;
+        } else if (!seen.has(actor.id)) {
+          collected.push(actor);
+          seen.add(actor.id);
+          if (collected.length >= limit) {
+            break;
+          }
+        }
+      }
+    }
+
+    cursor += rows.length;
+    scanned += rows.length;
+
+    if (rows.length < batchSize) {
+      break;
+    }
+
+    if (totalCount !== null && cursor >= totalCount) {
+      break;
+    }
+  }
+
+  const totalMatchesEstimate = skipped + collected.length;
+  const hasMore = collected.length >= limit || (totalCount !== null && cursor < totalCount);
+
+  return {
+    actors: collected.slice(0, limit),
+    hasMore,
+    total: hasMore ? totalMatchesEstimate + 1 : totalMatchesEstimate,
+  };
+}
+
 function applyFilterConfig(query: any, config?: ClassifierFilterConfig) {
   if (!config) return query;
 
@@ -58,8 +190,9 @@ function applyFilterConfig(query: any, config?: ClassifierFilterConfig) {
       return builder;
     case 'keyword':
       if (config.keywords && config.keywords.length > 0) {
+        // Scope classifier keyword filters to bios only to avoid timeouts on JSON field ORs
         const clause = config.keywords
-          .map(buildKeywordClause)
+          .map(buildBioOnlyClause)
           .filter(Boolean)
           .join(',');
         if (clause) {
@@ -100,7 +233,8 @@ function applyFilterConfig(query: any, config?: ClassifierFilterConfig) {
         let next = builder;
         config.filters.forEach(f => {
           if (f.type === 'keyword' && f.keywords?.length) {
-            const clause = f.keywords.map(buildKeywordClause).filter(Boolean).join(',');
+            // Bio-only for combined keyword filters as well
+            const clause = f.keywords.map(buildBioOnlyClause).filter(Boolean).join(',');
             if (clause) {
               next = next.or(clause);
             }
@@ -125,6 +259,17 @@ export async function fetchUnknownActors({
   searchTerm,
   platform,
 }: FetchUnknownActorsParams): Promise<UnknownActorResponse> {
+  const keywordFilterKeywords = shouldUseClientKeywordFiltering(config);
+  if (keywordFilterKeywords && !searchTerm) {
+    return fetchKeywordFilteredUnknownActors({
+      keywords: keywordFilterKeywords,
+      offset,
+      limit,
+      platform,
+      searchTerm,
+    });
+  }
+
   let builder = supabaseClient
     .from('v2_unknown_actors')
     .select('*', { count: 'exact' })
@@ -148,16 +293,7 @@ export async function fetchUnknownActors({
   const { data, error, count } = await builder;
   if (error) throw error;
 
-  const sanitized = (data ?? []).filter(actor => {
-    const placeholder = actor?.x_profile_data && actor.x_profile_data.is_placeholder === true;
-    const hasDisplay = Boolean(actor?.profile_displayname);
-    return !placeholder && hasDisplay;
-  }) as UnknownActor[];
-
-  const decorated = sanitized.map(actor => ({
-    ...actor,
-    network_interactions: actor.network_interactions ?? actor.mention_count ?? 0,
-  }));
+  const decorated = sanitizeUnknownActors(data ?? []);
 
   let filtered = decorated;
   if (config?.filter === 'priority' && typeof config.min_score === 'number') {
@@ -225,22 +361,19 @@ export async function searchExistingActors(
     builder = builder.eq('actor_type', options.actorType);
   }
 
-  const searchClauses: string[] = [];
+  // Apply main search term if provided
   const searchTerm = term?.trim();
   if (searchTerm) {
     const encoded = searchTerm.replace(/%/g, '\\%');
-    searchClauses.push(
+    builder = builder.or(
       `name.ilike.*${encoded}*,about.ilike.*${encoded}*,city.ilike.*${encoded}*,state.ilike.*${encoded}*,region.ilike.*${encoded}*`,
     );
   }
 
+  // Apply advanced filters as AND conditions
   if (options.name) {
     const encoded = options.name.replace(/%/g, '\\%');
-    searchClauses.push(`name.ilike.*${encoded}*`);
-  }
-
-  if (searchClauses.length > 0) {
-    builder = builder.or(searchClauses.join(','));
+    builder = builder.ilike('name', `%${encoded}%`);
   }
 
   if (options.city) {

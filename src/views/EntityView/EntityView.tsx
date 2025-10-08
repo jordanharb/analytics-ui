@@ -39,6 +39,7 @@ import {
   fetchActorDetails,
   fetchActorMembers,
   fetchActorRelationships,
+  fetchActorInboundRelationships,
   fetchActorUsernames,
   updateActorDetails,
   searchActorsForLinking,
@@ -762,19 +763,28 @@ export const EntityView: React.FC = () => {
           )}
 
           {activeTab === 'network' && isActor && (
-            <div>
-              {/* Outgoing relationships */}
-              {renderNetworkSection(details.links_out || [], 'Outgoing Connections', 'out')}
-
-              {/* Incoming relationships */}
-              {renderNetworkSection(details.links_in || [], 'Incoming Connections', 'in')}
-
-              {!hasNetwork && (
-                <div className="text-center py-8 text-gray-500">
-                  No network relationships found
-                </div>
+            <NetworkTab
+              actorId={entityId!}
+              detailsRefresh={async () => {
+                try {
+                  const [detailsData] = await Promise.all([
+                    analyticsClient.getEntityDetails(entityType as any, entityId!)
+                  ]);
+                  setDetails(detailsData);
+                } catch (e) {
+                  console.warn('Failed to refresh entity details after network edit');
+                }
+              }}
+              renderReadOnly={() => (
+                <>
+                  {renderNetworkSection(details.links_out || [], 'Outgoing Connections', 'out')}
+                  {renderNetworkSection(details.links_in || [], 'Incoming Connections', 'in')}
+                  {!hasNetwork && (
+                    <div className="text-center py-8 text-gray-500">No network relationships found</div>
+                  )}
+                </>
               )}
-            </div>
+            />
           )}
 
           {activeTab === 'activity' && (
@@ -900,6 +910,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
   const [actor, setActor] = useState<Actor | null>(null);
   const [usernames, setUsernames] = useState<ActorUsername[]>([]);
   const [relationships, setRelationships] = useState<ActorRelationship[]>([]);
+  const [inboundRelationships, setInboundRelationships] = useState<ActorRelationship[]>([]);
   const [members, setMembers] = useState<ActorMember[]>([]);
 
   const [profileForm, setProfileForm] = useState<ProfileFormState>({
@@ -916,36 +927,38 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
   const [isEditing, setIsEditing] = useState(false);
 
   const [relationshipDrafts, setRelationshipDrafts] = useState<RelationshipDraftMap>({});
-  const [relationshipSavingKey, setRelationshipSavingKey] = useState<string | null>(null);
-  const [relationshipDeletingKey, setRelationshipDeletingKey] = useState<string | null>(null);
-  const [relationshipErrors, setRelationshipErrors] = useState<Record<string, string>>({});
-  const [relationshipGlobalError, setRelationshipGlobalError] = useState<string | null>(null);
-  const [relationshipSuccessKey, setRelationshipSuccessKey] = useState<string | null>(null);
+  // const [relationshipSavingKey, setRelationshipSavingKey] = useState<string | null>(null);
+  // const [relationshipDeletingKey, setRelationshipDeletingKey] = useState<string | null>(null);
+  // const [relationshipErrors, setRelationshipErrors] = useState<Record<string, string>>({});
+  // const [relationshipGlobalError, setRelationshipGlobalError] = useState<string | null>(null);
+  // const [relationshipSuccessKey, setRelationshipSuccessKey] = useState<string | null>(null);
 
   const [newLinkSearch, setNewLinkSearch] = useState('');
-  const [newLinkResults, setNewLinkResults] = useState<Actor[]>([]);
-  const [newLinkError, setNewLinkError] = useState<string | null>(null);
+  // const [newLinkResults, setNewLinkResults] = useState<Actor[]>([]);
+  // const [newLinkError, setNewLinkError] = useState<string | null>(null);
   const [selectedNewLink, setSelectedNewLink] = useState<Actor | null>(null);
   const [newLinkRelationship, setNewLinkRelationship] = useState('');
   const [newLinkRole, setNewLinkRole] = useState('');
-  const [isSearchingLinks, setIsSearchingLinks] = useState(false);
-  const [isCreatingLink, setIsCreatingLink] = useState(false);
+  // const [isSearchingLinks, setIsSearchingLinks] = useState(false);
+  // const [isCreatingLink, setIsCreatingLink] = useState(false);
   const searchTimeoutRef = useRef<number | undefined>();
 
   const loadActorData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [detail, usernamesData, relationshipsData, membersData] = await Promise.all([
+      const [detail, usernamesData, relationshipsData, inboundData, membersData] = await Promise.all([
         fetchActorDetails(actorId),
         fetchActorUsernames(actorId),
         fetchActorRelationships(actorId),
+        fetchActorInboundRelationships(actorId),
         fetchActorMembers(actorId),
       ]);
 
       setActor(detail ?? null);
       setUsernames(usernamesData);
       setRelationships(relationshipsData);
+      setInboundRelationships(inboundData);
       setMembers(membersData);
     } catch (err) {
       setError(errorMessage(err, 'Failed to load actor details'));
@@ -986,9 +999,15 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
         role: rel.role ?? '',
       };
     });
+    inboundRelationships.forEach(rel => {
+      drafts[relationshipKey(rel)] = {
+        relationship: rel.relationship ?? '',
+        role: rel.role ?? '',
+      };
+    });
     setRelationshipDrafts(drafts);
     setRelationshipErrors({});
-  }, [relationships]);
+  }, [relationships, inboundRelationships]);
 
   useEffect(() => {
     if (!isEditing) {
@@ -1054,11 +1073,13 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
   const refreshRelationships = useCallback(async () => {
     if (!actor) return;
     try {
-      const [nextRelationships, nextMembers] = await Promise.all([
+      const [nextRelationships, nextInbound, nextMembers] = await Promise.all([
         fetchActorRelationships(actor.id),
+        fetchActorInboundRelationships(actor.id),
         fetchActorMembers(actor.id),
       ]);
       setRelationships(nextRelationships);
+      setInboundRelationships(nextInbound);
       setMembers(nextMembers);
     } catch (err) {
       setRelationshipGlobalError(errorMessage(err, 'Failed to refresh relationships'));
@@ -1240,6 +1261,12 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
               role: rel.role ?? '',
             };
           });
+          inboundRelationships.forEach(rel => {
+            drafts[relationshipKey(rel)] = {
+              relationship: rel.relationship ?? '',
+              role: rel.role ?? '',
+            };
+          });
           setRelationshipDrafts(drafts);
         }
       }
@@ -1407,7 +1434,8 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
                   </div>
                 </div>
 
-                <div className="space-y-6">
+                {/* Relationship management moved to Network tab */}
+                {/*
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Add Relationship</h3>
                     <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,2fr),minmax(0,1fr)]">
@@ -1494,21 +1522,21 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
 
                   <div className="space-y-3">
                     <header className="flex items-center justify-between">
-                      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Existing Relationships</h3>
-                      <span className="text-xs text-gray-500">{relationshipList.length} linked</span>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Existing Connections</h3>
+                      <span className="text-xs text-gray-500">{connectionsCombined.length} linked</span>
                     </header>
                     {relationshipGlobalError && (
                       <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600">
                         {relationshipGlobalError}
                       </div>
                     )}
-                    {relationshipList.length === 0 ? (
+                    {connectionsCombined.length === 0 ? (
                       <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
                         No relationships recorded yet.
                       </div>
                     ) : (
                       <ul className="space-y-3">
-                        {relationshipList.map(rel => {
+                        {connectionsCombined.map(rel => {
                           const key = relationshipKey(rel);
                           const draft = relationshipDrafts[key] ?? { relationship: rel.relationship ?? '', role: rel.role ?? '' };
                           const isSaving = relationshipSavingKey === key;
@@ -1576,7 +1604,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
                       </ul>
                     )}
                   </div>
-                </div>
+                */}
               </form>
             ) : (
               <div className="space-y-6">
@@ -1616,24 +1644,9 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
                   </div>
                 </div>
 
-                <div>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Relationships</h3>
-                  {relationshipList.length === 0 ? (
-                    <p className="mt-2 text-sm text-gray-500">No relationships recorded.</p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm text-gray-600">
-                      {relationshipList.map(rel => (
-                        <li key={relationshipKey(rel)} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-                          <div className="text-gray-800 font-medium">{rel.to_actor?.name ?? rel.to_actor_id}</div>
-                          <div className="text-xs text-gray-500">
-                            {rel.relationship ?? 'relationship'}
-                            {rel.role ? ` • ${rel.role}` : ''}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                {/* Connected actors moved to Network tab */}
+
+                {/* Incoming connections are included above in Connected Actors */}
 
                 {membersPreview.length > 0 && (
                   <div>
@@ -1656,5 +1669,481 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
         )}
       </div>
     </section>
+  );
+};
+
+// Network tab with edit mode to add/remove inbound or outbound connections
+const NetworkTab: React.FC<{
+  actorId: string;
+  detailsRefresh: () => Promise<void>;
+  renderReadOnly: () => React.ReactNode;
+}> = ({ actorId, detailsRefresh, renderReadOnly }) => {
+  const [editing, setEditing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [outbound, setOutbound] = useState<ActorRelationship[]>([]);
+  const [inbound, setInbound] = useState<ActorRelationship[]>([]);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<RelationshipDraftMap>({});
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [successKey, setSuccessKey] = useState<string | null>(null);
+
+  // Add connection state
+  const [direction, setDirection] = useState<'outbound' | 'inbound'>('outbound');
+  const [term, setTerm] = useState('');
+  const [results, setResults] = useState<Actor[]>([]);
+  const [selected, setSelected] = useState<Actor | null>(null);
+  const [relType, setRelType] = useState('');
+  const [role, setRole] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const searchRef = useRef<number | undefined>();
+
+  const loadNetwork = useCallback(async () => {
+    setLoading(true);
+    setGlobalError(null);
+    try {
+      const [outR, inR] = await Promise.all([
+        fetchActorRelationships(actorId),
+        fetchActorInboundRelationships(actorId),
+      ]);
+      setOutbound(outR);
+      setInbound(inR);
+    } catch (e) {
+      setGlobalError(errorMessage(e, 'Failed to load network'));
+    } finally {
+      setLoading(false);
+    }
+  }, [actorId]);
+
+  useEffect(() => {
+    if (editing) {
+      loadNetwork();
+    }
+    return () => {
+      if (searchRef.current) window.clearTimeout(searchRef.current);
+    };
+  }, [editing, loadNetwork]);
+
+  // Seed drafts from loaded links
+  useEffect(() => {
+    if (!editing) return;
+    const d: RelationshipDraftMap = {};
+    outbound.forEach(r => (d[relationshipKey(r)] = { relationship: r.relationship ?? '', role: r.role ?? '' }));
+    inbound.forEach(r => (d[relationshipKey(r)] = { relationship: r.relationship ?? '', role: r.role ?? '' }));
+    setDrafts(d);
+    setRowErrors({});
+  }, [editing, outbound, inbound]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const q = term.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setIsSearching(false);
+      return;
+    }
+    if (searchRef.current) window.clearTimeout(searchRef.current);
+    setIsSearching(true);
+    setAddError(null);
+    searchRef.current = window.setTimeout(async () => {
+      try {
+        const r = await searchActorsForLinking(q, 12, actorId);
+        // exclude already linked ids from both inbound and outbound depending on direction
+        const existing = new Set(
+          (direction === 'outbound' ? outbound : inbound).map(x => (direction === 'outbound' ? x.to_actor_id : x.from_actor_id)),
+        );
+        setResults(r.filter(a => !existing.has(a.id)));
+      } catch (e) {
+        setAddError(errorMessage(e, 'Search failed'));
+      } finally {
+        setIsSearching(false);
+      }
+    }, 250);
+    return () => {
+      if (searchRef.current) window.clearTimeout(searchRef.current);
+    };
+  }, [term, editing, direction, actorId, outbound, inbound]);
+
+  const handleCreate = async () => {
+    if (!selected) {
+      setAddError('Select an actor');
+      return;
+    }
+    setIsCreating(true);
+    setAddError(null);
+    try {
+      if (direction === 'outbound') {
+        await createActorRelationship({
+          from_actor_id: actorId,
+          to_actor_id: selected.id,
+          relationship: normalizeText(relType) || null,
+          role: normalizeText(role) || null,
+        });
+      } else {
+        await createActorRelationship({
+          from_actor_id: selected.id,
+          to_actor_id: actorId,
+          relationship: normalizeText(relType) || null,
+          role: normalizeText(role) || null,
+        });
+      }
+      await loadNetwork();
+      await detailsRefresh();
+      setSelected(null);
+      setTerm('');
+      setResults([]);
+      setRelType('');
+      setRole('');
+    } catch (e) {
+      setAddError(errorMessage(e, 'Failed to create link'));
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleRemove = async (rel: ActorRelationship, inboundSide: boolean) => {
+    const key = relationshipKey(rel);
+    try {
+      setDeletingKey(key);
+      await deleteActorRelationship({
+        from_actor_id: rel.from_actor_id,
+        to_actor_id: rel.to_actor_id,
+        original_relationship: rel.relationship ?? null,
+        original_role: rel.role ?? null,
+        created_at: rel.created_at ?? null,
+      });
+      await loadNetwork();
+      await detailsRefresh();
+    } catch (e) {
+      setGlobalError(errorMessage(e, 'Failed to remove link'));
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const updateDraft = useCallback((key: string, field: 'relationship' | 'role', value: string) => {
+    setDrafts(prev => ({
+      ...prev,
+      [key]: { ...(prev[key] ?? { relationship: '', role: '' }), [field]: value },
+    }));
+  }, []);
+
+  const handleSave = async (rel: ActorRelationship) => {
+    const key = relationshipKey(rel);
+    const draft = drafts[key];
+    if (!draft) return;
+    if (
+      normalizeText(draft.relationship) === normalizeText(rel.relationship) &&
+      normalizeText(draft.role) === normalizeText(rel.role)
+    ) {
+      return;
+    }
+    setSavingKey(key);
+    setRowErrors(prev => ({ ...prev, [key]: '' }));
+    try {
+      await updateActorRelationship(
+        {
+          from_actor_id: rel.from_actor_id,
+          to_actor_id: rel.to_actor_id,
+          original_relationship: rel.relationship ?? null,
+          original_role: rel.role ?? null,
+          created_at: rel.created_at ?? null,
+        },
+        {
+          relationship: normalizeText(draft.relationship) || null,
+          role: normalizeText(draft.role) || null,
+        },
+      );
+      await loadNetwork();
+      await detailsRefresh();
+      setSuccessKey(key);
+      window.setTimeout(() => setSuccessKey(null), 1500);
+    } catch (e) {
+      setRowErrors(prev => ({ ...prev, [key]: errorMessage(e, 'Failed to update link') }));
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-base md:text-lg font-semibold">Network</h3>
+        <button
+          type="button"
+          onClick={() => setEditing(v => !v)}
+          className={`inline-flex items-center rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+            editing ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+          }`}
+        >
+          {editing ? 'Done' : 'Edit'}
+        </button>
+      </div>
+
+      {!editing ? (
+        <>{renderReadOnly()}</>
+      ) : (
+        <div className="space-y-6">
+          {globalError && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600">{globalError}</div>
+          )}
+
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Add Connection</h4>
+            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,2fr),minmax(0,1fr)]">
+              <div>
+                <div className="mb-2 flex items-center gap-3 text-sm">
+                  <label className="inline-flex items-center gap-2">
+                    <input type="radio" checked={direction === 'outbound'} onChange={() => setDirection('outbound')} />
+                    <span>Outbound (from this actor)</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input type="radio" checked={direction === 'inbound'} onChange={() => setDirection('inbound')} />
+                    <span>Inbound (to this actor)</span>
+                  </label>
+                </div>
+                <label className="space-y-1 text-sm text-gray-600">
+                  <span className="font-medium text-gray-700">Search actors</span>
+                  <input
+                    value={term}
+                    onChange={e => {
+                      setTerm(e.target.value);
+                      setSelected(null);
+                    }}
+                    placeholder="Search by name, city, or state"
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </label>
+                <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+                  {isSearching ? (
+                    <div className="flex items-center justify-center py-6 text-sm text-gray-500">Searching…</div>
+                  ) : results.length === 0 ? (
+                    <div className="py-5 text-center text-xs text-gray-400">
+                      {term.trim().length < 2 ? 'Type at least two characters to search' : 'No actors found'}
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-gray-100 text-sm">
+                      {results.map(opt => {
+                        const sel = selected?.id === opt.id;
+                        return (
+                          <li key={opt.id}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelected(opt);
+                                setTerm(opt.name ?? '');
+                              }}
+                              className={`flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left transition ${
+                                sel ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'
+                              }`}
+                            >
+                              <span className="font-medium">{opt.name ?? 'Unnamed actor'}</span>
+                              <span className="text-xs text-gray-500">
+                                {opt.actor_type?.toUpperCase() ?? '—'}
+                                {(opt.city || opt.state) && ` • ${[opt.city, opt.state].filter(Boolean).join(', ')}`}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-3">
+                <label className="space-y-1 text-sm text-gray-600">
+                  <span className="font-medium text-gray-700">Relationship</span>
+                  <input
+                    value={relType}
+                    onChange={e => setRelType(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    placeholder="member, staff, etc."
+                  />
+                </label>
+                <label className="space-y-1 text-sm text-gray-600">
+                  <span className="font-medium text-gray-700">Role</span>
+                  <input
+                    value={role}
+                    onChange={e => setRole(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    placeholder="Organizer"
+                  />
+                </label>
+                {addError && <p className="text-xs font-medium text-rose-600">{addError}</p>}
+                <button
+                  type="button"
+                  onClick={handleCreate}
+                  disabled={isCreating || !selected}
+                  className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-300"
+                >
+                  {isCreating ? 'Linking…' : selected ? `Link ${selected.name ?? 'Actor'}` : 'Select an actor to link'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <header className="mb-2 flex items-center justify-between">
+                <h4 className="text-sm font-semibold">Outbound</h4>
+                <span className="text-xs text-gray-500">{outbound.length}</span>
+              </header>
+              {loading ? (
+                <div className="text-center text-sm text-gray-500 py-4">Loading…</div>
+              ) : outbound.length === 0 ? (
+                <div className="text-center text-sm text-gray-500 py-4">No outbound links</div>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {outbound.map(rel => {
+                    const key = relationshipKey(rel);
+                    const draft = drafts[key] ?? { relationship: rel.relationship ?? '', role: rel.role ?? '' };
+                    const isSaving = savingKey === key;
+                    const isDeleting = deletingKey === key;
+                    const err = rowErrors[key];
+                    const saved = successKey === key;
+                    return (
+                      <li key={key} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-gray-900">{rel.to_actor?.name ?? rel.to_actor_id}</div>
+                            <div className="text-xs text-gray-500">
+                              {rel.to_actor?.actor_type?.toUpperCase() ?? '—'}
+                              {(rel.to_actor?.city || rel.to_actor?.state) && ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemove(rel, false)}
+                            disabled={isDeleting || isSaving}
+                            className="rounded border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                          >
+                            {isDeleting ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          <label className="space-y-1 text-xs text-gray-600">
+                            <span className="font-medium text-gray-700">Relationship</span>
+                            <input
+                              value={draft.relationship}
+                              onChange={e => updateDraft(key, 'relationship', e.target.value)}
+                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              placeholder="member"
+                            />
+                          </label>
+                          <label className="space-y-1 text-xs text-gray-600">
+                            <span className="font-medium text-gray-700">Role</span>
+                            <input
+                              value={draft.role}
+                              onChange={e => updateDraft(key, 'role', e.target.value)}
+                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              placeholder="Organizer"
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-xs">
+                          <div className="font-medium">
+                            {err && <span className="text-rose-600">{err}</span>}
+                            {saved && !err && <span className="text-emerald-600">Saved</span>}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSave(rel)}
+                            disabled={isSaving || isDeleting}
+                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60"
+                          >
+                            {isSaving ? 'Saving…' : 'Save changes'}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <header className="mb-2 flex items-center justify-between">
+                <h4 className="text-sm font-semibold">Inbound</h4>
+                <span className="text-xs text-gray-500">{inbound.length}</span>
+              </header>
+              {loading ? (
+                <div className="text-center text-sm text-gray-500 py-4">Loading…</div>
+              ) : inbound.length === 0 ? (
+                <div className="text-center text-sm text-gray-500 py-4">No inbound links</div>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {inbound.map(rel => {
+                    const key = relationshipKey(rel);
+                    const draft = drafts[key] ?? { relationship: rel.relationship ?? '', role: rel.role ?? '' };
+                    const isSaving = savingKey === key;
+                    const isDeleting = deletingKey === key;
+                    const err = rowErrors[key];
+                    const saved = successKey === key;
+                    return (
+                      <li key={`in-${key}`} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-gray-900">{rel.to_actor?.name ?? rel.from_actor_id}</div>
+                            <div className="text-xs text-gray-500">
+                              {rel.to_actor?.actor_type?.toUpperCase() ?? '—'}
+                              {(rel.to_actor?.city || rel.to_actor?.state) && ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemove(rel, true)}
+                            disabled={isDeleting || isSaving}
+                            className="rounded border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                          >
+                            {isDeleting ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          <label className="space-y-1 text-xs text-gray-600">
+                            <span className="font-medium text-gray-700">Relationship</span>
+                            <input
+                              value={draft.relationship}
+                              onChange={e => updateDraft(key, 'relationship', e.target.value)}
+                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              placeholder="member"
+                            />
+                          </label>
+                          <label className="space-y-1 text-xs text-gray-600">
+                            <span className="font-medium text-gray-700">Role</span>
+                            <input
+                              value={draft.role}
+                              onChange={e => updateDraft(key, 'role', e.target.value)}
+                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              placeholder="Organizer"
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-xs">
+                          <div className="font-medium">
+                            {err && <span className="text-rose-600">{err}</span>}
+                            {saved && !err && <span className="text-emerald-600">Saved</span>}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSave(rel)}
+                            disabled={isSaving || isDeleting}
+                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60"
+                          >
+                            {isSaving ? 'Saving…' : 'Save changes'}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };

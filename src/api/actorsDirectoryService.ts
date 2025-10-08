@@ -1,4 +1,4 @@
-import type { PostgrestFilterBuilder } from '@supabase/postgrest-js';
+// import type { PostgrestFilterBuilder } from '@supabase/postgrest-js';
 import { PostgrestError } from '@supabase/supabase-js';
 import { supabaseClient } from './supabaseClient';
 import type {
@@ -124,6 +124,22 @@ export async function fetchActorRelationships(actorId: string): Promise<ActorRel
   return rows.map(toActorRelationship);
 }
 
+// Fetch inbound relationships where the current actor is the target (to_actor_id).
+// For display consistency, we normalize the "other" actor into the to_actor field.
+export async function fetchActorInboundRelationships(actorId: string): Promise<ActorRelationship[]> {
+  const { data, error } = await supabaseClient
+    .from('v2_actor_links')
+    .select(
+      'from_actor_id,to_actor_id,relationship,role,role_category,is_primary,metadata,created_at,from_actor:v2_actors!actor_links_from_actor_id_fkey(id,name,actor_type,city,state)',
+    )
+    .eq('to_actor_id', actorId);
+
+  if (error) throw error;
+
+  const rows = (data ?? []) as RelationshipRow[];
+  return rows.map(toInboundActorRelationship);
+}
+
 export async function fetchActorEvents(actorId: string, limit: number = 200): Promise<ActorEvent[]> {
   const { data, error } = await supabaseClient
     .from('v2_event_actor_links')
@@ -133,7 +149,7 @@ export async function fetchActorEvents(actorId: string, limit: number = 200): Pr
 
   if (error) throw error;
 
-  const rows = (data ?? []) as EventLinkRow[];
+  const rows = (data ?? []) as unknown as EventLinkRow[];
   return rows.map(row => ({
     id: `${row.event_id}:${row.actor_id ?? row.actor_handle ?? 'linked'}`,
     event_id: row.event_id,
@@ -170,7 +186,7 @@ export async function fetchActorMembers(actorId: string): Promise<ActorMember[]>
     role_category: row.role_category,
     is_primary: row.is_primary,
     created_at: row.created_at ?? null,
-    member_actor: normalizeRelatedActor(row.to_actor),
+    member_actor: normalizeRelatedActor(row.to_actor ?? null),
   }));
 }
 
@@ -259,6 +275,7 @@ interface RelationshipRow {
   metadata?: Record<string, unknown> | null;
   created_at?: string | null;
   to_actor?: Actor | Actor[] | null;
+  from_actor?: Actor | Actor[] | null;
 }
 
 interface EventLinkRow {
@@ -282,7 +299,7 @@ interface EventLinkRow {
 const fallbackRelationshipId = (row: Pick<RelationshipRow, 'from_actor_id' | 'to_actor_id' | 'relationship' | 'created_at'>) =>
   `${row.from_actor_id}:${row.to_actor_id}:${row.relationship ?? 'linked'}:${row.created_at ?? 'created'}`;
 
-const normalizeRelatedActor = (joined: RelationshipRow['to_actor']): Actor | undefined => {
+const normalizeRelatedActor = (joined: Actor | Actor[] | null): Actor | undefined => {
   if (Array.isArray(joined)) {
     return joined[0] as Actor | undefined;
   }
@@ -299,7 +316,22 @@ const toActorRelationship = (row: RelationshipRow): ActorRelationship => ({
   is_primary: row.is_primary,
   metadata: row.metadata ?? null,
   created_at: row.created_at ?? null,
-  to_actor: normalizeRelatedActor(row.to_actor),
+  to_actor: normalizeRelatedActor(row.to_actor ?? null),
+});
+
+// For inbound relationships (where current actor is the target),
+// expose the "other" actor via the same to_actor field for UI reuse.
+const toInboundActorRelationship = (row: RelationshipRow): ActorRelationship => ({
+  id: fallbackRelationshipId(row),
+  from_actor_id: row.from_actor_id,
+  to_actor_id: row.to_actor_id,
+  relationship: row.relationship,
+  role: row.role,
+  role_category: row.role_category,
+  is_primary: row.is_primary,
+  metadata: row.metadata ?? null,
+  created_at: row.created_at ?? null,
+  to_actor: normalizeRelatedActor(row.from_actor ?? null),
 });
 
 export async function createActorRelationship(
@@ -318,7 +350,9 @@ export async function createActorRelationship(
       metadata: rest.metadata ?? null,
       is_primary: rest.is_primary ?? false,
     })
-    .select('id,from_actor_id,to_actor_id,relationship,role,to_actor:v2_actors!actor_links_to_actor_id_fkey(id,name,actor_type,city,state)')
+    .select(
+      'from_actor_id,to_actor_id,relationship,role,role_category,is_primary,metadata,created_at,to_actor:v2_actors!actor_links_to_actor_id_fkey(id,name,actor_type,city,state)'
+    )
     .single();
 
   if (error) throw error;
@@ -326,10 +360,10 @@ export async function createActorRelationship(
   return toActorRelationship(data as RelationshipRow);
 }
 
-function applyRelationshipIdentifier<T extends Record<string, unknown>>(
-  query: PostgrestFilterBuilder<T, T, unknown>,
+function applyRelationshipIdentifier(
+  query: any,
   identifier: RelationshipIdentifier,
-): PostgrestFilterBuilder<T, T, unknown> {
+): any {
   let next = query.eq('from_actor_id', identifier.from_actor_id).eq('to_actor_id', identifier.to_actor_id);
 
   if (identifier.created_at) {

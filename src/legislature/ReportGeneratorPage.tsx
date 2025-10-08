@@ -656,8 +656,11 @@ const ReportGeneratorPage: React.FC = () => {
             reportData: fullReport.report_json
           })));
 
-          setDonorThemeAnalysisResult(fullReport.report_json);
-          setCurrentStep('donorThemeResults');
+          setAnalysisResults([{
+            sessionName: 'Donor Theme Analysis',
+            report: fullReport.report_json
+          }]);
+          setCurrentStep('results');
           return;
         } else {
           console.error('Report JSON not found in database record');

@@ -896,7 +896,7 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
         if (!cancelled) {
           const options: Record<string, string[]> = {};
           optionEntries.forEach(([key, values]) => {
-            options[key] = values;
+            options[key] = values as string[];
           });
           setFieldOptions(options);
         }
@@ -924,9 +924,9 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
 
   useEffect(() => {
     if (!linkingEnabled) {
+      setLinkIsSearching(false);
       setLinkSearchTerm('');
       setLinkSearchResults([]);
-      setLinkIsSearching(false);
       return;
     }
 
@@ -1730,7 +1730,7 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
                     ? 'border-blue-500 bg-blue-50 text-blue-700'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-600'
                 }`}
-                onClick={() => setActorType(type.id)}
+                onClick={() => setActorType(type.id as 'person' | 'organization' | 'chapter')}
               >
                 {type.label}
               </button>
