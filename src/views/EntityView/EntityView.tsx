@@ -927,21 +927,21 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
   const [isEditing, setIsEditing] = useState(false);
 
   const [relationshipDrafts, setRelationshipDrafts] = useState<RelationshipDraftMap>({});
-  // const [relationshipSavingKey, setRelationshipSavingKey] = useState<string | null>(null);
-  // const [relationshipDeletingKey, setRelationshipDeletingKey] = useState<string | null>(null);
-  // const [relationshipErrors, setRelationshipErrors] = useState<Record<string, string>>({});
-  // const [relationshipGlobalError, setRelationshipGlobalError] = useState<string | null>(null);
-  // const [relationshipSuccessKey, setRelationshipSuccessKey] = useState<string | null>(null);
+  const [relationshipSavingKey, setRelationshipSavingKey] = useState<string | null>(null);
+  const [relationshipDeletingKey, setRelationshipDeletingKey] = useState<string | null>(null);
+  const [relationshipErrors, setRelationshipErrors] = useState<Record<string, string>>({});
+  const [relationshipGlobalError, setRelationshipGlobalError] = useState<string | null>(null);
+  const [relationshipSuccessKey, setRelationshipSuccessKey] = useState<string | null>(null);
 
   const [newLinkSearch, setNewLinkSearch] = useState('');
-  // const [newLinkResults, setNewLinkResults] = useState<Actor[]>([]);
-  // const [newLinkError, setNewLinkError] = useState<string | null>(null);
+  const [newLinkResults, setNewLinkResults] = useState<Actor[]>([]);
+  const [newLinkError, setNewLinkError] = useState<string | null>(null);
   const [selectedNewLink, setSelectedNewLink] = useState<Actor | null>(null);
   const [newLinkRelationship, setNewLinkRelationship] = useState('');
   const [newLinkRole, setNewLinkRole] = useState('');
-  // const [isSearchingLinks, setIsSearchingLinks] = useState(false);
-  // const [isCreatingLink, setIsCreatingLink] = useState(false);
-  const searchTimeoutRef = useRef<number | undefined>();
+  const [isSearchingLinks, setIsSearchingLinks] = useState(false);
+  const [isCreatingLink, setIsCreatingLink] = useState(false);
+  const searchTimeoutRef = useRef<number | undefined>(undefined);
 
   const loadActorData = useCallback(async () => {
     setLoading(true);
@@ -1122,7 +1122,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
     }
   };
 
-  const updateRelationshipDraft = useCallback(
+  const _updateRelationshipDraft = useCallback(
     (key: string, field: 'relationship' | 'role', value: string) => {
       setRelationshipDrafts(prev => ({
         ...prev,
@@ -1135,7 +1135,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
     [],
   );
 
-  const handleSaveRelationship = async (rel: ActorRelationship) => {
+  const _handleSaveRelationship = async (rel: ActorRelationship) => {
     if (!actor) return;
     const key = relationshipKey(rel);
     const draft = relationshipDrafts[key];
@@ -1178,7 +1178,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
     }
   };
 
-  const handleDeleteRelationship = async (rel: ActorRelationship) => {
+  const _handleDeleteRelationship = async (rel: ActorRelationship) => {
     if (!actor) return;
     const key = relationshipKey(rel);
     setRelationshipDeletingKey(key);
@@ -1203,7 +1203,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
     }
   };
 
-  const handleCreateRelationship = async () => {
+  const _handleCreateRelationship = async () => {
     if (!actor) return;
     if (!selectedNewLink) {
       setNewLinkError('Choose an actor to link');
@@ -1274,7 +1274,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
     });
   };
 
-  const relationshipList = relationships;
+  const _relationshipList = relationships;
   const membersPreview = useMemo(() => members.slice(0, 12), [members]);
   const profileMessage = profileStatus?.text ?? '';
 
@@ -1699,7 +1699,7 @@ const NetworkTab: React.FC<{
   const [isSearching, setIsSearching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-  const searchRef = useRef<number | undefined>();
+  const searchRef = useRef<number | undefined>(undefined);
 
   const loadNetwork = useCallback(async () => {
     setLoading(true);
@@ -1804,7 +1804,7 @@ const NetworkTab: React.FC<{
     }
   };
 
-  const handleRemove = async (rel: ActorRelationship, inboundSide: boolean) => {
+  const handleRemove = async (rel: ActorRelationship, _inboundSide: boolean) => {
     const key = relationshipKey(rel);
     try {
       setDeletingKey(key);
