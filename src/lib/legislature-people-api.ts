@@ -10,7 +10,9 @@ import type {
   PersonTransaction,
   PersonReport,
   PersonSearchResult,
-  GroupedRollCall
+  GroupedRollCall,
+  TopDonor,
+  BillDetails
 } from './legislature-people-types';
 
 // ============================================
@@ -110,6 +112,20 @@ export async function fetchPersonSessions(personId: number): Promise<PersonSessi
 
     const voteCount: number = Number(row.vote_count ?? row.votes_count ?? 0);
     const sponsoredCount: number = Number(row.sponsored_count ?? 0);
+    const startDate: string | null =
+      row.start_date ??
+      row.session_start ??
+      row.calculated_start ??
+      row.vote_window_start ??
+      null;
+    const endDate: string | null =
+      row.end_date ??
+      row.session_end ??
+      row.calculated_end ??
+      row.vote_window_end ??
+      null;
+    const firstVoteDate: string | null = row.first_vote_date ?? row.earliest_vote_date ?? row.earliest_vote ?? null;
+    const lastVoteDate: string | null = row.last_vote_date ?? row.latest_vote_date ?? row.latest_vote ?? null;
 
     return {
       session_id: sessionId,
@@ -117,6 +133,10 @@ export async function fetchPersonSessions(personId: number): Promise<PersonSessi
       year: year || 0,
       vote_count: voteCount,
       sponsored_count: sponsoredCount,
+      start_date: startDate,
+      end_date: endDate,
+      first_vote_date: firstVoteDate,
+      last_vote_date: lastVoteDate,
     } as PersonSession;
   });
 
@@ -207,6 +227,30 @@ export async function fetchBillRollCall(billId: number): Promise<GroupedRollCall
   );
 }
 
+export async function fetchBillDetails(billId: number): Promise<BillDetails | null> {
+  if (!Number.isFinite(billId) || billId <= 0) {
+    return null;
+  }
+
+  const { data, error } = await supabase2.rpc('get_bill_details', {
+    p_bill_id: Math.trunc(billId)
+  });
+
+  if (error) throw error;
+
+  const row = (Array.isArray(data) ? data[0] : data) as Partial<BillDetails> | null | undefined;
+  if (!row) {
+    return null;
+  }
+
+  return {
+    bill_id: Number(row.bill_id ?? billId),
+    bill_number: row.bill_number ?? '',
+    bill_text: row.bill_text ?? null,
+    bill_summary: row.bill_summary ?? null,
+  };
+}
+
 export async function searchBillRTSPositions(
   billId: number,
   query: string = '',
@@ -255,6 +299,51 @@ export async function fetchPersonFinanceOverview(personId: number): Promise<Pers
     ...result,
     entity_details: result.entity_details || []
   };
+}
+
+export async function fetchEntityTopDonors(
+  entityId: number,
+  limit: number = 200
+): Promise<TopDonor[]> {
+  if (!Number.isFinite(entityId) || entityId <= 0) {
+    return [];
+  }
+
+  const { data, error } = await supabase2.rpc('search_donor_totals_window', {
+    p_person_id: null,
+    p_recipient_entity_ids: [Math.trunc(entityId)],
+    p_session_id: null,
+    p_min_amount: 0,
+    p_limit: limit
+  });
+
+  if (error) throw error;
+
+  type DonorRow = {
+    transaction_entity_id: number | null;
+    entity_name: string | null;
+    total_to_recipient: number | null;
+    donation_count: number | null;
+    best_match?: number | null;
+    top_employer?: string | null;
+    top_occupation?: string | null;
+    entity_type_id?: number | null;
+    entity_type_name?: string | null;
+  };
+
+  const rows = (data || []) as DonorRow[];
+
+  return rows.map((row) => ({
+    transaction_entity_id: Number(row.transaction_entity_id ?? 0),
+    entity_name: row.entity_name ?? 'Unknown',
+    total_to_recipient: Number(row.total_to_recipient ?? 0),
+    donation_count: Number(row.donation_count ?? 0),
+    best_match: row.best_match ?? null,
+    top_employer: row.top_employer ?? null,
+    top_occupation: row.top_occupation ?? null,
+    entity_type_id: row.entity_type_id ?? null,
+    entity_type_name: row.entity_type_name ?? null,
+  }));
 }
 
 export async function fetchPersonTransactions(

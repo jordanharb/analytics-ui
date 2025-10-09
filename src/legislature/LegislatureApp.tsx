@@ -5,7 +5,6 @@ import './globals.css';
 // Lazy load page components to reduce initial bundle size
 const HomePage = lazy(() => import('./HomePage'));
 const BillsPage = lazy(() => import('./BillsPage'));
-const BulkPage = lazy(() => import('./BulkExportPage'));
 const ReportsChatPage = lazy(() => import('./ReportsChatPage'));
 const AboutPage = lazy(() => import('./AboutPage'));
 const CandidatePage = lazy(() => import('./CandidatePage'));
@@ -46,11 +45,6 @@ const LegislatureApp: React.FC = () => {
                   </Link>
                 </li>
                 <li>
-                  <Link to="/legislature/bulk" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
-                    Bulk Export
-                  </Link>
-                </li>
-                <li>
                   <Link to="/legislature/reports-chat" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
                     AI Assistant
                   </Link>
@@ -76,7 +70,6 @@ const LegislatureApp: React.FC = () => {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/bills" element={<BillsPage />} />
-              <Route path="/bulk" element={<BulkPage />} />
               <Route path="/reports-chat" element={<ReportsChatPage />} />
               <Route path="/report-generator" element={<ReportGeneratorPage />} />
               <Route path="/report-generator-v2" element={<DeprecatedReportGeneratorPage />} />

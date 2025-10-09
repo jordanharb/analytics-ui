@@ -22,6 +22,10 @@ export interface PersonSession {
   year: number;
   vote_count: number;
   sponsored_count: number;
+  start_date?: string | null;
+  end_date?: string | null;
+  first_vote_date?: string | null;
+  last_vote_date?: string | null;
 }
 
 export interface PersonBillVote {
@@ -32,6 +36,13 @@ export interface PersonBillVote {
   latest_vote_date: string;
   latest_venue: string;
   vote_count: number;
+}
+
+export interface BillDetails {
+  bill_id: number;
+  bill_number: string;
+  bill_text: string | null;
+  bill_summary: string | null;
 }
 
 export interface PersonVoteHistory {
@@ -79,6 +90,18 @@ export interface PersonFinanceOverview {
     total_raised: number;
     total_spent: number;
   }>;
+}
+
+export interface TopDonor {
+  transaction_entity_id: number;
+  entity_name: string;
+  total_to_recipient: number;
+  donation_count: number;
+  best_match?: number | null;
+  top_employer?: string | null;
+  top_occupation?: string | null;
+  entity_type_id?: number | null;
+  entity_type_name?: string | null;
 }
 
 export interface PersonTransaction {

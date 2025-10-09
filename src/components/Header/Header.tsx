@@ -51,6 +51,14 @@ export const Header: React.FC = () => {
         >
           AI Assistant
         </NavLink>
+        <NavLink
+          to="/automation"
+          className={({ isActive }) =>
+            `nav-tab ${isActive ? 'active' : ''}`
+          }
+        >
+          Automation
+        </NavLink>
       </div>
       
       <div className="nav-actions">

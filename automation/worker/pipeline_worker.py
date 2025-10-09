@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""
+Automation pipeline worker
+Fetches queued automation_runs from Supabase and executes each step sequentially.
+Each step runs the corresponding Python script using the current Python interpreter.
+"""
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+# Ensure repo root is in path
+CURRENT_FILE = Path(__file__).resolve()
+AUTOMATION_DIR = CURRENT_FILE.parent.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR, AUTOMATION_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
+from utils.database import get_supabase  # noqa: E402
+
+POLL_SECONDS = int(os.getenv('AUTOMATION_WORKER_POLL_SECONDS', '60'))
+LOG_LINE_LIMIT = int(os.getenv('AUTOMATION_WORKER_LOG_LINES', '200'))
+
+
+@dataclass
+class PipelineStep:
+    name: str
+    command: List[str]
+    optional_flag: Optional[str] = None  # Attribute on run config to decide skipping
+    env: Optional[Dict[str, str]] = None
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load_settings_id(supabase) -> Optional[str]:
+    response = supabase.table('automation_settings').select('id').order('created_at', ascending=True).limit(1).execute()
+    if response.error:
+        print(f"⚠️ Failed to load automation settings id: {response.error}")
+        return None
+    rows = response.data or []
+    if not rows:
+        return None
+    return rows[0]['id']
+
+
+def fetch_next_run(supabase) -> Optional[Dict[str, Any]]:
+    response = supabase.table('automation_runs') \
+        .select('*') \
+        .in_('status', ['queued', 'running']) \
+        .order('created_at', ascending=True) \
+        .limit(1) \
+        .execute()
+    if response.error:
+        print(f"⚠️ Failed to fetch automation run: {response.error}")
+        return None
+    runs = response.data or []
+    return runs[0] if runs else None
+
+
+def update_run(supabase, run_id: str, fields: Dict[str, Any]) -> bool:
+    response = supabase.table('automation_runs').update(fields).eq('id', run_id).execute()
+    if response.error:
+        print(f"⚠️ Failed to update run {run_id}: {response.error}")
+        return False
+    return True
+
+
+def update_settings(supabase, settings_id: Optional[str], fields: Dict[str, Any]):
+    if not settings_id:
+        return
+    response = supabase.table('automation_settings').update(fields).eq('id', settings_id).execute()
+    if response.error:
+        print(f"⚠️ Failed to update automation settings: {response.error}")
+
+
+def append_log_tail(log_lines: List[str]) -> List[str]:
+    if len(log_lines) <= LOG_LINE_LIMIT:
+        return log_lines
+    return log_lines[-LOG_LINE_LIMIT:]
+
+
+def run_step(step: PipelineStep, run_config: Dict[str, Any]) -> Dict[str, Any]:
+    command = step.command
+    env = os.environ.copy()
+    if step.env:
+        env.update(step.env)
+
+    print(f"\n➡️  Starting step: {step.name}")
+    print(f"    Command: {' '.join(command)}")
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env=env
+    )
+
+    log_lines: List[str] = []
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(f"[{step.name}] {line}", end='')
+            log_lines.append(line.rstrip())
+    except Exception as stream_error:  # pragma: no cover
+        print(f"⚠️  Failed reading stdout for {step.name}: {stream_error}")
+
+    return_code = process.wait()
+    status = 'completed' if return_code == 0 else 'failed'
+    print(f"⬅️  Step {step.name} finished with status {status} (code {return_code})")
+
+    return {
+        'status': status,
+        'return_code': return_code,
+        'log_tail': append_log_tail(log_lines)
+    }
+
+
+PIPELINE_STEPS: List[PipelineStep] = [
+    PipelineStep(
+        name='twitter_scrape',
+        command=[sys.executable, str(AUTOMATION_DIR / 'scrapers' / 'twitter_scraper.py')]
+    ),
+    PipelineStep(
+        name='instagram_scrape',
+        command=[sys.executable, str(AUTOMATION_DIR / 'scrapers' / 'instagram_post_scraper.py')],
+        optional_flag='include_instagram'
+    ),
+    PipelineStep(
+        name='post_process',
+        command=[sys.executable, str(AUTOMATION_DIR / 'processors' / 'post_processor.py')]
+    ),
+    PipelineStep(
+        name='image_download',
+        command=[
+            sys.executable,
+            str(AUTOMATION_DIR / 'processors' / 'instagram_media_downloader_optimized.py'),
+            '--batch-size', os.getenv('AUTOMATION_MEDIA_BATCH_SIZE', '200')
+        ]
+    ),
+    PipelineStep(
+        name='event_process',
+        command=[
+            sys.executable,
+            str(AUTOMATION_DIR / 'processors' / 'flash_standalone_event_processor.py'),
+            '--max-workers', os.getenv('AUTOMATION_EVENT_MAX_WORKERS', '6'),
+            '--cooldown-seconds', os.getenv('AUTOMATION_WORKER_COOLDOWN', '60')
+        ]
+    ),
+    PipelineStep(
+        name='event_dedup',
+        command=[
+            sys.executable,
+            str(AUTOMATION_DIR / 'scripts' / 'deduplicate_events_with_gemini.py'),
+            '--live', '--yes', '--once',
+            '--sleep-seconds', os.getenv('AUTOMATION_DEDUP_SLEEP_SECONDS', '120')
+        ]
+    ),
+    PipelineStep(
+        name='twitter_profile_scrape',
+        command=[sys.executable, str(REPO_ROOT / 'scrapers' / 'profile_scraper.py')]
+    ),
+    PipelineStep(
+        name='instagram_profile_scrape',
+        command=[sys.executable, str(REPO_ROOT / 'scrapers' / 'instagram_profile_scraper.py')],
+        optional_flag='include_instagram'
+    ),
+    PipelineStep(
+        name='coordinate_backfill',
+        command=[sys.executable, str(AUTOMATION_DIR / 'scripts' / 'backfill_coordinates.py')]
+    )
+]
+
+
+def process_run(supabase, run: Dict[str, Any], settings_id: Optional[str]):
+    run_id = run['id']
+    include_instagram = run.get('include_instagram', False)
+    step_states = run.get('step_states') or {}
+    status = run.get('status')
+
+    if status == 'queued':
+        print(f"🏁 Starting automation run {run_id}")
+        update_run(supabase, run_id, {
+            'status': 'running',
+            'started_at': iso_now()
+        })
+        update_settings(supabase, settings_id, {'last_run_started_at': iso_now()})
+        step_states = {}
+    else:
+        print(f"🔁 Resuming automation run {run_id} (status: {status})")
+
+    for step in PIPELINE_STEPS:
+        step_state = step_states.get(step.name) or {}
+        if step_state.get('status') == 'completed':
+            continue
+        if step.optional_flag == 'include_instagram' and not include_instagram:
+            print(f"⏭️  Skipping {step.name} (Instagram disabled)")
+            step_states[step.name] = {
+                'status': 'skipped',
+                'updated_at': iso_now()
+            }
+            update_run(supabase, run_id, {
+                'step_states': step_states,
+                'current_step': step.name
+            })
+            continue
+
+        started_iso = iso_now()
+        step_states = {
+            **step_states,
+            step.name: {
+                **step_state,
+                'status': 'running',
+                'started_at': started_iso
+            }
+        }
+        update_run(supabase, run_id, {
+            'current_step': step.name,
+            'step_states': step_states,
+            'error_message': None
+        })
+
+        started_at = datetime.now(timezone.utc)
+        result = run_step(step, run)
+        finished_at = datetime.now(timezone.utc)
+        duration = (finished_at - started_at).total_seconds()
+
+        step_states[step.name] = {
+            'status': result['status'],
+            'started_at': step_states[step.name].get('started_at'),
+            'completed_at': finished_at.isoformat(),
+            'duration_seconds': duration,
+            'log_tail': result['log_tail'],
+            'return_code': result['return_code']
+        }
+
+        update_run(supabase, run_id, {
+            'step_states': step_states,
+            'current_step': step.name,
+            'error_message': None if result['status'] == 'completed' else f"Step {step.name} failed"
+        })
+
+        if result['status'] != 'completed':
+            print(f"❌ Run {run_id} failed at step {step.name}")
+            update_run(supabase, run_id, {
+                'status': 'failed',
+                'completed_at': iso_now()
+            })
+            return
+
+    print(f"✅ Automation run {run_id} completed successfully")
+    update_run(supabase, run_id, {
+        'status': 'succeeded',
+        'completed_at': iso_now(),
+        'current_step': None
+    })
+    update_settings(supabase, settings_id, {'last_run_completed_at': iso_now()})
+
+
+def main():
+    supabase = get_supabase()
+    settings_id = load_settings_id(supabase)
+
+    stop_requested = False
+
+    def handle_sigterm(signum, frame):  # noqa: ANN001, ANN202
+        nonlocal stop_requested
+        print("\n🛑 Received termination signal, stopping worker after current cycle...")
+        stop_requested = True
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGINT, handle_sigterm)
+
+    while not stop_requested:
+        run = fetch_next_run(supabase)
+        if run:
+            process_run(supabase, run, settings_id)
+        else:
+            print(f"⌛ No queued runs. Sleeping for {POLL_SECONDS} seconds...")
+            time.sleep(POLL_SECONDS)
+
+    print("👋 Worker stopped")
+
+
+if __name__ == '__main__':
+    main()

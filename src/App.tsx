@@ -9,6 +9,7 @@ const EntityView = lazy(() => import('./views/EntityView/EntityView').then(m => 
 const ChatView = lazy(() => import('./views/ChatView/ChatView').then(m => ({ default: m.ChatView })));
 const ActorsDirectoryView = lazy(() => import('./views/ActorsDirectory/ActorsDirectoryView').then(m => ({ default: m.ActorsDirectoryView })));
 const ActorClassifierView = lazy(() => import('./views/ActorClassifier/ActorClassifierView').then(m => ({ default: m.ActorClassifierView })));
+const AutomationView = lazy(() => import('./views/Automation/AutomationView').then(m => ({ default: m.AutomationView })));
 const LaunchPage = lazy(() => import('./components/LaunchPage/LaunchPage').then(m => ({ default: m.LaunchPage })));
 const LegislatureApp = lazy(() => import('./legislature/LegislatureApp'));
 
@@ -32,6 +33,7 @@ function AppContent() {
               <Route path="/directory" element={<DirectoryView />} />
               <Route path="/actors" element={<ActorsDirectoryView />} />
               <Route path="/actor-classifier" element={<ActorClassifierView />} />
+              <Route path="/automation" element={<AutomationView />} />
               <Route path="/chat" element={<ChatView />} />
               <Route path="/entity/:entityType/:entityId" element={<EntityView />} />
               
