@@ -13,17 +13,6 @@
       "maxDuration": 60
     }
   },
-  "crons": [
-    {
-      "path": "/api/automation/advance",
-      "schedule": "0 * * * *",
-      "timezone": "America/Phoenix",
-      "method": "POST",
-      "headers": {
-        "authorization": "Bearer ${AUTOMATION_CRON_SECRET}"
-      }
-    }
-  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
