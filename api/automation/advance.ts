@@ -10,16 +10,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST,OPTIONS');
+  // Allow both GET (from Vercel cron) and POST (manual triggers)
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.setHeader('Allow', 'GET,POST,OPTIONS');
     respondError(res, 405, `Method ${req.method} not allowed`);
     return;
   }
 
-  if (CRON_SECRET) {
+  // Check authorization for POST requests or if secret is configured
+  if (req.method === 'POST' && CRON_SECRET) {
     const authHeader = req.headers['authorization'];
     if (!authHeader || authHeader !== `Bearer ${CRON_SECRET}`) {
       respondError(res, 401, 'Unauthorized');
+      return;
+    }
+  }
+
+  // For GET requests from Vercel cron, check the cron secret header if configured
+  if (req.method === 'GET' && CRON_SECRET) {
+    const cronSecret = req.headers['x-vercel-cron-secret'];
+    if (!cronSecret || cronSecret !== CRON_SECRET) {
+      respondError(res, 401, 'Unauthorized - Invalid cron secret');
       return;
     }
   }

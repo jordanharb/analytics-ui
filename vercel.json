@@ -13,6 +13,12 @@
       "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/automation/advance",
+      "schedule": "0 * * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
