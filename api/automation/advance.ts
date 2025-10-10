@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getServiceSupabaseClient } from '../_lib/supabase';
-import { handleOptions, respondError, setCorsHeaders } from '../_lib/http';
+import { getServiceSupabaseClient } from '../_lib/supabase.js';
+import { handleOptions, respondError, setCorsHeaders } from '../_lib/http.js';
 
 const CRON_SECRET = process.env.AUTOMATION_CRON_SECRET;
 

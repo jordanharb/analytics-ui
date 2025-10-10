@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getServiceSupabaseClient } from '../_lib/supabase';
-import { handleOptions, readJsonBody, respondError, setCorsHeaders } from '../_lib/http';
+import { getServiceSupabaseClient } from '../_lib/supabase.js';
+import { handleOptions, readJsonBody, respondError, setCorsHeaders } from '../_lib/http.js';
 
 const SETTINGS_TABLE = 'automation_settings';
 const RUNS_TABLE = 'automation_runs';
