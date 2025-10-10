@@ -23,7 +23,9 @@ Run `sql/automation_schema.sql` against the Supabase project. It creates:
 | `AUTOMATION_CRON_SECRET` | Optional bearer token that protects `/api/automation/advance`. Set both in Vercel and the cron job. |
 | `AUTOMATION_MEDIA_BATCH_SIZE` | Batch size for the Instagram media downloader step (default `200`). |
 | `AUTOMATION_EVENT_MAX_WORKERS` | Override worker count for the Gemini Flash event processor (default `6`). |
+| `AUTOMATION_EVENT_POSTS_LIMIT` | Maximum number of posts to process per event extraction run (default `1000`). |
 | `AUTOMATION_WORKER_COOLDOWN` | Seconds between Gemini calls per worker (default `60`). |
+| `AUTOMATION_DEDUP_EVENTS_LIMIT` | Maximum number of events to process per deduplication run (default `500`). |
 | `AUTOMATION_DEDUP_SLEEP_SECONDS` | Fallback sleep window for dedup script (default `120`). |
 | `AUTOMATION_WORKER_POLL_SECONDS` | Poll interval for the Python worker to look for new runs (default `60`). |
 | `GEMINI_DEDUP_API_KEY` | Dedicated Gemini key for the deduplication script (falls back to `GOOGLE_API_KEY`). |

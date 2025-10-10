@@ -160,7 +160,8 @@ PIPELINE_STEPS: List[PipelineStep] = [
             sys.executable,
             str(AUTOMATION_DIR / 'processors' / 'flash_standalone_event_processor.py'),
             '--max-workers', os.getenv('AUTOMATION_EVENT_MAX_WORKERS', '6'),
-            '--cooldown-seconds', os.getenv('AUTOMATION_WORKER_COOLDOWN', '60')
+            '--cooldown-seconds', os.getenv('AUTOMATION_WORKER_COOLDOWN', '60'),
+            '--job-limit', os.getenv('AUTOMATION_EVENT_POSTS_LIMIT', '1000')
         ]
     ),
     PipelineStep(
@@ -169,7 +170,8 @@ PIPELINE_STEPS: List[PipelineStep] = [
             sys.executable,
             str(AUTOMATION_DIR / 'scripts' / 'deduplicate_events_with_gemini.py'),
             '--live', '--yes', '--once',
-            '--sleep-seconds', os.getenv('AUTOMATION_DEDUP_SLEEP_SECONDS', '120')
+            '--sleep-seconds', os.getenv('AUTOMATION_DEDUP_SLEEP_SECONDS', '120'),
+            '--limit', os.getenv('AUTOMATION_DEDUP_EVENTS_LIMIT', '500')
         ]
     ),
     PipelineStep(
