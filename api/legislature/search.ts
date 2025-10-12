@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const SUPABASE_URL = process.env.VITE_SUPABASE2_URL || 'https://ffdrtpknppmtkkbqsvek.supabase.co';
-const SERVICE_ROLE_KEY = process.env.VITE_SUPABASE2_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmZHJ0cGtucHBtdGtrYnFzdmVrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTkxMzg3NiwiZXhwIjoyMDY3NDg5ODc2fQ.Vy6VzGOHWbTZNlRg_tZcyP3Y05LFf4g5sHYD6oaRY0s';
+const SUPABASE_URL = process.env.VITE_SUPABASE2_URL ;
+const SERVICE_ROLE_KEY = process.env.VITE_SUPABASE2_SERVICE_KEY ;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Enable CORS

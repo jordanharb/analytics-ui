@@ -4,7 +4,7 @@
 # Investigating why person_id 126, session_id 125 returns no results
 
 SUPABASE_URL="https://ffdrtpknppmtkkbqsvek.supabase.co"
-SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmZHJ0cGtucHBtdGtrYnFzdmVrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTkxMzg3NiwiZXhwIjoyMDY3NDg5ODc2fQ.Vy6VzGOHWbTZNlRg_tZcyP3Y05LFf4g5sHYD6oaRY0s"
+SUPABASE_KEY="YOUR_SUPABASE_SERVICE_KEY"
 
 PERSON_ID=126
 SESSION_ID=125

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ffdrtpknppmtkkbqsvek.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmZHJ0cGtucHBtdGtrYnFzdmVrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTkxMzg3NiwiZXhwIjoyMDY3NDg5ODc2fQ.Vy6VzGOHWbTZNlRg_tZcyP3Y05LFf4g5sHYD6oaRY0s';
+const SUPABASE_URL = process.env.SUPABASE_URL ;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ;
 
 async function supabaseRequest(endpoint: string, params?: any) {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${endpoint}`);

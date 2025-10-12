@@ -1211,7 +1211,7 @@
   to pick up the new environment variable configuration. The Gemini API
    should now work with:
   - Model: gemini-2.5-pro
-  - API Key: AIzaSyBsSobVYIra8k1yOKGlAaYk5zl0XnQqnyw (from line 34 of
+  - API Key: YOUR_GOOGLE_API_KEY (from line 34 of
   .env)
 
   Check the browser console - you should see the console.log output
