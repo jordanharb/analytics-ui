@@ -16,11 +16,19 @@ import time
 import asyncio
 import argparse
 from datetime import datetime
+from pathlib import Path
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(REPO_ROOT)
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+CURRENT_FILE = Path(__file__).resolve()
+SCRIPTS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = SCRIPTS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
 
 def _print_banner(title: str):
@@ -122,4 +130,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

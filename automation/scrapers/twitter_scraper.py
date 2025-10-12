@@ -3,6 +3,23 @@ Twitter Scraper - Database-integrated version
 Scrapes Twitter accounts based on database settings and uploads to Supabase storage
 Triggered by the web interface after users select handles for scraping
 """
+import sys
+from pathlib import Path
+
+# Ensure both repo and analytics-ui directories are on sys.path so we can import
+# shared helpers like scripts.utils.database regardless of where the script runs.
+CURRENT_FILE = Path(__file__).resolve()
+SCRAPERS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = SCRAPERS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 import pandas as pd
 import csv
 import asyncio
@@ -76,15 +93,22 @@ class TwitterScraper:
 
     def get_twitter_handles_from_database(self):
         """Gets Twitter handles marked for scraping from the database (should_scrape = TRUE)"""
-        
+
         try:
+            # Check for handle limit (for testing)
+            handle_limit = int(os.getenv('TWITTER_HANDLE_LIMIT', '0'))
+
             # Query for Twitter handles where should_scrape is TRUE
-            result = self.supabase.table('v2_actor_usernames')\
+            query = self.supabase.table('v2_actor_usernames')\
                 .select('username, actor_id, actor_type, last_scrape')\
                 .eq('platform', 'twitter')\
-                .eq('should_scrape', True)\
-                .execute()
-            
+                .eq('should_scrape', True)
+
+            if handle_limit > 0:
+                query = query.limit(handle_limit)
+
+            result = query.execute()
+
             twitter_data = []
             for record in result.data:
                 handle = self.clean_twitter_handle(record['username'])
@@ -95,11 +119,12 @@ class TwitterScraper:
                         "handle": handle,
                         "last_scrape": record.get('last_scrape')
                     })
-            
-            print(f"📋 Found {len(twitter_data)} Twitter handles marked for scraping")
+
+            limit_msg = f" (limited to {handle_limit})" if handle_limit > 0 else ""
+            print(f"📋 Found {len(twitter_data)} Twitter handles marked for scraping{limit_msg}")
             if len(twitter_data) == 0:
                 print("💡 Use the Scraping Manager web interface to select handles for scraping")
-            
+
             return twitter_data
             
         except Exception as e:
@@ -418,36 +443,55 @@ class TwitterScraper:
         """Save current pending tweets to storage and update timestamps for successful uploads"""
         if not self.pending_tweets:
             return True
-            
+
         timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         batch_suffix = f"_batch{batch_number}" if batch_number is not None else ""
         filename = f"twitter_{timestamp}{batch_suffix}_scraped.csv"
-        
+
         print(f"\n💾 Saving batch with {len(self.pending_tweets)} tweets...")
-        
+
         # Upload to Supabase storage (primary)
         upload_success = self.upload_to_supabase_storage(self.pending_tweets, filename)
-        
+
         # Save local backup regardless
         local_success = self.save_local_backup(self.pending_tweets, filename)
-        
+
         if upload_success:
             print(f"✅ Batch saved successfully: {len(self.pending_tweets)} tweets")
-            
+
             # Update last_scrape timestamps ONLY for handles that had tweets in this batch
-            unique_handles = {}
+            unique_actor_ids = set()
             for tweet in self.pending_tweets:
-                key = (tweet['actor_id'], tweet['handle'])
-                unique_handles[key] = True
-            
-            successful_updates = 0
-            for (actor_id, handle) in unique_handles.keys():
-                if self.update_last_scrape_timestamp(actor_id, handle):
-                    successful_updates += 1
-                    self.successfully_uploaded_handles.append(handle)
-            
-            print(f"   📅 Updated {successful_updates}/{len(unique_handles)} handle timestamps (only for accounts with tweets)")
-            
+                unique_actor_ids.add(tweet['actor_id'])
+
+            # Use bulk RPC function instead of individual updates
+            try:
+                actor_ids_list = list(unique_actor_ids)
+                result = self.supabase.rpc('bulk_update_last_scrape', {
+                    'actor_ids': actor_ids_list
+                }).execute()
+
+                updated_count = result.data if result.data is not None else 0
+                print(f"   📅 Updated {updated_count} handle timestamps in single bulk query")
+
+                # Track successfully uploaded handles
+                for tweet in self.pending_tweets:
+                    if tweet['handle'] not in self.successfully_uploaded_handles:
+                        self.successfully_uploaded_handles.append(tweet['handle'])
+            except Exception as e:
+                print(f"   ⚠️ Bulk timestamp update failed: {e}")
+                print(f"   ⏭️  Falling back to individual updates...")
+                # Fallback to old method if RPC fails
+                successful_updates = 0
+                for actor_id in unique_actor_ids:
+                    # Find a handle for this actor_id
+                    handle = next((t['handle'] for t in self.pending_tweets if t['actor_id'] == actor_id), None)
+                    if handle and self.update_last_scrape_timestamp(actor_id, handle):
+                        successful_updates += 1
+                        if handle not in self.successfully_uploaded_handles:
+                            self.successfully_uploaded_handles.append(handle)
+                print(f"   📅 Updated {successful_updates}/{len(unique_actor_ids)} handle timestamps (fallback)")
+
             # Clear the pending tweets after successful upload
             self.pending_tweets = []
             return True

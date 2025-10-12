@@ -21,10 +21,25 @@ from typing import Any, Dict, List, Optional
 CURRENT_FILE = Path(__file__).resolve()
 AUTOMATION_DIR = CURRENT_FILE.parent.parent
 ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
-WEB_DIR = ANALYTICS_UI_DIR.parent
-REPO_ROOT = WEB_DIR.parent
 
-for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR, AUTOMATION_DIR):
+# Check if we're in a standalone analytics-ui deployment (Vercel) or full repo
+# Standalone: analytics-ui IS the root (has utils/ directly)
+# Full repo: analytics-ui is nested (web/analytics-ui/)
+if (ANALYTICS_UI_DIR / 'utils' / 'database.py').exists():
+    # Standalone deployment: analytics-ui IS the root
+    REPO_ROOT = ANALYTICS_UI_DIR
+    print(f"🚀 Standalone deployment detected (analytics-ui is root)")
+else:
+    # Full repo: analytics-ui is nested
+    WEB_DIR = ANALYTICS_UI_DIR.parent
+    REPO_ROOT = WEB_DIR.parent
+    print(f"📁 Full repo deployment detected")
+
+print(f"DEBUG: REPO_ROOT = {REPO_ROOT}")
+print(f"DEBUG: ANALYTICS_UI_DIR = {ANALYTICS_UI_DIR}")
+print(f"DEBUG: AUTOMATION_DIR = {AUTOMATION_DIR}")
+
+for candidate in (REPO_ROOT, ANALYTICS_UI_DIR, AUTOMATION_DIR):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
@@ -48,44 +63,48 @@ def iso_now() -> str:
 
 
 def load_settings_id(supabase) -> Optional[str]:
-    response = supabase.table('automation_settings').select('id').order('created_at', ascending=True).limit(1).execute()
-    if response.error:
-        print(f"⚠️ Failed to load automation settings id: {response.error}")
+    try:
+        response = supabase.table('automation_settings').select('id').order('created_at').limit(1).execute()
+        rows = response.data or []
+        if not rows:
+            return None
+        return rows[0]['id']
+    except Exception as e:
+        print(f"⚠️ Failed to load automation settings id: {e}")
         return None
-    rows = response.data or []
-    if not rows:
-        return None
-    return rows[0]['id']
 
 
 def fetch_next_run(supabase) -> Optional[Dict[str, Any]]:
-    response = supabase.table('automation_runs') \
-        .select('*') \
-        .in_('status', ['queued', 'running']) \
-        .order('created_at', ascending=True) \
-        .limit(1) \
-        .execute()
-    if response.error:
-        print(f"⚠️ Failed to fetch automation run: {response.error}")
+    try:
+        response = supabase.table('automation_runs') \
+            .select('*') \
+            .in_('status', ['queued', 'running']) \
+            .order('created_at') \
+            .limit(1) \
+            .execute()
+        runs = response.data or []
+        return runs[0] if runs else None
+    except Exception as e:
+        print(f"⚠️ Failed to fetch automation run: {e}")
         return None
-    runs = response.data or []
-    return runs[0] if runs else None
 
 
 def update_run(supabase, run_id: str, fields: Dict[str, Any]) -> bool:
-    response = supabase.table('automation_runs').update(fields).eq('id', run_id).execute()
-    if response.error:
-        print(f"⚠️ Failed to update run {run_id}: {response.error}")
+    try:
+        supabase.table('automation_runs').update(fields).eq('id', run_id).execute()
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed to update run {run_id}: {e}")
         return False
-    return True
 
 
 def update_settings(supabase, settings_id: Optional[str], fields: Dict[str, Any]):
     if not settings_id:
         return
-    response = supabase.table('automation_settings').update(fields).eq('id', settings_id).execute()
-    if response.error:
-        print(f"⚠️ Failed to update automation settings: {response.error}")
+    try:
+        supabase.table('automation_settings').update(fields).eq('id', settings_id).execute()
+    except Exception as e:
+        print(f"⚠️ Failed to update automation settings: {e}")
 
 
 def append_log_tail(log_lines: List[str]) -> List[str]:
@@ -97,11 +116,20 @@ def append_log_tail(log_lines: List[str]) -> List[str]:
 def run_step(step: PipelineStep, run_config: Dict[str, Any]) -> Dict[str, Any]:
     command = step.command
     env = os.environ.copy()
+
+    # Ensure PYTHONPATH includes repo root so scripts can import utils
+    pythonpath = env.get('PYTHONPATH', '')
+    repo_root_str = str(REPO_ROOT)
+    if repo_root_str not in pythonpath:
+        env['PYTHONPATH'] = f"{repo_root_str}:{pythonpath}" if pythonpath else repo_root_str
+
     if step.env:
         env.update(step.env)
 
     print(f"\n➡️  Starting step: {step.name}")
     print(f"    Command: {' '.join(command)}")
+    print(f"    PYTHONPATH: {env.get('PYTHONPATH', 'NOT SET')}")
+    print(f"    CWD: {REPO_ROOT}")
 
     process = subprocess.Popen(
         command,
@@ -176,11 +204,11 @@ PIPELINE_STEPS: List[PipelineStep] = [
     ),
     PipelineStep(
         name='twitter_profile_scrape',
-        command=[sys.executable, str(REPO_ROOT / 'scrapers' / 'profile_scraper.py')]
+        command=[sys.executable, str(AUTOMATION_DIR / 'scrapers' / 'profile_scraper.py')]
     ),
     PipelineStep(
         name='instagram_profile_scrape',
-        command=[sys.executable, str(REPO_ROOT / 'scrapers' / 'instagram_profile_scraper.py')],
+        command=[sys.executable, str(AUTOMATION_DIR / 'scrapers' / 'instagram_profile_scraper.py')],
         optional_flag='include_instagram'
     ),
     PipelineStep(

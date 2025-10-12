@@ -6,7 +6,7 @@ import requests
 import time
 from pathlib import Path
 from typing import Optional, Tuple
-from scripts.utils.database import get_supabase
+from utils.database import get_supabase
 
 # Keep the JSON cache as fallback
 CACHE_FILE = Path(__file__).resolve().parent.parent / 'data' / 'geo_cache.json'

@@ -2,6 +2,21 @@
 Optimized Social Media Post Processor
 Uses database-side deduplication and batch operations for better performance
 """
+import sys
+from pathlib import Path
+
+# Add repo + analytics-ui directories to sys.path for shared helpers
+CURRENT_FILE = Path(__file__).resolve()
+PROCESSORS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = PROCESSORS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
 import pandas as pd
 import json
@@ -46,12 +61,14 @@ class SocialMediaProcessor:
             # Only load essential caches
             print("📋 Loading known usernames...")
             self.known_usernames = self.load_known_usernames()
-            
+
             print("🔗 Building actor lookup cache...")
             self.actor_lookup_cache = self.build_actor_lookup_cache()
-            
-            print("📋 Loading existing unknown actors...")
-            self.unknown_actors_cache = self.load_existing_unknown_actors()
+
+            # OPTIMIZATION: Don't load all unknown actors - we'll check on demand
+            # Loading 100k+ rows at startup is wasteful when we only process a few posts
+            print("✅ Unknown actors will be checked on-demand (skipping preload)")
+            self.unknown_actors_cache = {}
         else:
             self.known_usernames = set()
             self.actor_lookup_cache = {}
@@ -326,53 +343,51 @@ class SocialMediaProcessor:
         return lookup_key in self.session_post_ids
 
     def insert_posts_with_upsert(self, posts_to_insert):
-        """Insert posts - check duplicates first then insert new ones"""
+        """Insert posts using bulk RPC with ON CONFLICT handling"""
         if not posts_to_insert:
             return []
-        
-        # First, check which posts already exist
-        print(f"   🔍 Checking for existing posts...")
-        existing_lookup_keys = self.check_duplicates_batch(posts_to_insert)
-        
-        # Filter out duplicates
-        new_posts = []
-        for post in posts_to_insert:
-            platform = self.normalize_platform_name(post["platform"])
-            lookup_key = f"{platform}:{post['post_id']}"
-            if lookup_key not in existing_lookup_keys and lookup_key not in self.session_post_ids:
-                new_posts.append(post)
-            else:
-                self.stats["duplicates_skipped"] += 1
-        
-        if not new_posts:
-            print(f"   ℹ️  All {len(posts_to_insert)} posts already exist (skipped)")
-            return []
-        
-        print(f"   📝 Inserting {len(new_posts)} new posts ({len(posts_to_insert) - len(new_posts)} duplicates skipped)...")
-        
+
+        print(f"   📝 Inserting {len(posts_to_insert)} posts via RPC (ON CONFLICT on post_id)...")
+
         inserted_posts = []
         batch_size = 1000
-        
-        for i in range(0, len(new_posts), batch_size):
-            batch = new_posts[i:i+batch_size]
-            
+
+        for i in range(0, len(posts_to_insert), batch_size):
+            batch = posts_to_insert[i:i+batch_size]
+
             try:
-                # Simple insert (no upsert needed since we already filtered duplicates)
-                result = self.supabase.table("v2_social_media_posts")\
-                    .insert(batch)\
-                    .execute()
-                
+                # Use RPC function with ON CONFLICT handling
+                import json
+                posts_jsonb = json.dumps(batch)
+
+                result = self.supabase.rpc('bulk_insert_posts', {'posts': posts_jsonb}).execute()
+
                 if result.data:
-                    inserted_posts.extend(result.data)
-                    
-                    # Add to session cache
-                    for post in result.data:
-                        platform = self.normalize_platform_name(post["platform"])
-                        lookup_key = f"{platform}:{post['post_id']}"
-                        self.session_post_ids.add(lookup_key)
-                    
-                    print(f"   ✅ Batch {i//batch_size + 1}/{(len(new_posts)-1)//batch_size + 1}: Inserted {len(result.data)} posts")
-                
+                    # Count actual inserts vs duplicates
+                    new_inserts = [r for r in result.data if r.get('was_inserted')]
+                    duplicates = [r for r in result.data if not r.get('was_inserted')]
+
+                    self.stats["duplicates_skipped"] += len(duplicates)
+
+                    # Fetch full post data for newly inserted posts
+                    if new_inserts:
+                        inserted_ids = [r['inserted_id'] for r in new_inserts]
+                        posts_result = self.supabase.table("v2_social_media_posts")\
+                            .select('*')\
+                            .in_('id', inserted_ids)\
+                            .execute()
+
+                        if posts_result.data:
+                            inserted_posts.extend(posts_result.data)
+
+                            # Add to session cache
+                            for post in posts_result.data:
+                                platform = self.normalize_platform_name(post["platform"])
+                                lookup_key = f"{platform}:{post['post_id']}"
+                                self.session_post_ids.add(lookup_key)
+
+                    print(f"   ✅ Batch {i//batch_size + 1}: {len(new_inserts)} new, {len(duplicates)} duplicates")
+
             except Exception as e:
                 error_msg = str(e)
                 if "duplicate" in error_msg.lower():
@@ -1021,17 +1036,17 @@ class SocialMediaProcessor:
                         "relationship_type": "mentioned",
                     })
 
-        # Insert in batches
+        # Insert in batches with on_conflict to let Postgres handle duplicates
         if link_records:
             batch_size = 1000
             for i in range(0, len(link_records), batch_size):
                 batch = link_records[i : i + batch_size]
                 try:
-                    self.supabase.table("v2_post_actors").insert(batch).execute()
-                    self.stats["post_actor_links_created"] += len(batch)
+                    # Use upsert with on_conflict to ignore duplicates
+                    result = self.supabase.table("v2_post_actors").upsert(batch, on_conflict='post_id,actor_id').execute()
+                    self.stats["post_actor_links_created"] += len(result.data) if result.data else 0
                 except Exception as e:
-                    if "duplicate" not in str(e).lower():
-                        print(f"   ⚠️  Error creating post-actor links: {e}")
+                    print(f"   ⚠️  Error creating post-actor links: {e}")
     
     def process_related_data(self, posts):
         """Process hashtags, mentions, etc for inserted posts"""

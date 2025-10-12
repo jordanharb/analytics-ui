@@ -13,6 +13,21 @@ Optimizations:
 
 import os
 import sys
+from pathlib import Path
+
+# Add repo + analytics-ui directories to sys.path for shared automation helpers
+CURRENT_FILE = Path(__file__).resolve()
+PROCESSORS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = PROCESSORS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 import json
 import asyncio
 import aiohttp
@@ -22,9 +37,6 @@ from urllib.parse import urlparse, unquote
 import hashlib
 from collections import defaultdict
 import time
-
-# Add parent directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.database import get_supabase
 
@@ -127,38 +139,35 @@ class InstagramMediaDownloader:
             self.existing_files = set()
     
     async def get_posts_needing_download(self) -> List[Dict]:
-        """Get all Instagram posts that need media download - OPTIMIZED with DB filtering"""
-        print("🔍 Finding Instagram posts needing media download (PRE-FILTERED)...")
-        
+        """Get all Instagram posts that need media download - OPTIMIZED with RPC"""
+        print("🔍 Finding Instagram posts needing media download (RPC)...")
+
         try:
-            # OPTIMIZATION: Filter directly in database query
+            # Use RPC function for optimized query (excludes EXPIRED posts)
+            result = self.supabase.rpc('get_posts_needing_media', {'batch_limit': 10000}).execute()
+
+            if not result.data:
+                return []
+
+            # Transform RPC result to match expected format
             all_posts = []
-            batch_size = 1000
-            offset = 0
-            
-            while True:
-                # Query ONLY posts that actually need download
-                result = self.supabase.table('v2_social_media_posts')\
-                    .select('id, post_id, media_urls, offline_image_url, created_at')\
-                    .eq('platform', 'instagram')\
-                    .not_.is_('media_urls', 'null')\
-                    .or_("offline_image_url.is.null,offline_image_url.in.(BROKEN,ERROR,EXPIRED)")\
-                    .order('created_at', desc=True)\
-                    .range(offset, offset + batch_size - 1)\
-                    .execute()
-                
-                if not result.data:
-                    break
-                
-                # All results already need download (pre-filtered)
-                all_posts.extend(result.data)
-                
-                print(f"  📊 Found {len(all_posts)} posts needing download...")
-                
-                if len(result.data) < batch_size:
-                    break
-                    
-                offset += batch_size
+            for row in result.data:
+                # Parse media_url as JSON if it's a string
+                media_url = row['media_url']
+                if isinstance(media_url, str):
+                    try:
+                        import json
+                        media_urls = json.loads(media_url)
+                    except:
+                        media_urls = [media_url] if media_url else []
+                else:
+                    media_urls = media_url if media_url else []
+
+                all_posts.append({
+                    'id': row['post_id'],
+                    'offline_media_url': media_url,
+                    'media_urls': media_urls
+                })
             
             print(f"✅ Found {len(all_posts)} posts needing media download")
             return all_posts
@@ -218,26 +227,30 @@ class InstagramMediaDownloader:
                 return None, False
     
     async def flush_bulk_updates(self):
-        """Flush all pending bulk updates to database"""
+        """Flush all pending bulk updates to database in a single RPC call"""
         if not self.bulk_updates:
             return
-        
+
         try:
-            print(f"  💾 Bulk updating {len(self.bulk_updates)} posts...")
-            # Perform bulk upsert
-            result = self.supabase.table('v2_social_media_posts')\
-                .upsert(self.bulk_updates)\
-                .execute()
-            
-            if result.data:
-                print(f"  ✅ Bulk updated {len(self.bulk_updates)} posts successfully")
-            
+            print(f"  💾 Bulk updating {len(self.bulk_updates)} posts via RPC...")
+
+            # Convert to JSONB format for RPC
+            import json
+            updates_jsonb = json.dumps(self.bulk_updates)
+
+            # Call bulk update RPC function (single query for all updates)
+            result = self.supabase.rpc('bulk_update_post_images', {'updates': updates_jsonb}).execute()
+
+            update_count = result.data if result.data else 0
+            print(f"  ✅ Bulk updated {update_count} posts successfully")
+
             # Clear the bulk updates
             self.bulk_updates = []
-            
+
         except Exception as e:
-            print(f"  ❌ Error in bulk update: {str(e)[:100]}")
-            # Fall back to individual updates if bulk fails
+            print(f"  ❌ Error in bulk update: {str(e)[:200]}")
+            print(f"  🔄 Falling back to individual updates...")
+            # Fall back to individual updates only if RPC fails
             for update in self.bulk_updates:
                 try:
                     self.supabase.table('v2_social_media_posts')\

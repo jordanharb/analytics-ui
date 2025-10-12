@@ -2,6 +2,22 @@
 Instagram Post Scraper using Scrapfly - FIXED VERSION WITH PROPER ERROR SKIPPING
 Now properly skips accounts that have profile errors (like account_not_found)
 """
+import sys
+from pathlib import Path
+
+# Ensure repo + analytics-ui directories are present on sys.path so imports work
+CURRENT_FILE = Path(__file__).resolve()
+SCRAPERS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = SCRAPERS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 import argparse
 import asyncio
 import os

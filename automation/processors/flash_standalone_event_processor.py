@@ -23,12 +23,24 @@ from postgrest.base_request_builder import ReturnMethod
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import hashlib
+from pathlib import Path
 
 import google.generativeai as genai
 from google.generativeai import types
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+# Ensure repo + analytics-ui directories are available on sys.path
+CURRENT_FILE = Path(__file__).resolve()
+PROCESSORS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = PROCESSORS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 from utils.database import get_supabase, SupabaseRateLimiter
 from utils.embeddings import generate_event_embedding
 from config.settings import (
@@ -395,25 +407,8 @@ class EventProcessor:
                 "required": ["actors"]
             }
         )
-        
-        # Tool 2: Search similar events using vector search
-        self.search_similar_events_function = types.FunctionDeclaration(
-            name="search_similar_events",
-            description="Search for existing similar events using vector similarity to prevent duplicates. Returns matching events with IDs for potential linking.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query_text": {"type": "string", "description": "Event description to search for"},
-                    "date": {"type": "string", "description": "Event date in YYYY-MM-DD format"},
-                    "city": {"type": "string", "description": "City name"},
-                    "state": {"type": "string", "description": "State code"},
-                    "limit": {"type": "integer", "description": "Maximum number of results to return (default: 10)"}
-                },
-                "required": ["query_text"]
-            }
-        )
-        
-        # Tool 3: Search dynamic slugs with all variations
+
+        # Tool 2: Search dynamic slugs with all variations
         self.search_dynamic_slugs_function = types.FunctionDeclaration(
             name="search_dynamic_slugs",
             description="Search for existing dynamic slugs. Returns ALL matching slugs regardless of parent_tag type (School, Church, Election, LobbyingTopic, BallotMeasure, Conference) to help identify the correct slug type.",
@@ -431,10 +426,10 @@ class EventProcessor:
             }
         )
         
-        # Tool 4: Link posts to existing event
+        # Tool 3: Link posts to existing event
         self.link_posts_to_event_function = types.FunctionDeclaration(
             name="link_posts_to_existing_event",
-            description="Link one or more posts to an existing event instead of creating a duplicate. Use when search_similar_events finds an exact match. Automatically migrates actor links from posts to event.",
+            description="Link one or more posts to an existing event instead of creating a duplicate. Use when you find an exact match. Automatically migrates actor links from posts to event.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -449,11 +444,10 @@ class EventProcessor:
                 "required": ["event_id", "post_ids", "reason"]
             }
         )
-        
-        # Combine all tools
+
+        # Combine all tools (removed search_similar_events - redundant with deduplication script)
         self.all_function_tools = [types.Tool(function_declarations=[
             self.search_actors_function,
-            self.search_similar_events_function,
             self.search_dynamic_slugs_function,
             self.link_posts_to_event_function
         ])]
@@ -585,120 +579,8 @@ class EventProcessor:
             print(f"      ❌ Error in handle_search_actors: {e}")
             return []
 
-    def handle_search_similar_events(self, query_text, date=None, city=None, state=None, limit=20):
-        """Enhanced search with broader results for Gemini's reasoning"""
-        try:
-            # Import the improved multi-field search function
-            import sys
-            import os
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            
-            # Try to use the new multi-field search first
-            try:
-                from edge_functions.search_similar_events_multifield import search_similar_events_multifield
-                
-                # Call with broader parameters for better coverage
-                result = search_similar_events_multifield(
-                    query_text=query_text,
-                    date=date,
-                    city=city,
-                    state=state,
-                    top_k=limit,  # Default to 20 for more candidates
-                    similarity_threshold=0.3,  # Lower threshold for broader search
-                    date_range_days=7  # Expanded date range
-                )
-            except ImportError:
-                # Fall back to improved search if multifield not available
-                from edge_functions.search_similar_events_improved import search_similar_events
-                result = search_similar_events(
-                    query_text=query_text,
-                    date=date,
-                    city=city,
-                    state=state,
-                    top_k=limit
-                )
-            
-            if not result.get('ok') or not result.get('data'):
-                print(f"      ℹ️ No similar events found")
-                return []
-            
-            # Return the enhanced results with match_reasons
-            formatted_results = []
-            for r in result['data']:
-                formatted_results.append({
-                    'event_id': r.get('event_id'),
-                    'event_name': r.get('event_name'),
-                    'event_date': r.get('event_date'),
-                    'score': r.get('score', 0),
-                    'city': r.get('city'),
-                    'state': r.get('state'),
-                    'event_description': r.get('event_description', ''),
-                    'match_reasons': r.get('match_reasons', []),
-                    'search_type': r.get('search_type', 'unknown')
-                })
-            
-            print(f"      🔍 Found {len(formatted_results)} similar events with context")
-            for event in formatted_results[:3]:  # Show top 3
-                print(f"         - {event['event_name']} ({event['event_date']}) - Score: {event['score']:.2f}")
-                if event.get('match_reasons'):
-                    print(f"           Reasons: {', '.join(event['match_reasons'][:2])}")
-            
-            return formatted_results
-            
-        except ImportError:
-            print(f"      ⚠️ Could not import improved search, falling back to original")
-            # Fallback to the original implementation if improved version not available
-            return self.fallback_with_enhanced_context(query_text, date, city, state, limit)
-        except Exception as e:
-            print(f"      ❌ Error in handle_search_similar_events: {e}")
-            return self.fallback_with_enhanced_context(query_text, date, city, state, limit)
-    
-    def fallback_with_enhanced_context(self, query_text, date=None, city=None, state=None, limit=10):
-        """Fallback that still provides enhanced context"""
-        try:
-            # First try vector search
-            embedding = self.generate_embedding_for_text(query_text)
-            
-            if embedding:
-                try:
-                    result = self.supabase.rpc('search_events_vector', {
-                        'query_embedding': embedding,
-                        'match_count': limit * 3,  # Get more to filter
-                        'match_threshold': 0.6  # Higher threshold since we filter strictly
-                    }).execute()
-                    
-                    if result.data:
-                        # Filter to only same state and within 2 days
-                        filtered = []
-                        for event in result.data:
-                            # State must match
-                            if state and event.get('state'):
-                                if event['state'].upper() != state.upper():
-                                    continue
-                            
-                            # Date must be within 2 days
-                            if date and event.get('event_date'):
-                                try:
-                                    from datetime import datetime
-                                    event_date = datetime.fromisoformat(event['event_date'])
-                                    query_date = datetime.fromisoformat(date)
-                                    if abs((event_date - query_date).days) > 2:
-                                        continue
-                                except:
-                                    continue
-                            
-                            filtered.append(event)
-                        
-                        if filtered:
-                            return self._format_with_match_reasons(filtered, query_text, date, city, state, 'vector')
-                except:
-                    pass
-            
-            # Fallback to text search
-            return self.fallback_text_search_events(query_text, date, city, state, limit)
-        except Exception as e:
-            print(f"      ❌ Error in fallback_with_enhanced_context: {e}")
-            return []
+    # Removed handle_search_similar_events and fallback_with_enhanced_context
+    # These are redundant with the standalone deduplication script
 
     def _format_with_match_reasons(self, events, query_text, date, city, state, search_type):
         """Format events with match reasons for better Gemini reasoning"""
@@ -3482,44 +3364,15 @@ Instead of having all actor bios and existing slugs embedded in this prompt, you
    - If NO results are returned, you should CREATE a new slug by including it in CategoryTags
    - This replaces the "EXISTING DYNAMIC SLUGS" section
 
-3. **search_similar_events**: Check for duplicate events before creating new ones
-   - Returns broader set of potential matches for your review (up to 20 candidates)
-   - Includes events in same state and within 7 days of proposed date
-   - Each result includes: event_name, event_date, city, state, score, match_reasons, confidence, and match_factors
-   - Results have varying confidence levels - USE YOUR REASONING to determine true duplicates
-   - Don't rely solely on scores - consider the context and match_reasons
-
-4. **link_posts_to_existing_event**: Link posts to an existing event instead of creating duplicates
-   - Evaluate candidates based on:
-     * Name similarity (fuzzy matching score in match_factors)
-     * Date proximity (exact same date is strongest signal)
-     * Location match (same city AND state is strongest)
-     * Overall context from descriptions
-   
-   - HIGH CONFIDENCE duplicates (link these):
-     * Name similarity > 0.85 AND same date AND same city/state
-     * Exact name match with minor variations (e.g., "ASU Professor Event" vs "Arizona State University Professor Event")
-     * match_reasons include multiple strong signals
-   
-   - MEDIUM CONFIDENCE (use your judgment):
-     * Name similarity 0.70-0.85 OR date within 1-2 days
-     * Consider if it's the same event with slight reporting differences
-   
-   - LOW CONFIDENCE (probably NOT duplicates):
-     * Name similarity < 0.70 AND different dates
-     * Generic event names at different locations (e.g., "Voter Registration Drive" at different schools)
-     * Only semantic similarity without specific matches
-   
-   - Provide clear reasoning for your decision, not just scores
+3. **link_posts_to_existing_event**: Link posts to an existing event if you identify a duplicate
+   - Use this sparingly - only for obvious duplicates you can identify from context
+   - Event deduplication is primarily handled by a separate automated script
+   - Focus on extracting new events from posts
 
 REQUIRED WORKFLOW:
 1. First, search for all actors mentioned in the batch
-2. Before creating any event, ALWAYS search for similar existing events
-3. Review ALL returned candidates comprehensively:
-   - Don't just look at scores - they're guidance, not rules
-   - Read the match_reasons and confidence factors
-   - Consider name variations (abbreviations, partial names, etc.)
-   - Check if dates could be the same event reported differently
+2. Extract events from the posts with all relevant details
+3. Only use link_posts_to_existing_event if you're certain it's a duplicate from the post content itself
 4. Use INTELLIGENT REASONING for duplicates:
    - "ASU Professor Frames Event" = "Arizona State University Professor Event" (clear match)
    - "Trump Rally Phoenix May 28" = "President Trump Rally in Phoenix May 28" (same event)
@@ -4220,21 +4073,6 @@ Do NOT include any other text, conversation, or explanations before or after the
                                                 function_response=protos.FunctionResponse(
                                                     name=fc.name,
                                                     response={"actors": result}
-                                                )
-                                            ))
-                                            
-                                        elif fc.name == "search_similar_events":
-                                            result = self.handle_search_similar_events(
-                                                query_text=fc.args.get('query_text'),
-                                                date=fc.args.get('date'),
-                                                city=fc.args.get('city'),
-                                                state=fc.args.get('state'),
-                                                limit=fc.args.get('limit', 10)
-                                            )
-                                            function_responses.append(protos.Part(
-                                                function_response=protos.FunctionResponse(
-                                                    name=fc.name,
-                                                    response={"similar_events": result}
                                                 )
                                             ))
                                             

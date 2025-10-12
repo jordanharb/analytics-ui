@@ -19,8 +19,8 @@ for p in [str(REPO_ROOT), str(WEB_DIR), str(ANALYTICS_UI_DIR), str(SCRIPTS_DIR)]
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from utils.database import get_supabase, fetch_all_rows
-from utils.geocoding import geocode_city_state
+from scripts.utils.database import get_supabase, fetch_all_rows
+from scripts.utils.geocoding import geocode_city_state
 
 
 def check_coordinates_cache(supabase, city, state):
