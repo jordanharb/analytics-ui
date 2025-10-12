@@ -13,8 +13,8 @@ Add these to Vercel for automation to work:
 
 ```bash
 # Supabase Service Keys (for API routes)
-SUPABASE_URL=https://djzrlccihwqxtjkytcph.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=sb_secret_FSwnPnkPa-synlL5YsI1Rw_bdGt_Djb
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 
 # Cron Security
 AUTOMATION_CRON_SECRET=generate_with_openssl_rand_base64_32
@@ -24,9 +24,9 @@ AUTOMATION_CRON_SECRET=generate_with_openssl_rand_base64_32
 Add these if you want campaign finance features to work:
 
 ```bash
-VITE_CAMPAIGN_FINANCE_SUPABASE_URL=https://ffdrtpknppmtkkbqsvek.supabase.co
-VITE_CAMPAIGN_FINANCE_SUPABASE_ANON_KEY=sb_publishable_b8wouMgpgPhweO7pBzX-ng_-Y7en5eq
-VITE_CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmZHJ0cGtucHBtdGtrYnFzdmVrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTkxMzg3NiwiZXhwIjoyMDY3NDg5ODc2fQ.Vy6VzGOHWbTZNlRg_tZcyP3Y05LFf4g5sHYD6oaRY0s
+VITE_CAMPAIGN_FINANCE_SUPABASE_URL=your_campaign_finance_supabase_url
+VITE_CAMPAIGN_FINANCE_SUPABASE_ANON_KEY=your_campaign_finance_anon_key
+VITE_CAMPAIGN_FINANCE_SUPABASE_SERVICE_KEY=your_campaign_finance_service_key
 ```
 
 ## 🟢 Optional - Automation Tuning
@@ -45,8 +45,8 @@ AUTOMATION_DEDUP_SLEEP_SECONDS=120
 AUTOMATION_WORKER_POLL_SECONDS=60
 
 # Additional API Keys (for rate limiting)
-GEMINI_DEDUP_API_KEY=AIzaSyAuQv5MALHCrD3nS75UvbaJJP8qoAPqazo
-GOOGLE_AI_API_KEY_1=AIzaSyAuQv5MALHCrD3nS75UvbaJJP8qoAPqazo
+GEMINI_DEDUP_API_KEY=your_gemini_api_key
+GOOGLE_AI_API_KEY_1=your_google_ai_api_key
 ```
 
 ## 📝 Notes
