@@ -314,25 +314,25 @@ export const MapView: React.FC = () => {
   }, [filters, networkExpanded]);
 
   return (
-    <div className="h-full flex">
-      {/* Filter Panel */}
+    <div className="h-full flex flex-row overflow-hidden">
+      {/* Filter Panel - Desktop: side panel, Mobile: overlay */}
       {showFilters && (
-        <FilterPanel 
-          className="w-full md:w-80 h-full flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto"
+        <FilterPanel
+          className="w-full md:w-80 h-full flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto overflow-hidden"
           onClose={() => setShowFilters(false)}
         />
       )}
-      
+
       {/* Filter Panel Backdrop (Mobile) */}
       {showFilters && (
-        <div 
+        <div
           className="fixed inset-0 top-16 bg-black bg-opacity-50 z-30 md:hidden"
           onClick={() => setShowFilters(false)}
         />
       )}
-      
-      {/* Map Container */}
-      <div className="flex-1 relative">
+
+      {/* Map Container - Always takes remaining space */}
+      <div className="flex-1 relative min-w-0 h-full">
         
         {/* Mobile: Compact Search + Filter Row */}
         <div className="absolute top-4 left-4 right-4 z-10 md:hidden">
@@ -605,7 +605,7 @@ export const MapView: React.FC = () => {
         )}
         
         {/* Map */}
-        <div ref={mapContainer} className="w-full h-full" />
+        <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
         
         {/* Side Panel */}
         <SidePanel

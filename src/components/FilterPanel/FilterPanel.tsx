@@ -155,7 +155,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
       </div>
       
       {/* Scrollable Content */}
-      <div className="flex-1 p-6 space-y-6 overflow-y-auto scrollbar-thin">
+      <div className="flex-1 min-h-0 p-6 space-y-6 overflow-y-auto scrollbar-thin">
 
         {/* Date Range */}
         <DateRangeFilter
