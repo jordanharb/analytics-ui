@@ -12,46 +12,64 @@ export const MAPBOX_STYLE = 'mapbox://styles/mapbox/light-v11';
 export const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
 export const DEFAULT_ZOOM = 4;
 
-// Cluster configuration
+// Cluster configuration - Size and color scale proportionally with event count
 export const CLUSTER_PAINT: mapboxgl.CirclePaint = {
+  // Neutral gray gradient that darkens with more events
   'circle-color': [
-    'step',
+    'interpolate',
+    ['linear'],
     ['get', 'point_count'],
-    '#51bbd6', // Blue for small clusters
-    100,
-    '#f1f075', // Yellow for medium clusters
-    750,
-    '#f28cb1'  // Pink for large clusters
+    1,    '#D1D5DB',  // Very light gray for minimal clusters
+    50,   '#9CA3AF',  // Light gray
+    200,  '#6B7280',  // Medium gray
+    500,  '#4B5563',  // Dark gray
+    1000, '#374151'   // Darker gray for massive clusters
   ],
+  // Exponential size scaling with min/max limits
   'circle-radius': [
-    'step',
+    'interpolate',
+    ['exponential', 1.5], // Exponential curve for smoother visual hierarchy
     ['get', 'point_count'],
-    20, // 20px for small clusters
-    100,
-    30, // 30px for medium clusters
-    750,
-    40  // 40px for large clusters
+    1,    8,   // Minimum size: 8px
+    10,   12,  // Small clusters
+    50,   16,  // Medium-small
+    200,  22,  // Medium-large
+    500,  28,  // Large
+    1000, 32   // Maximum size: 32px
   ],
-  'circle-opacity': 0.8,
-  'circle-stroke-width': 2,
-  'circle-stroke-color': '#fff'
+  'circle-opacity': 0.85,
+  'circle-stroke-width': 1.5,
+  'circle-stroke-color': '#ffffff',
+  'circle-stroke-opacity': 0.6
 };
 
-// Unclustered point configuration
+// Unclustered point configuration - Matches cluster styling for visual consistency
 export const UNCLUSTERED_PAINT: mapboxgl.CirclePaint = {
-  'circle-color': '#11b4da',
-  'circle-radius': [
-    'interpolate', 
-    ['linear'], 
+  // Neutral gray that darkens with more events
+  'circle-color': [
+    'interpolate',
+    ['linear'],
     ['get', 'count'],
-    1, 8,      // 1 event = 8px radius
-    10, 12,    // 10 events = 12px radius
-    100, 20,   // 100 events = 20px radius
-    1000, 30   // 1000 events = 30px radius
+    1,   '#D1D5DB',  // Very light gray for single events
+    5,   '#9CA3AF',  // Light gray
+    20,  '#6B7280',  // Medium gray
+    50,  '#4B5563',  // Dark gray
+    100, '#374151'   // Darker gray for many events
   ],
-  'circle-stroke-width': 2,
-  'circle-stroke-color': '#fff',
-  'circle-opacity': 0.9
+  'circle-radius': [
+    'interpolate',
+    ['exponential', 1.5], // Exponential scaling for visual consistency
+    ['get', 'count'],
+    1,   6,   // Minimum size: 6px
+    5,   10,  // Small
+    20,  14,  // Medium
+    50,  18,  // Large
+    100, 24   // Maximum size: 24px
+  ],
+  'circle-stroke-width': 1.5,
+  'circle-stroke-color': '#ffffff',
+  'circle-stroke-opacity': 0.6,
+  'circle-opacity': 0.85
 };
 
 // Cluster text label

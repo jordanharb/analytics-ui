@@ -7,7 +7,6 @@ import {
   DEFAULT_ZOOM,
   CLUSTER_PAINT,
   UNCLUSTERED_PAINT,
-  CLUSTER_COUNT_PAINT,
   getMapBounds,
   pointsToGeoJSON
 } from '../../lib/mapboxConfig';
@@ -167,7 +166,7 @@ export const MapView: React.FC = () => {
           clusterRadius: 50
         });
 
-        // Add cluster layer
+        // Add cluster layer (no text labels - size and color indicate density)
         map.current!.addLayer({
           id: 'clusters',
           type: 'circle',
@@ -176,20 +175,6 @@ export const MapView: React.FC = () => {
           paint: CLUSTER_PAINT
         });
         console.log('Added clusters layer');
-
-        // Add cluster count layer
-        map.current!.addLayer({
-          id: 'cluster-count',
-          type: 'symbol',
-          source: 'events',
-          filter: ['has', 'point_count'],
-          layout: {
-            'text-field': '{point_count_abbreviated}',
-            'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
-            'text-size': 12
-          },
-          paint: CLUSTER_COUNT_PAINT
-        });
 
         // Add unclustered point layer
         map.current!.addLayer({
