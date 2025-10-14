@@ -14,16 +14,16 @@ export const DEFAULT_ZOOM = 4;
 
 // Cluster configuration - Size and color scale proportionally with event count
 export const CLUSTER_PAINT: mapboxgl.CirclePaint = {
-  // Neutral gray gradient that darkens with more events
+  // Blue gradient that darkens with more events
   'circle-color': [
     'interpolate',
     ['linear'],
     ['get', 'point_count'],
-    1,    '#D1D5DB',  // Very light gray for minimal clusters
-    50,   '#9CA3AF',  // Light gray
-    200,  '#6B7280',  // Medium gray
-    500,  '#4B5563',  // Dark gray
-    1000, '#374151'   // Darker gray for massive clusters
+    1,    '#DBEAFE',  // Very light blue for minimal clusters
+    50,   '#93C5FD',  // Light blue
+    200,  '#3B82F6',  // Medium blue
+    500,  '#1D4ED8',  // Dark blue
+    1000, '#1E40AF'   // Very dark blue for massive clusters
   ],
   // Exponential size scaling with min/max limits
   'circle-radius': [
@@ -45,16 +45,16 @@ export const CLUSTER_PAINT: mapboxgl.CirclePaint = {
 
 // Unclustered point configuration - Matches cluster styling for visual consistency
 export const UNCLUSTERED_PAINT: mapboxgl.CirclePaint = {
-  // Neutral gray that darkens with more events
+  // Blue gradient that darkens with more events
   'circle-color': [
     'interpolate',
     ['linear'],
     ['get', 'count'],
-    1,   '#D1D5DB',  // Very light gray for single events
-    5,   '#9CA3AF',  // Light gray
-    20,  '#6B7280',  // Medium gray
-    50,  '#4B5563',  // Dark gray
-    100, '#374151'   // Darker gray for many events
+    1,   '#DBEAFE',  // Very light blue for single events
+    5,   '#93C5FD',  // Light blue
+    20,  '#3B82F6',  // Medium blue
+    50,  '#1D4ED8',  // Dark blue
+    100, '#1E40AF'   // Very dark blue for many events
   ],
   'circle-radius': [
     'interpolate',
