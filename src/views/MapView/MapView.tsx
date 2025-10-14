@@ -36,7 +36,7 @@ export const MapView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedCity, setSelectedCity] = useState<{ city: string; state: string } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<Array<{ city: string; state: string }> | null>(null);
-  const [showFilters, setShowFilters] = useState(false); // Always start hidden
+  const [showFilters, setShowFilters] = useState(true); // Start with filters visible
   const [showVirtualEvents, setShowVirtualEvents] = useState(false);
   const [virtualEventsCount, setVirtualEventsCount] = useState(0);
   const [showStatsModal, setShowStatsModal] = useState(false);
