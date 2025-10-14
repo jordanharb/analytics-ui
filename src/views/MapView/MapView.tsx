@@ -314,11 +314,11 @@ export const MapView: React.FC = () => {
   }, [filters, networkExpanded]);
 
   return (
-    <div className="h-full flex flex-row overflow-hidden">
+    <div className="h-full flex">
       {/* Filter Panel - Desktop: side panel, Mobile: overlay */}
       {showFilters && (
         <FilterPanel
-          className="w-full md:w-80 h-full flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto overflow-hidden"
+          className="w-full md:w-80 h-full flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto"
           onClose={() => setShowFilters(false)}
         />
       )}
@@ -332,7 +332,7 @@ export const MapView: React.FC = () => {
       )}
 
       {/* Map Container - Always takes remaining space */}
-      <div className="flex-1 relative min-w-0 h-full">
+      <div className="flex-1 relative">
         
         {/* Mobile: Compact Search + Filter Row */}
         <div className="absolute top-4 left-4 right-4 z-10 md:hidden">

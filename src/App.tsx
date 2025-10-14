@@ -19,27 +19,29 @@ function AppContent() {
   const isLegislaturePage = location.pathname.startsWith('/legislature');
 
   return (
-    <div className="w-full min-h-screen overflow-x-hidden bg-slate-50">
-      <div className="min-h-screen flex flex-col">
+    <div className="w-full h-screen overflow-x-hidden bg-slate-50">
+      <div className="h-screen flex flex-col">
         {/* Only show Header on Woke Palantir pages (not launch or legislature pages) */}
         {!isLaunchPage && !isLegislaturePage && <Header />}
-        
+
         {/* Main Content */}
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-hidden h-full">
           <Suspense fallback={<div className="flex items-center justify-center h-full">Loading...</div>}>
-            <Routes>
-              <Route path="/" element={<LaunchPage />} />
-              <Route path="/map" element={<MapView />} />
-              <Route path="/directory" element={<DirectoryView />} />
-              <Route path="/actors" element={<ActorsDirectoryView />} />
-              <Route path="/actor-classifier" element={<ActorClassifierView />} />
-              <Route path="/automation" element={<AutomationView />} />
-              <Route path="/chat" element={<ChatView />} />
-              <Route path="/entity/:entityType/:entityId" element={<EntityView />} />
-              
-              {/* Legislature & Campaign Finance Routes */}
-              <Route path="/legislature/*" element={<LegislatureApp />} />
-            </Routes>
+            <div className="h-full">
+              <Routes>
+                <Route path="/" element={<LaunchPage />} />
+                <Route path="/map" element={<MapView />} />
+                <Route path="/directory" element={<DirectoryView />} />
+                <Route path="/actors" element={<ActorsDirectoryView />} />
+                <Route path="/actor-classifier" element={<ActorClassifierView />} />
+                <Route path="/automation" element={<AutomationView />} />
+                <Route path="/chat" element={<ChatView />} />
+                <Route path="/entity/:entityType/:entityId" element={<EntityView />} />
+
+                {/* Legislature & Campaign Finance Routes */}
+                <Route path="/legislature/*" element={<LegislatureApp />} />
+              </Routes>
+            </div>
           </Suspense>
         </main>
       </div>
