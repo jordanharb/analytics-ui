@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { EmailReportJobCreate } from '../types/emailReports';
 import { FilterPanel } from './FilterPanel/FilterPanel';
 import { useFiltersStore } from '../state/filtersStore';
+import { convertDateFiltersToEmailPeriod, getDatePeriodDescription } from '../utils/dateFilterConverter';
 
 interface EmailReportJobFormProps {
   onSubmit: (job: EmailReportJobCreate) => Promise<void>;
@@ -16,12 +17,6 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
 
-  // Time period
-  const [periodType, setPeriodType] = useState<'last_n_days' | 'last_week' | 'last_month' | 'custom_range'>('last_week');
-  const [periodDays, setPeriodDays] = useState(7);
-  const [customStartDate, setCustomStartDate] = useState('');
-  const [customEndDate, setCustomEndDate] = useState('');
-
   // Recipients
   const [recipientEmailsText, setRecipientEmailsText] = useState('');
 
@@ -33,6 +28,17 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
 
   // Get filters from global store (managed by FilterPanel)
   const { pendingFilters } = useFiltersStore();
+
+  // Convert filter panel date to email report format
+  const [convertedPeriod, setConvertedPeriod] = useState(() =>
+    convertDateFiltersToEmailPeriod(pendingFilters)
+  );
+
+  // Watch for changes to filter panel dates and update converted period
+  useEffect(() => {
+    const converted = convertDateFiltersToEmailPeriod(pendingFilters);
+    setConvertedPeriod(converted);
+  }, [pendingFilters.period, pendingFilters.date_range]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,15 +59,15 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
       // Use filters from FilterPanel (pendingFilters from store)
       const filters = { ...pendingFilters };
 
-      // Build job object
+      // Build job object using converted period from filter panel
       const job: EmailReportJobCreate = {
         name: name.trim(),
         description: description.trim() || undefined,
         is_enabled: true,
-        period_type: periodType,
-        period_days: periodType === 'last_n_days' ? periodDays : undefined,
-        custom_start_date: periodType === 'custom_range' ? customStartDate : undefined,
-        custom_end_date: periodType === 'custom_range' ? customEndDate : undefined,
+        period_type: convertedPeriod.period_type,
+        period_days: convertedPeriod.period_days,
+        custom_start_date: convertedPeriod.custom_start_date,
+        custom_end_date: convertedPeriod.custom_end_date,
         search_filters: filters,
         recipient_emails: recipientEmails,
         schedule_type: scheduleType,
@@ -113,73 +119,24 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
         </div>
       </div>
 
-      {/* Report Time Period */}
-      <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Report Time Period</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
-            <select
-              value={periodType}
-              onChange={e => setPeriodType(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="last_week">Last Week</option>
-              <option value="last_month">Last Month</option>
-              <option value="last_n_days">Last N Days</option>
-              <option value="custom_range">Custom Date Range</option>
-            </select>
-          </div>
-
-          {periodType === 'last_n_days' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Number of Days</label>
-              <input
-                type="number"
-                min="1"
-                max="365"
-                value={periodDays}
-                onChange={e => setPeriodDays(parseInt(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          )}
-
-          {periodType === 'custom_range' && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-                <input
-                  type="date"
-                  value={customStartDate}
-                  onChange={e => setCustomStartDate(e.target.value)}
-                  required={periodType === 'custom_range'}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-                <input
-                  type="date"
-                  value={customEndDate}
-                  onChange={e => setCustomEndDate(e.target.value)}
-                  required={periodType === 'custom_range'}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
       {/* Filters (Same as Map/Directory) */}
       <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Event Filters</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Event Filters & Time Period</h3>
         <p className="text-sm text-gray-600 mb-4">
           Use the same filters as the Map and Directory views to target specific events.
+          The date range selected below will determine which events are included in the report.
         </p>
+
+        {/* Display current period selection */}
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="font-medium text-blue-900">Report Period:</span>
+            <span className="text-blue-700">{getDatePeriodDescription(convertedPeriod)}</span>
+          </div>
+        </div>
+
         <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-          <FilterPanel />
+          <FilterPanel hideDateFilter={false} />
         </div>
       </div>
 
