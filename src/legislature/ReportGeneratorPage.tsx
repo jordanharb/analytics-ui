@@ -3981,23 +3981,75 @@ Rules:
               </div>
             )}
           </div>
-          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="radio"
-                checked={analysisMode === 'donorTheme'}
-                onChange={() => setAnalysisMode('donorTheme')}
-              />
-              <span>Donor Themes to Bills (interactive)</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="radio"
-                checked={analysisMode === 'singleCall'}
-                onChange={() => setAnalysisMode('singleCall')}
-              />
-              <span>Single-Pass Analysis (function calling)</span>
-            </label>
+          <div style={{ marginBottom: 20 }}>
+            <h3 style={{ fontSize: '1.1em', fontWeight: 600, marginBottom: 8 }}>Choose Report Type</h3>
+            <p style={{ fontSize: '0.9em', color: '#555', marginBottom: 16, lineHeight: 1.5 }}>
+              Select how you want to analyze this legislator's campaign finance and voting record:
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 12 }}>
+              <label style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: 12,
+                border: analysisMode === 'donorTheme' ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                borderRadius: 8,
+                backgroundColor: analysisMode === 'donorTheme' ? '#eff6ff' : '#ffffff',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}>
+                <input
+                  type="radio"
+                  checked={analysisMode === 'donorTheme'}
+                  onChange={() => setAnalysisMode('donorTheme')}
+                  style={{ marginTop: 4 }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Theme-Based Analysis (Recommended)</div>
+                  <div style={{ fontSize: '0.85em', color: '#666', lineHeight: 1.5 }}>
+                    <strong>How it works:</strong> AI analyzes the legislator's campaign donors and groups them into themes
+                    (like "Real Estate Industry", "Healthcare PACs", etc.). You then choose which themes to investigate.
+                    For each theme, the system searches all bills using AI-powered semantic matching to find legislation
+                    that could benefit those donor groups. You can review and edit the search terms before generating the final report.
+                    <br/><br/>
+                    <strong>Best for:</strong> Finding potential conflicts of interest, understanding donor influence,
+                    exploring specific industries or interest groups.
+                  </div>
+                </div>
+              </label>
+
+              <label style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: 12,
+                border: analysisMode === 'singleCall' ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                borderRadius: 8,
+                backgroundColor: analysisMode === 'singleCall' ? '#eff6ff' : '#ffffff',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}>
+                <input
+                  type="radio"
+                  checked={analysisMode === 'singleCall'}
+                  onChange={() => setAnalysisMode('singleCall')}
+                  style={{ marginTop: 4 }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Complete Profile Analysis</div>
+                  <div style={{ fontSize: '0.85em', color: '#666', lineHeight: 1.5 }}>
+                    <strong>How it works:</strong> AI analyzes all the legislator's votes, sponsored bills, and campaign
+                    donations in one comprehensive report. The system automatically identifies patterns, unusual votes,
+                    voting trends, and creates a complete financial and legislative profile. No interaction required -
+                    just click generate and get a full report.
+                    <br/><br/>
+                    <strong>Best for:</strong> Getting a complete overview of a legislator, understanding their voting record,
+                    seeing all their major donors at once, identifying outlier votes (when they vote against their party).
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           {/* Model Selection */}
@@ -4331,10 +4383,31 @@ Rules:
               </button>
             </div>
           </div>
-          <p style={{ marginBottom: 16, color: '#4b5563' }}>
-            Gemini grouped top donors for <strong>{donorThemeContext.legislatorName}</strong> during <strong>{donorThemeContext.sessionName}</strong>.
-            Choose a theme to investigate the most relevant legislation.
-          </p>
+          <div style={{
+            marginBottom: 20,
+            padding: 16,
+            backgroundColor: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            borderRadius: 8
+          }}>
+            <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95em', fontWeight: 600, color: '#1e40af' }}>
+              📋 How Themes Work
+            </h4>
+            <p style={{ margin: '0 0 12px 0', fontSize: '0.85em', color: '#1e3a8a', lineHeight: 1.6 }}>
+              The AI has analyzed all campaign donors for <strong>{donorThemeContext.legislatorName}</strong> during <strong>{donorThemeContext.sessionName}</strong> and
+              grouped them into themes based on industry, occupation, and donor patterns. Each theme represents a potential area of influence.
+            </p>
+            <p style={{ margin: '0 0 12px 0', fontSize: '0.85em', color: '#1e3a8a', lineHeight: 1.6 }}>
+              <strong>What are "Suggested Searches"?</strong><br/>
+              These are search phrases the AI believes are most relevant to each donor theme. When you generate a report for a theme,
+              the system will use <strong>vector search</strong> (AI-powered semantic matching) to find bills that match these phrases.
+              Vector search understands meaning, not just keywords - for example, "property tax exemptions" will also find bills about "real estate assessment relief."
+            </p>
+            <p style={{ margin: 0, fontSize: '0.85em', color: '#dc2626', fontWeight: 500 }}>
+              ⚠️ <strong>Important:</strong> Review and edit the suggested searches before generating your report.
+              You can add, remove, or modify search terms to focus on what matters most. The quality of your report depends on choosing the right search phrases!
+            </p>
+          </div>
           <div style={{ display: 'grid', gap: 16 }}>
             {donorThemes.map((theme) => {
               const isCompleted = completedThemes.has(theme.id);
@@ -5138,6 +5211,30 @@ Rules:
           {/* Chat Interface for Follow-up Questions */}
           {analysisResults && analysisResults.length > 0 && (
             <div style={{ marginTop: 32, borderTop: '2px solid #e5e7eb', paddingTop: 24 }}>
+              <div style={{
+                backgroundColor: '#f0f9ff',
+                border: '2px solid #0ea5e9',
+                borderRadius: 8,
+                padding: 16,
+                marginBottom: 16
+              }}>
+                <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: '#0c4a6e', margin: 0 }}>
+                  💬 Ask Follow-up Questions
+                </h3>
+                <p style={{ fontSize: '0.9em', color: '#0c4a6e', lineHeight: 1.6, margin: '8px 0 0 0' }}>
+                  You can ask the AI any questions about this report using the chat below. For example:
+                </p>
+                <ul style={{ fontSize: '0.85em', color: '#075985', margin: '8px 0 0 0', paddingLeft: 20, lineHeight: 1.6 }}>
+                  <li>"Can you find more bills related to this theme not covered in this report?"</li>
+                  <li>"Which of these donors gave to other legislators?"</li>
+                  <li>"Were any of these bills signed into law?"</li>
+                  <li>"What was the total amount donated by this group?"</li>
+                  <li>"Show me bills this legislator sponsored related to real estate"</li>
+                </ul>
+                <p style={{ fontSize: '0.85em', color: '#0c4a6e', fontStyle: 'italic', margin: '8px 0 0 0' }}>
+                  The AI has access to all the data in this report and can search the database to answer your questions.
+                </p>
+              </div>
               <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, color: '#374151' }}>
                 Ask Follow-up Questions About This Report
               </h3>

@@ -87,8 +87,25 @@ const HomePage: React.FC = () => {
         <h1 style={{ fontSize: '2rem', fontWeight: '700', marginBottom: '0.5rem', color: '#1f2937' }}>
           Search Campaign Finance Data
         </h1>
-        <p style={{ fontSize: '1rem', color: '#6b7280', marginBottom: '1.5rem', maxWidth: '600px' }}>
-          Search for candidates, committees, and PACs to view their campaign finance reports and transactions.
+        <p style={{ fontSize: '1.05rem', color: '#374151', marginBottom: '0.75rem', maxWidth: '700px', lineHeight: 1.6 }}>
+          Search for a <strong>legislator, candidate, committee, or PAC</strong> by name to view their complete history:
+        </p>
+        <ul style={{
+          fontSize: '0.95rem',
+          color: '#6b7280',
+          marginBottom: '1.5rem',
+          paddingLeft: '1.5rem',
+          lineHeight: 1.7,
+          maxWidth: '700px'
+        }}>
+          <li><strong>Voting Record:</strong> See how they voted on every bill, including when they voted against their party (outliers)</li>
+          <li><strong>Bill History:</strong> View all bills they sponsored or co-sponsored, with full text and summaries</li>
+          <li><strong>Campaign Finance:</strong> Browse all campaign finance reports and transactions filed with the state</li>
+          <li><strong>Donor Analysis:</strong> See who donated to their campaigns, how much, and when</li>
+          <li><strong>AI Reports:</strong> Generate comprehensive reports analyzing potential conflicts of interest between donors and legislation</li>
+        </ul>
+        <p style={{ fontSize: '0.9em', color: '#059669', fontWeight: 500, marginBottom: '1.5rem', fontStyle: 'italic' }}>
+          💡 Tip: After selecting a person, click "Generate Report" to create a detailed AI analysis of their donor connections and legislative activity.
         </p>
       </div>
 

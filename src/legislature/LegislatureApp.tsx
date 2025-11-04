@@ -12,6 +12,7 @@ const ReportGeneratorPage = lazy(() => import('./ReportGeneratorPage'));
 const DeprecatedReportGeneratorPage = lazy(() => import('./deprecated_ReportGeneratorPageV2'));
 const PersonPage = lazy(() => import('./PersonPage'));
 const EntityPage = lazy(() => import('./finance/EntityPage'));
+const ScraperManagementPage = lazy(() => import('./ScraperManagementPage').then(m => ({ default: m.ScraperManagementPage })));
 
 const LegislatureApp: React.FC = () => {
   const location = useLocation();
@@ -55,6 +56,11 @@ const LegislatureApp: React.FC = () => {
                   </Link>
                 </li>
                 <li>
+                  <Link to="/legislature/scrapers" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
+                    Scrapers
+                  </Link>
+                </li>
+                <li>
                   <Link to="/legislature/about" style={{ textDecoration: 'none', color: '#4b5563', fontWeight: '500', fontSize: '0.9rem' }}>
                     About
                   </Link>
@@ -73,6 +79,7 @@ const LegislatureApp: React.FC = () => {
               <Route path="/reports-chat" element={<ReportsChatPage />} />
               <Route path="/report-generator" element={<ReportGeneratorPage />} />
               <Route path="/report-generator-v2" element={<DeprecatedReportGeneratorPage />} />
+              <Route path="/scrapers" element={<ScraperManagementPage />} />
               <Route path="/about" element={<AboutPage />} />
               <Route path="/candidate/:id" element={<CandidatePage />} />
               <Route path="/person/:id" element={<PersonPage />} />
