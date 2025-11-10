@@ -3170,10 +3170,13 @@ ${groupReasons.length ? groupReasons.map((reason: string, idx: number) => `- Rea
         }
       }
 
+      if (!entityIds.length) {
+        throw new Error('No recipient entities (committees) found for this legislator. Cannot proceed with donor analysis.');
+      }
+
       const donorArgs: Record<string, unknown> = {
         p_person_id: currentPersonId,
-        // Don't pass p_recipient_entity_ids when p_person_id is provided -
-        // the function gets entity IDs automatically from mv_legislators_search
+        p_recipient_entity_ids: entityIds,  // Explicitly pass entity IDs as fallback
         p_session_id: sessionId,
         p_days_before: 180,  // Expanded search window for comprehensive theme analysis
         p_days_after: 180,
