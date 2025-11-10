@@ -977,7 +977,7 @@ Hard rules:
    * Geography (out-of-state vs in-state, specific cities/regions)
    * Timing patterns (donation clusters around bill/vote dates)
    * Contribution size patterns (max-out donors, frequent small donors--excluding CCEC)
-4) For each theme, generate 15-30 search queries mixing jargon, synonyms, and statute phrasing (e.g., "A.R.S.", "section", "statute", "amend", "repeal", "exemption", "fee", "preemption"). PRIORITIZE identifying potentially harmful bills that could undermine public interests, harm marginalized communities, or benefit wealthy donors at the expense of ordinary citizens.
+4) For each theme, generate 10-15 search queries using simple, broad terms that work well with vector/semantic search. Use 1-2 word phrases for industry/sector concepts (e.g., "homebuilding", "landlord", "eviction", "property tax", "zoning"). DO NOT use statute references (A.R.S.), legal citations, or complex multi-word policy phrases. PRIORITIZE identifying potentially harmful bills that could undermine public interests, harm marginalized communities, or benefit wealthy donors at the expense of ordinary citizens.
 5) Iteratively call tools to run EXHAUSTIVE bill searches until two consecutive iterations yield no new bills or ~1000 bills are accumulated. Lower p_min_text_score stepwise: 0.35->0.25->0.15->0.10 when needed.
 6) Every cited bill must include at least one statute reference and one excerpt (from bills.bill_summary or bills.bill_text), plus the legislator's vote/sponsor context.
 7) Return STRICT JSON exactly matching the requested schema when asked. Write as exhaustively and comprehensively as possible, including extensive bill text quotes and detailed analysis. Prioritize thoroughness over brevity.`;
@@ -3334,7 +3334,7 @@ Notes:
 - CRITICAL: Include donor_totals array with the total donation amount for each donor (must match the order of donor_names)
 - Sort themes by total theme value (sum of all donor_totals in theme)
 - Account for ALL major donors - every donor over $1000 should appear in a theme
-- Generate 5-10 broad query_suggestions per theme (use general policy areas, not specific jargon).
+- Generate 10-15 query_suggestions per theme using simple 1-2 word terms (e.g., "homebuilding", "landlord", "property tax", "zoning"). DO NOT use A.R.S. references, statute citations, or complex phrases.
 `;
 
       const themesResponse = await callGeminiJson<{ themes?: DonorTheme[] }>(themePrompt, {
@@ -3423,20 +3423,22 @@ Notes:
       const needsExpansion = queries.length < 10;
       if (needsExpansion) {
         try {
-          const expansionPrompt = `For THEME "${theme.title}" generate 8-10 simple keywords or short phrases (1-3 words) that would likely appear in bill text related to this theme.
+          const expansionPrompt = `For THEME "${theme.title}" generate 8-10 simple search terms (1-2 words each) for vector/semantic search of bill text.
 
 Focus on:
-- Concrete nouns and terms (like "landlord", "tenant", "property tax")
+- Single words or 2-word phrases that capture the industry/topic
+- Concrete nouns (e.g., "landlord", "tenant", "contractor")
+- Common regulatory terms (e.g., "license", "permit", "exemption")
 - Industry-specific terminology
-- Common legal/regulatory terms in this area
-- Simple descriptive phrases
 
-Examples for "real estate" theme: homeowner association, property tax, landlord, tenant, eviction, affordable housing, building code, short-term rental, impact fee, eminent domain
+Examples for "real estate" theme: homebuilding, landlord, tenant, eviction, property tax, zoning, construction, subdivision, housing, developer
+
+Examples for "healthcare" theme: hospital, insurance, physician, medicare, prescription, healthcare, provider, medical, coverage, patient
 
 DO NOT use:
-- Complex policy concepts ("land reform", "comprehensive zoning overhaul")
-- Legal citations or statute references
-- Long descriptive phrases
+- Statute references (A.R.S., Title, Section)
+- Legal citations or case names
+- Complex policy phrases (3+ words)
 - Abstract concepts
 
 Theme description: ${theme.description}
