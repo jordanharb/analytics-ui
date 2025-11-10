@@ -1384,7 +1384,7 @@ const extractJsonObject = (text: string) => {
 // formatCurrency helper was previously used to render donor totals in interim logs;
 // removed to satisfy TypeScript unused checks.
 
-const callGeminiJson = async <T = any>(prompt: string, { system, temperature = baseGenerationConfig.temperature, model = 'gemini-2.5-flash' }: { system?: string; temperature?: number; model?: GeminiModel } = {}): Promise<T> => {
+const callGeminiJson = async <T = any>(prompt: string, { system, temperature = baseGenerationConfig.temperature, model = 'gemini-2.5-flash', maxRetries = 2 }: { system?: string; temperature?: number; model?: GeminiModel; maxRetries?: number } = {}): Promise<T> => {
   return logAndExecute('callGeminiJson', { prompt, system, temperature, model }, async () => {
     if (!GEMINI_API_KEY) {
       throw new Error('Missing Gemini API key');
@@ -1404,35 +1404,83 @@ const callGeminiJson = async <T = any>(prompt: string, { system, temperature = b
       body.systemInstruction = { role: 'system', parts: [{ text: system }] };
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`Gemini error: ${response.status} ${text}`);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.log(`Retry attempt ${attempt}/${maxRetries} for Gemini call`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
+        }
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Gemini error: ${response.status} ${text}`);
+        }
+
+        const data = await response.json();
+        console.log('Gemini raw response:', JSON.stringify(data, null, 2));
+        const candidate = data?.candidates?.[0];
+        const parts = candidate?.content?.parts ?? [];
+        const textContent = parts.filter((part: any) => part.text).map((part: any) => part.text).join('\n');
+
+        if (!textContent) {
+          // Check for safety ratings or other blocking reasons
+          const finishReason = candidate?.finishReason;
+          const safetyRatings = candidate?.safetyRatings;
+          const promptFeedback = data?.promptFeedback;
+
+          console.error('No text content found in Gemini response:', {
+            data,
+            candidate,
+            parts,
+            model,
+            finishReason,
+            safetyRatings,
+            promptFeedback
+          });
+
+          let errorMsg = `Gemini returned no text content. Model: ${model}`;
+          if (finishReason) {
+            errorMsg += `, Finish reason: ${finishReason}`;
+          }
+          if (promptFeedback?.blockReason) {
+            errorMsg += `, Blocked: ${promptFeedback.blockReason}`;
+          }
+          if (safetyRatings) {
+            const blocked = safetyRatings.filter((r: any) => r.blocked);
+            if (blocked.length) {
+              errorMsg += `, Safety: ${blocked.map((r: any) => r.category).join(', ')}`;
+            }
+          }
+
+          // Only retry if it's not a permanent block
+          if (promptFeedback?.blockReason || (safetyRatings && safetyRatings.some((r: any) => r.blocked))) {
+            throw new Error(errorMsg); // Don't retry blocked content
+          }
+
+          lastError = new Error(errorMsg);
+          continue; // Retry for empty responses without explicit blocks
+        }
+
+        const jsonSlice = extractJsonObject(textContent);
+        return parseJsonLoose(jsonSlice) as T;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt === maxRetries) {
+          throw lastError;
+        }
+        console.warn(`Gemini call failed (attempt ${attempt + 1}/${maxRetries + 1}):`, lastError.message);
+      }
     }
 
-    const data = await response.json();
-    console.log('Gemini raw response:', JSON.stringify(data, null, 2));
-    const candidate = data?.candidates?.[0];
-    const parts = candidate?.content?.parts ?? [];
-    const textContent = parts.filter((part: any) => part.text).map((part: any) => part.text).join('\n');
-
-    if (!textContent) {
-      console.error('No text content found in Gemini response:', {
-        data,
-        candidate,
-        parts,
-        model
-      });
-      throw new Error(`Gemini returned no text content. Model: ${model}, Parts: ${JSON.stringify(parts)}`);
-    }
-
-    const jsonSlice = extractJsonObject(textContent);
-    return parseJsonLoose(jsonSlice) as T;
+    throw lastError || new Error('Gemini call failed with unknown error');
   });
 };
 
