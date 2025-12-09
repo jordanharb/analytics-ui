@@ -6,11 +6,11 @@
     "api/health.js": {
       "maxDuration": 30
     },
-    "api/test-db.js": {
-      "maxDuration": 60
-    },
     "api/automation/*.ts": {
       "maxDuration": 60
+    },
+    "api/email-reports/*.ts": {
+      "maxDuration": 120
     }
   },
   "crons": [
