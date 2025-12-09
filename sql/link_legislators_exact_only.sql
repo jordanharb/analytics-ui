@@ -76,3 +76,4 @@ LIMIT 10;
 -- Refresh the materialized view
 REFRESH MATERIALIZED VIEW mv_legislators_search;
 
+

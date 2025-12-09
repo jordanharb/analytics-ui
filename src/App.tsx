@@ -12,31 +12,38 @@ const ActorClassifierView = lazy(() => import('./views/ActorClassifier/ActorClas
 const AutomationView = lazy(() => import('./views/Automation/AutomationView').then(m => ({ default: m.AutomationView })));
 const LaunchPage = lazy(() => import('./components/LaunchPage/LaunchPage').then(m => ({ default: m.LaunchPage })));
 const LegislatureApp = lazy(() => import('./legislature/LegislatureApp'));
+const ReportViewerPage = lazy(() => import('./views/ReportViewer/ReportViewerPage').then(m => ({ default: m.ReportViewerPage })));
+const EmailReportsView = lazy(() => import('./views/EmailReports/EmailReportsView').then(m => ({ default: m.EmailReportsView })));
 
 function AppContent() {
   const location = useLocation();
-  const isLaunchPage = location.pathname === '/';
   const isLegislaturePage = location.pathname.startsWith('/legislature');
+  const isReportViewerPage = location.pathname.startsWith('/reports/view');
+  const isMapPage = location.pathname === '/' || location.pathname === '/map';
 
   return (
     <div className="w-full h-screen overflow-x-hidden bg-slate-50">
       <div className="h-screen flex flex-col">
-        {/* Only show Header on Woke Palantir pages (not launch or legislature pages) */}
-        {!isLaunchPage && !isLegislaturePage && <Header />}
+        {/* Only show Header on Woke Palantir pages (not legislature or report viewer pages) */}
+        {!isLegislaturePage && !isReportViewerPage && <Header />}
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-hidden h-full">
+        {/* Main Content - overflow-hidden only for map view, overflow-auto for others */}
+        <main className={`flex-1 h-full ${isMapPage ? 'overflow-hidden' : 'overflow-auto'}`}>
           <Suspense fallback={<div className="flex items-center justify-center h-full">Loading...</div>}>
-            <div className="h-full">
+            <div className={isMapPage ? 'h-full' : ''}>
               <Routes>
-                <Route path="/" element={<LaunchPage />} />
+                <Route path="/" element={<MapView />} />
                 <Route path="/map" element={<MapView />} />
                 <Route path="/directory" element={<DirectoryView />} />
                 <Route path="/actors" element={<ActorsDirectoryView />} />
                 <Route path="/actor-classifier" element={<ActorClassifierView />} />
                 <Route path="/automation" element={<AutomationView />} />
+                <Route path="/email-reports" element={<EmailReportsView />} />
                 <Route path="/chat" element={<ChatView />} />
                 <Route path="/entity/:entityType/:entityId" element={<EntityView />} />
+
+                {/* Public Report Viewer (no auth required) */}
+                <Route path="/reports/view/:token" element={<ReportViewerPage />} />
 
                 {/* Legislature & Campaign Finance Routes */}
                 <Route path="/legislature/*" element={<LegislatureApp />} />

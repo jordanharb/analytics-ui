@@ -16,6 +16,8 @@ export interface ClassifierFilterConfig {
   min_mentions?: number;
   value?: boolean;
   min_score?: number;
+  order_by?: string; // Column to order by (e.g., 'updated_at', 'mention_count', 'created_at')
+  order_ascending?: boolean; // Order direction (default: false for descending)
   filters?: Array<{
     type: 'keyword' | 'platform' | 'mention_count';
     keywords?: string[];

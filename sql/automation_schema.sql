@@ -14,6 +14,32 @@ BEGIN
 END;
 $$;
 
+CREATE TABLE IF NOT EXISTS public.automation_prompts (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name text NOT NULL UNIQUE,
+  description text,
+  prompt_template text NOT NULL,
+  is_default boolean NOT NULL DEFAULT false,
+  supports_tools boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE t.tgname = 'automation_prompts_set_updated_at'
+      AND n.nspname = 'public' AND c.relname = 'automation_prompts'
+  ) THEN
+    CREATE TRIGGER automation_prompts_set_updated_at
+    BEFORE UPDATE ON public.automation_prompts
+    FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+  END IF;
+END $$;
+
 -- Settings table (singleton row)
 CREATE TABLE IF NOT EXISTS public.automation_settings (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -23,13 +49,25 @@ CREATE TABLE IF NOT EXISTS public.automation_settings (
   last_run_started_at timestamptz,
   last_run_completed_at timestamptz,
   next_run_at timestamptz,
+  prompt_id uuid REFERENCES public.automation_prompts(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TRIGGER automation_settings_set_updated_at
-BEFORE UPDATE ON public.automation_settings
-FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE t.tgname = 'automation_settings_set_updated_at'
+      AND n.nspname = 'public' AND c.relname = 'automation_settings'
+  ) THEN
+    CREATE TRIGGER automation_settings_set_updated_at
+    BEFORE UPDATE ON public.automation_settings
+    FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+  END IF;
+END $$;
 
 -- Runs table capturing pipeline executions
 CREATE TABLE IF NOT EXISTS public.automation_runs (
@@ -54,26 +92,77 @@ CREATE INDEX IF NOT EXISTS automation_runs_status_idx
 CREATE INDEX IF NOT EXISTS automation_runs_created_idx
   ON public.automation_runs(created_at DESC);
 
-CREATE TRIGGER automation_runs_set_updated_at
-BEFORE UPDATE ON public.automation_runs
-FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE t.tgname = 'automation_runs_set_updated_at'
+      AND n.nspname = 'public' AND c.relname = 'automation_runs'
+  ) THEN
+    CREATE TRIGGER automation_runs_set_updated_at
+    BEFORE UPDATE ON public.automation_runs
+    FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+  END IF;
+END $$;
 
 -- Row level security
 ALTER TABLE public.automation_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.automation_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.automation_prompts ENABLE ROW LEVEL SECURITY;
 
 -- Allow service role full access (implicit). Allow authenticated clients to read.
-CREATE POLICY automation_settings_select
-ON public.automation_settings
-FOR SELECT
-TO authenticated
-USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.polname = 'automation_settings_select'
+      AND n.nspname = 'public' AND c.relname = 'automation_settings'
+  ) THEN
+    CREATE POLICY automation_settings_select
+    ON public.automation_settings
+    FOR SELECT
+    TO authenticated
+    USING (true);
+  END IF;
+END $$;
 
-CREATE POLICY automation_runs_select
-ON public.automation_runs
-FOR SELECT
-TO authenticated
-USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.polname = 'automation_prompts_select'
+      AND n.nspname = 'public' AND c.relname = 'automation_prompts'
+  ) THEN
+    CREATE POLICY automation_prompts_select
+    ON public.automation_prompts
+    FOR SELECT
+    TO authenticated
+    USING (true);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.polname = 'automation_runs_select'
+      AND n.nspname = 'public' AND c.relname = 'automation_runs'
+  ) THEN
+    CREATE POLICY automation_runs_select
+    ON public.automation_runs
+    FOR SELECT
+    TO authenticated
+    USING (true);
+  END IF;
+END $$;
 
 -- Stored procedure to schedule automation runs atomically
 CREATE OR REPLACE FUNCTION public.schedule_automation_run()

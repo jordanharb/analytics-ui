@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { EmailReportJobCreate } from '../types/emailReports';
+import type { EmailReportJobCreate, EmailReportJob, EmailReportPrompt } from '../types/emailReports';
 import { FilterPanel } from './FilterPanel/FilterPanel';
 import { useFiltersStore } from '../state/filtersStore';
 import { convertDateFiltersToEmailPeriod, getDatePeriodDescription } from '../utils/dateFilterConverter';
@@ -7,38 +7,102 @@ import { convertDateFiltersToEmailPeriod, getDatePeriodDescription } from '../ut
 interface EmailReportJobFormProps {
   onSubmit: (job: EmailReportJobCreate) => Promise<void>;
   onCancel: () => void;
+  prompts: {
+    summary: EmailReportPrompt[];
+    social: EmailReportPrompt[];
+  };
+  defaultSummaryPromptId?: string;
+  defaultSocialPromptId?: string;
+  initialJob?: EmailReportJob | null;
 }
 
-export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit, onCancel }) => {
+const formatTimeForInput = (value?: string | null) => {
+  if (!value) return '09:00';
+  if (value.length >= 5) return value.slice(0, 5);
+  return value;
+};
+
+export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({
+  onSubmit,
+  onCancel,
+  prompts,
+  defaultSummaryPromptId,
+  defaultSocialPromptId,
+  initialJob
+}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Basic info
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [includeSocialInsights, setIncludeSocialInsights] = useState(true);
 
-  // Recipients
   const [recipientEmailsText, setRecipientEmailsText] = useState('');
 
-  // Schedule
   const [scheduleType, setScheduleType] = useState<'manual' | 'daily' | 'weekly' | 'monthly'>('weekly');
-  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState(1); // Monday
+  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState(1);
   const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState(1);
   const [scheduleTime, setScheduleTime] = useState('09:00');
 
-  // Get filters from global store (managed by FilterPanel)
+  const [summaryPromptId, setSummaryPromptId] = useState('');
+  const [socialPromptId, setSocialPromptId] = useState('');
+  const [promptInitialized, setPromptInitialized] = useState(false);
+
   const { pendingFilters } = useFiltersStore();
 
-  // Convert filter panel date to email report format
-  const [convertedPeriod, setConvertedPeriod] = useState(() =>
-    convertDateFiltersToEmailPeriod(pendingFilters)
-  );
+  const [convertedPeriod, setConvertedPeriod] = useState(() => {
+    const { date_range, ...filtersWithoutDateRange } = pendingFilters;
+    return convertDateFiltersToEmailPeriod(filtersWithoutDateRange);
+  });
 
-  // Watch for changes to filter panel dates and update converted period
   useEffect(() => {
-    const converted = convertDateFiltersToEmailPeriod(pendingFilters);
+    const { date_range, ...filtersWithoutDateRange } = pendingFilters;
+    const converted = convertDateFiltersToEmailPeriod(filtersWithoutDateRange);
     setConvertedPeriod(converted);
   }, [pendingFilters.period, pendingFilters.date_range]);
+
+  useEffect(() => {
+    if (initialJob) {
+      setName(initialJob.name || '');
+      setDescription(initialJob.description || '');
+      setIncludeSocialInsights(initialJob.include_social_insights ?? true);
+      setRecipientEmailsText((initialJob.recipient_emails || []).join('\n'));
+      setScheduleType(initialJob.schedule_type || 'weekly');
+      setScheduleDayOfWeek(initialJob.schedule_day_of_week ?? 1);
+      setScheduleDayOfMonth(initialJob.schedule_day_of_month ?? 1);
+      setScheduleTime(formatTimeForInput(initialJob.schedule_time));
+    } else {
+      setName('');
+      setDescription('');
+      setIncludeSocialInsights(true);
+      setRecipientEmailsText('');
+      setScheduleType('weekly');
+      setScheduleDayOfWeek(1);
+      setScheduleDayOfMonth(1);
+      setScheduleTime('09:00');
+    }
+    setPromptInitialized(false);
+  }, [initialJob]);
+
+  useEffect(() => {
+    if (promptInitialized) return;
+
+    const summaryDefault = initialJob?.summary_prompt_id
+      || defaultSummaryPromptId
+      || prompts.summary.find(p => p.is_default)?.id
+      || prompts.summary[0]?.id
+      || '';
+
+    const socialDefault = initialJob?.social_prompt_id
+      || defaultSocialPromptId
+      || prompts.social.find(p => p.is_default)?.id
+      || prompts.social[0]?.id
+      || '';
+
+    setSummaryPromptId(summaryDefault);
+    setSocialPromptId(socialDefault);
+    setPromptInitialized(true);
+  }, [promptInitialized, initialJob, prompts, defaultSummaryPromptId, defaultSocialPromptId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,9 +110,8 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
     setLoading(true);
 
     try {
-      // Parse recipient emails
       const recipientEmails = recipientEmailsText
-        .split(/[,\n]/)
+        .split(/[\n,]/)
         .map(e => e.trim())
         .filter(e => e.length > 0);
 
@@ -56,14 +119,23 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
         throw new Error('At least one recipient email is required');
       }
 
-      // Use filters from FilterPanel (pendingFilters from store)
-      const filters = { ...pendingFilters };
+      const filters = {
+        ...pendingFilters
+      } as typeof pendingFilters & { min_date?: string; max_date?: string };
 
-      // Build job object using converted period from filter panel
+      delete filters.date_range;
+      delete filters.min_date;
+      delete filters.max_date;
+
+      const normalizedScheduleTime = scheduleTime.length === 5 && scheduleTime.includes(':')
+        ? `${scheduleTime}:00`
+        : scheduleTime;
+
       const job: EmailReportJobCreate = {
         name: name.trim(),
         description: description.trim() || undefined,
-        is_enabled: true,
+        is_enabled: initialJob?.is_enabled ?? true,
+        include_social_insights: includeSocialInsights,
         period_type: convertedPeriod.period_type,
         period_days: convertedPeriod.period_days,
         custom_start_date: convertedPeriod.custom_start_date,
@@ -73,16 +145,21 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
         schedule_type: scheduleType,
         schedule_day_of_week: scheduleType === 'weekly' ? scheduleDayOfWeek : undefined,
         schedule_day_of_month: scheduleType === 'monthly' ? scheduleDayOfMonth : undefined,
-        schedule_time: `${scheduleTime}:00`,
+        schedule_time: normalizedScheduleTime,
+        summary_prompt_id: summaryPromptId || undefined,
+        social_prompt_id: socialPromptId || undefined
       };
 
       await onSubmit(job);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create job');
+      setError(err instanceof Error ? err.message : 'Failed to save job');
     } finally {
       setLoading(false);
     }
   };
+
+  const summaryPrompts = prompts.summary;
+  const socialPrompts = prompts.social;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -116,6 +193,77 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
               placeholder="Optional description of this report"
             />
           </div>
+
+          <div className="flex items-start">
+            <div className="flex items-center h-5">
+              <input
+                id="include-social-insights"
+                type="checkbox"
+                checked={includeSocialInsights}
+                onChange={e => setIncludeSocialInsights(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+            </div>
+            <div className="ml-3">
+              <label htmlFor="include-social-insights" className="text-sm font-medium text-gray-700">
+                Include Social Media Analysis
+              </label>
+              <p className="text-xs text-gray-500 mt-1">
+                Add AI-powered analysis of social media posts and conversations (recommended)
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Prompt Selection */}
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Prompt Templates</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Executive Summary Prompt
+            </label>
+            <select
+              value={summaryPromptId}
+              onChange={e => setSummaryPromptId(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            >
+              {summaryPrompts.length === 0 && <option value="">No prompts available</option>}
+              {summaryPrompts.map(prompt => (
+                <option key={prompt.id} value={prompt.id}>
+                  {prompt.name}{prompt.is_default ? ' (Default)' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-gray-500">
+              This prompt controls the structure of the AI-generated executive summary.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Social Insights Prompt
+            </label>
+            <select
+              value={socialPromptId}
+              onChange={e => setSocialPromptId(e.target.value)}
+              disabled={!includeSocialInsights}
+              className={`w-full rounded-md border px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 ${
+                includeSocialInsights ? 'border-gray-300 bg-white' : 'border-gray-200 bg-gray-100 text-gray-500'
+              }`}
+            >
+              {socialPrompts.length === 0 && <option value="">No prompts available</option>}
+              {socialPrompts.map(prompt => (
+                <option key={prompt.id} value={prompt.id}>
+                  {prompt.name}{prompt.is_default ? ' (Default)' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-gray-500">
+              Defines how the AI summarizes social media narratives. Disabled when social insights are off.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -127,7 +275,6 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
           The date range selected below will determine which events are included in the report.
         </p>
 
-        {/* Display current period selection */}
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="flex items-center gap-2 text-sm">
             <span className="font-medium text-blue-900">Report Period:</span>
@@ -161,6 +308,9 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
       {/* Schedule */}
       <div>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Schedule</h3>
+        <p className="text-sm text-gray-600 mb-4">
+          Specify how often this report should be automatically generated and sent.
+        </p>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Schedule Type</label>
@@ -181,7 +331,7 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
               <label className="block text-sm font-medium text-gray-700 mb-1">Day of Week</label>
               <select
                 value={scheduleDayOfWeek}
-                onChange={e => setScheduleDayOfWeek(parseInt(e.target.value))}
+                onChange={e => setScheduleDayOfWeek(parseInt(e.target.value, 10))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               >
                 <option value={0}>Sunday</option>
@@ -203,7 +353,7 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
                 min="1"
                 max="31"
                 value={scheduleDayOfMonth}
-                onChange={e => setScheduleDayOfMonth(parseInt(e.target.value))}
+                onChange={e => setScheduleDayOfMonth(parseInt(e.target.value, 10))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -223,14 +373,12 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
         </div>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <p className="text-red-800 text-sm">{error}</p>
         </div>
       )}
 
-      {/* Buttons */}
       <div className="flex gap-3 justify-end pt-4 border-t">
         <button
           type="button"
@@ -248,7 +396,7 @@ export const EmailReportJobForm: React.FC<EmailReportJobFormProps> = ({ onSubmit
           {loading && (
             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
           )}
-          Create Report Job
+          {initialJob ? 'Save Changes' : 'Create Report'}
         </button>
       </div>
     </form>

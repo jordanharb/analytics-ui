@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Instagram Media Downloader - Optimized Version
-Downloads media files from Instagram posts and stores them in Supabase storage bucket.
+Instagram Media Downloader - Optimized Version with R2 Storage
+Downloads media files from Instagram posts and stores them in Cloudflare R2.
 Updates the database with offline_image_url links.
 
 Optimizations:
-- Efficient bucket file checking using direct API calls
+- Efficient R2 file checking using storage abstraction
+- Direct table queries for accurate post_id handling
 - URL validation before download attempts
 - Circuit breaker for expired URL domains
 - Handles posts with no offline_media_url, BROKEN, or other non-URL values
@@ -39,6 +40,7 @@ from collections import defaultdict
 import time
 
 from utils.database import get_supabase
+from automation.utils.storage import upload_media, get_media_url, media_exists, list_media
 
 class InstagramMediaDownloader:
     def __init__(self):
@@ -46,8 +48,8 @@ class InstagramMediaDownloader:
         self.bucket_name = 'instagram-media'
         self.existing_files = set()
         self.session = None
-        self.download_semaphore = asyncio.Semaphore(200)  # EXTREME: 200 concurrent downloads
-        self.upload_semaphore = asyncio.Semaphore(100)  # EXTREME: 100 concurrent uploads
+        self.download_semaphore = asyncio.Semaphore(100)  # 100 concurrent downloads (was working)
+        self.upload_semaphore = asyncio.Semaphore(50)  # 50 concurrent uploads (was working)
         self.bulk_updates = []  # Collect updates for bulk operation
         self.bulk_update_lock = asyncio.Lock()
         self.stats = {
@@ -63,12 +65,12 @@ class InstagramMediaDownloader:
         
     async def initialize(self):
         """Initialize async session and load existing files"""
-        # EXTREME connection limits for maximum speed
+        # Moderate connection limits with longer timeout to avoid rate limiting
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=5, connect=2),  # AGGRESSIVE: 5s total, 2s connect
+            timeout=aiohttp.ClientTimeout(total=60, connect=10),  # 60s total, 10s connect
             connector=aiohttp.TCPConnector(
-                limit=300,  # EXTREME: 300 total connections
-                limit_per_host=100,  # EXTREME: 100 per host
+                limit=150,  # 150 total connections
+                limit_per_host=50,  # 50 per host
                 ttl_dns_cache=300,  # Cache DNS for 5 minutes
                 enable_cleanup_closed=True,
                 force_close=True  # Force connection closure for speed
@@ -98,76 +100,55 @@ class InstagramMediaDownloader:
             return False
     
     async def load_existing_files(self):
-        """Load all existing files from the bucket efficiently"""
-        print(f"📂 Loading existing files from bucket '{self.bucket_name}'...")
-        
+        """Load all existing files from R2 storage efficiently"""
+        print(f"📂 Loading existing files from R2 storage...")
+
         try:
-            all_files = []
-            limit = 1000
-            offset = 0
-            
-            while True:
-                result = self.supabase.storage.from_(self.bucket_name).list(
-                    path='',
-                    options={
-                        'limit': limit,
-                        'offset': offset
-                    }
-                )
-                
-                if not result:
-                    break
-                    
-                all_files.extend(result)
-                
-                if len(result) < limit:
-                    break
-                    
-                offset += limit
-                print(f"  📄 Loaded {len(all_files)} files so far...")
-            
-            # Extract just the filenames
-            self.existing_files = {
-                file['name'] for file in all_files 
-                if isinstance(file, dict) and 'name' in file
-            }
-            
-            print(f"✅ Loaded {len(self.existing_files)} existing files from bucket")
-            
+            # Use the storage abstraction to list files
+            all_files = list_media(prefix='', max_keys=10000)
+
+            # Files are already just filenames from list_media
+            self.existing_files = set(all_files)
+
+            print(f"✅ Loaded {len(self.existing_files)} existing files from R2")
+
         except Exception as e:
-            print(f"❌ Error loading existing files: {e}")
+            print(f"❌ Error loading existing files from R2: {e}")
             self.existing_files = set()
     
     async def get_posts_needing_download(self) -> List[Dict]:
-        """Get all Instagram posts that need media download - OPTIMIZED with RPC"""
-        print("🔍 Finding Instagram posts needing media download (RPC)...")
-
+        """Get all Instagram posts that need media download - OPTIMIZED with DB filtering"""
+        print("🔍 Finding Instagram posts needing media download (PRE-FILTERED)...")
+        
         try:
-            # Use RPC function for optimized query (excludes EXPIRED posts)
-            result = self.supabase.rpc('get_posts_needing_media', {'batch_limit': 10000}).execute()
-
-            if not result.data:
-                return []
-
-            # Transform RPC result to match expected format
+            # OPTIMIZATION: Filter directly in database query
             all_posts = []
-            for row in result.data:
-                # Parse media_url as JSON if it's a string
-                media_url = row['media_url']
-                if isinstance(media_url, str):
-                    try:
-                        import json
-                        media_urls = json.loads(media_url)
-                    except:
-                        media_urls = [media_url] if media_url else []
-                else:
-                    media_urls = media_url if media_url else []
-
-                all_posts.append({
-                    'id': row['post_id'],
-                    'offline_media_url': media_url,
-                    'media_urls': media_urls
-                })
+            batch_size = 1000
+            offset = 0
+            
+            while True:
+                # Query ONLY posts that actually need download
+                result = self.supabase.table('v2_social_media_posts')\
+                    .select('id, post_id, media_urls, offline_image_url, created_at')\
+                    .eq('platform', 'instagram')\
+                    .not_.is_('media_urls', 'null')\
+                    .or_("offline_image_url.is.null,offline_image_url.in.(BROKEN,ERROR,EXPIRED)")\
+                    .order('created_at', desc=True)\
+                    .range(offset, offset + batch_size - 1)\
+                    .execute()
+                
+                if not result.data:
+                    break
+                
+                # All results already need download (pre-filtered)
+                all_posts.extend(result.data)
+                
+                print(f"  📊 Found {len(all_posts)} posts needing download...")
+                
+                if len(result.data) < batch_size:
+                    break
+                    
+                offset += batch_size
             
             print(f"✅ Found {len(all_posts)} posts needing media download")
             return all_posts
@@ -202,10 +183,21 @@ class InstagramMediaDownloader:
         """Download media from URL. Returns (content, is_expired)"""
         domain = urlparse(url).netloc
         print(f"  📥 Downloading {filename} from {domain}...")
-        
+
+        # Use browser headers to avoid being blocked by Instagram CDN
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.instagram.com/',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site'
+        }
+
         async with self.download_semaphore:
             try:
-                async with self.session.get(url) as response:
+                async with self.session.get(url, headers=headers) as response:
                     if response.status == 200:
                         content = await response.read()
                         print(f"  ✅ Downloaded {filename} ({len(content):,} bytes)")
@@ -227,63 +219,49 @@ class InstagramMediaDownloader:
                 return None, False
     
     async def flush_bulk_updates(self):
-        """Flush all pending bulk updates to database in a single RPC call"""
+        """Flush all pending bulk updates to database"""
         if not self.bulk_updates:
             return
 
-        try:
-            print(f"  💾 Bulk updating {len(self.bulk_updates)} posts via RPC...")
+        print(f"  💾 Updating {len(self.bulk_updates)} posts...")
 
-            # Convert to JSONB format for RPC
-            import json
-            updates_jsonb = json.dumps(self.bulk_updates)
+        # Do individual updates synchronously (Supabase Python client is sync)
+        success_count = 0
+        for update in self.bulk_updates:
+            try:
+                self.supabase.table('v2_social_media_posts')\
+                    .update({'offline_image_url': update['offline_image_url']})\
+                    .eq('id', update['id'])\
+                    .execute()
+                success_count += 1
+            except Exception as e:
+                print(f"  ❌ Error updating {update['id']}: {str(e)[:50]}")
 
-            # Call bulk update RPC function (single query for all updates)
-            result = self.supabase.rpc('bulk_update_post_images', {'updates': updates_jsonb}).execute()
-
-            update_count = result.data if result.data else 0
-            print(f"  ✅ Bulk updated {update_count} posts successfully")
-
-            # Clear the bulk updates
-            self.bulk_updates = []
-
-        except Exception as e:
-            print(f"  ❌ Error in bulk update: {str(e)[:200]}")
-            print(f"  🔄 Falling back to individual updates...")
-            # Fall back to individual updates only if RPC fails
-            for update in self.bulk_updates:
-                try:
-                    self.supabase.table('v2_social_media_posts')\
-                        .update({'offline_image_url': update['offline_image_url']})\
-                        .eq('id', update['id'])\
-                        .execute()
-                except:
-                    pass
-            self.bulk_updates = []
+        print(f"  ✅ Updated {success_count}/{len(self.bulk_updates)} posts")
+        self.bulk_updates = []
     
     async def upload_to_bucket(self, filename: str, content: bytes) -> Optional[str]:
-        """Upload file to Supabase bucket"""
+        """Upload file to R2 storage"""
         async with self.upload_semaphore:
             try:
-                # Upload to bucket
-                result = self.supabase.storage.from_(self.bucket_name).upload(
-                    file=content,
-                    path=filename,
-                    file_options={"content-type": "image/jpeg"}
-                )
-                
-                # Get public URL
-                public_url = self.supabase.storage.from_(self.bucket_name).get_public_url(filename)
+                # Check if file already exists
+                if media_exists(filename):
+                    # File already exists, return its URL
+                    public_url = get_media_url(filename)
+                    return public_url
+
+                # Upload to R2 using storage abstraction
+                public_url = upload_media(content, filename, content_type="image/jpeg")
                 return public_url
-                
+
             except Exception as e:
                 error_msg = str(e)
-                if 'duplicate' in error_msg.lower():
+                if 'duplicate' in error_msg.lower() or 'already exists' in error_msg.lower():
                     # File already exists, get its URL
-                    public_url = self.supabase.storage.from_(self.bucket_name).get_public_url(filename)
+                    public_url = get_media_url(filename)
                     return public_url
                 else:
-                    print(f"  ❌ Error uploading {filename}: {error_msg[:100]}")
+                    print(f"  ❌ Error uploading {filename} to R2: {error_msg[:100]}")
                     return None
     
     async def process_post(self, post: Dict) -> bool:
@@ -306,12 +284,12 @@ class InstagramMediaDownloader:
             valid_url_count += 1
             filename = self.get_filename_for_url(url, post_id, index)
             
-            # Skip if already in bucket
+            # Skip if already in R2 storage
             if filename in self.existing_files:
-                public_url = self.supabase.storage.from_(self.bucket_name).get_public_url(filename)
+                public_url = get_media_url(filename)
                 downloaded_urls.append(public_url)
                 self.stats['media_skipped'] += 1
-                print(f"  ✓ {filename} already in bucket")
+                print(f"  ✓ {filename} already in R2")
                 continue
             
             # Download media
@@ -384,31 +362,48 @@ class InstagramMediaDownloader:
         return False
     
     async def process_batch(self, posts: List[Dict], batch_num: int, total_batches: int):
-        """Process a batch of posts concurrently"""
+        """Process a batch of posts concurrently, with rate limiting sub-batches"""
         print(f"\n📦 Processing batch {batch_num}/{total_batches} ({len(posts)} posts)...")
-        
-        tasks = []
-        for post in posts:
-            task = self.process_post(post)
-            tasks.append(task)
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
+        # Process in sub-batches of 50 with 1-second delays to smooth network load
+        sub_batch_size = 50
+        all_results = []
+
+        for i in range(0, len(posts), sub_batch_size):
+            sub_batch = posts[i:i + sub_batch_size]
+            sub_batch_num = (i // sub_batch_size) + 1
+            total_sub_batches = (len(posts) + sub_batch_size - 1) // sub_batch_size
+
+            print(f"  └─ Sub-batch {sub_batch_num}/{total_sub_batches} ({len(sub_batch)} posts)...")
+
+            tasks = []
+            for post in sub_batch:
+                task = self.process_post(post)
+                tasks.append(task)
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_results.extend(results)
+
+            # Add 1-second delay between sub-batches to smooth network usage
+            if i + sub_batch_size < len(posts):
+                print(f"  └─ ⏳ Waiting 1 second before next sub-batch...")
+                await asyncio.sleep(1)
+
         # Count successes
-        success_count = sum(1 for r in results if r is True)
-        error_count = sum(1 for r in results if isinstance(r, Exception))
-        
+        success_count = sum(1 for r in all_results if r is True)
+        error_count = sum(1 for r in all_results if isinstance(r, Exception))
+
         if error_count > 0:
             print(f"  ⚠️ Batch {batch_num}: {success_count} succeeded, {error_count} errors")
         else:
             print(f"  ✅ Batch {batch_num}: {success_count} posts updated")
     
-    async def run(self, batch_size: int = 500, max_posts: Optional[int] = None):
-        """Main function to download media for all posts needing it - ULTRA TURBO MODE"""
-        print("🚀 Starting Instagram Media Downloader (ULTRA TURBO MODE)\n")
+    async def run(self, batch_size: int = 250, max_posts: Optional[int] = None):
+        """Main function to download media for all posts needing it"""
+        print("🚀 Starting Instagram Media Downloader\n")
         print(f"⚡ Batch size: {batch_size} concurrent operations")
-        print(f"🔥 Max connections: 300 total, 100 per host")
-        print(f"💨 Concurrent downloads: 200")
+        print(f"🔥 Max connections: 150 total, 50 per host")
+        print(f"💨 Concurrent downloads: 100")
         print(f"📦 Bulk updates: Every 100 posts")
         
         try:
@@ -484,8 +479,8 @@ async def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=500,
-        help="Number of posts to process concurrently (default: 500 ULTRA MODE)"
+        default=250,
+        help="Number of posts to process concurrently (default: 250)"
     )
     parser.add_argument(
         "--max-posts",

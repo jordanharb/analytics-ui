@@ -7,9 +7,10 @@ import { DateRangeFilter } from './DateRangeFilter';
 interface FilterPanelProps {
   className?: string;
   onClose?: () => void;
+  hideDateFilter?: boolean; // Hide date filter when dates are controlled elsewhere (e.g., email reports)
 }
 
-export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClose }) => {
+export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClose, hideDateFilter = false }) => {
   const {
     pendingFilters,
     filterOptions,
@@ -157,19 +158,21 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
       {/* Scrollable Content */}
       <div className="flex-1 min-h-0 p-6 space-y-6 overflow-y-auto scrollbar-thin">
 
-        {/* Date Range */}
-        <DateRangeFilter
-          value={pendingFilters.period || pendingFilters.date_range}
-          onChange={(value) => {
-            if (typeof value === 'string') {
-              setFilter('period', value as any);
-              setFilter('date_range', undefined);
-            } else {
-              setFilter('date_range', value);
-              setFilter('period', undefined);
-            }
-          }}
-        />
+        {/* Date Range - Hide when dates are controlled externally (e.g., email reports) */}
+        {!hideDateFilter && (
+          <DateRangeFilter
+            value={pendingFilters.period || pendingFilters.date_range}
+            onChange={(value) => {
+              if (typeof value === 'string') {
+                setFilter('period', value as any);
+                setFilter('date_range', undefined);
+              } else {
+                setFilter('date_range', value);
+                setFilter('period', undefined);
+              }
+            }}
+          />
+        )}
 
         {/* Confidence Score */}
         <div className="filter-group">

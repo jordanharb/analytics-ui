@@ -28,3 +28,13 @@ dist-ssr
 .env.local
 .env.production
 .env.development
+
+# Data directories (generated output, not source code)
+data/output/
+data/raw_*.json
+exports/
+*.db
+
+# Python cache
+__pycache__/
+*.pyc

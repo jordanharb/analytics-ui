@@ -54,6 +54,48 @@ from config.settings import (
 # Override MODEL_NAME for Flash version
 MODEL_NAME = 'gemini-2.5-flash'
 
+PROMPT_TEMPLATE_PATH = REPO_ROOT / 'common' / 'automation' / 'default_prompt_template.txt'
+PROMPT_TOKEN_TOOL_INSTRUCTIONS = '{{TOOL_INSTRUCTIONS}}'
+PROMPT_TOKEN_ACTOR_BIO = '{{ACTOR_BIO_SECTION}}'
+PROMPT_TOKEN_EXISTING_SLUGS = '{{EXISTING_SLUGS_SECTION}}'
+PROMPT_TOKEN_CATEGORY_DEFINITIONS = '{{CATEGORY_TAG_DEFINITIONS}}'
+PROMPT_TOKEN_ALLOWED_TAGS = '{{ALLOWED_CATEGORY_TAGS}}'
+FINAL_INSTRUCTION_HEADING = 'FINAL INSTRUCTION FOR THE MODEL:'
+FINAL_JSON_INSTRUCTIONS = (
+    "FINAL INSTRUCTION FOR THE MODEL:\n"
+    "After you have finished using all necessary tools, your final response MUST be a single, valid JSON object. "
+    "For best results, enclose this JSON object in a markdown code block like so:\n"
+    "```json\n"
+    "{\n"
+    "  \"events\": [\n"
+    "    {\n"
+    "      \"EventName\": \"Brief event title\",\n"
+    "      \"EventDescription\": \"Detailed description (2-4 sentences)\",\n"
+    "      \"EventDate\": \"YYYY-MM-DD\",\n"
+    "      \"Location\": \"Full venue/address\",\n"
+    "      \"City\": \"City name\",\n"
+    "      \"State\": \"State abbreviation (e.g., AZ)\",\n"
+    "      \"Participants\": \"All formal names, comma-separated\",\n"
+    "      \"CategoryTags\": [\"Tag1\", \"Tag2\", \"School:AZ_UniversityName\"],\n"
+    "      \"ConfidenceScore\": 0.85,\n"
+    "      \"Justification\": \"Explanation of why this event was extracted\",\n"
+    "      \"SourceIDs\": [\"uuid-from-post-1\", \"uuid-from-post-2\"],\n"
+    "      \"InstagramHandles\": [\"handle1\", \"handle2\"],\n"
+    "      \"TwitterHandles\": [\"handle1\", \"handle2\"]\n"
+    "    }\n"
+    "  ]\n"
+    "}\n"
+    "```\n"
+    "\n"
+    "CRITICAL REQUIREMENTS:\n"
+    "- SourceIDs: Include ALL post UUIDs (from post metadata) that mention this event\n"
+    "- InstagramHandles & TwitterHandles: Include ALL handles (without @) from ALL posts - author handles AND mentioned users\n"
+    "- Missing handles or SourceIDs will result in incomplete event linking\n"
+    "\n"
+    "Do NOT include any other text, conversation, or explanations before or after the JSON block in your final answer."
+)
+DEFAULT_PROMPT_FALLBACK = 'You are an expert data extraction assistant.'
+
 
 class MissingSourceIdsError(RuntimeError):
     """Raised when the model returns events without usable SourceIDs."""
@@ -162,37 +204,9 @@ class SimpleSlugManager:
         normalized_identifier = self.normalize_slug_identifier(identifier)
         normalized_full_slug = f"{parent}:{normalized_identifier}"
 
-        # Cache all dynamic slugs including institutions, churches and conferences
-        cacheable_parents = ['BallotMeasure', 'Recall', 'Primary', 'GeneralElection', 'LobbyingTopic', 'Institution', 'Church', 'Conference']
-
-        if parent in cacheable_parents:
-            # First check if it already exists (case-insensitive)
-            with self._lock:
-                if parent in self.existing_slugs:
-                    for existing_slug in self.existing_slugs[parent]:
-                        if existing_slug.lower() == normalized_full_slug.lower():
-                            # Already exists, no need to save
-                            return
-            
-            try:
-                with self._lock:
-                    self.supabase.table('dynamic_slugs').insert({
-                        'parent_tag': parent,
-                        'slug_identifier': normalized_identifier,
-                        'full_slug': normalized_full_slug
-                    }).execute()
-
-                    # Add to local cache
-                    if parent not in self.existing_slugs:
-                        self.existing_slugs[parent] = []
-                    if normalized_full_slug not in self.existing_slugs[parent]:
-                        self.existing_slugs[parent].append(normalized_full_slug)
-
-                print(f"  💾 Cached new slug: {normalized_full_slug}")
-            except Exception as e:
-                # Probably already exists, that's fine
-                if "duplicate" not in str(e).lower() and "unique constraint" not in str(e).lower():
-                    print(f"  ⚠️ Could not cache slug {normalized_full_slug}: {e}")
+        # Previously cached slugs in the database, but this is now handled dynamically via Gemini.
+        # No database writes are required here anymore.
+        return
 
 class APIKeyManager:
     """
@@ -207,6 +221,9 @@ class APIKeyManager:
     def __init__(self, max_workers=None, cooldown_seconds: float | None = None):
         self.api_keys = []
         self.workers = []
+        self.exhausted_keys = set()  # Track keys that hit daily limit
+        self.current_key_index = 0  # Track which key we're using
+
         # Allow override of per-key cooldown (seconds between requests)
         try:
             env_cooldown = float(os.getenv('API_WORKER_COOLDOWN_SECONDS', '0') or '0')
@@ -214,15 +231,9 @@ class APIKeyManager:
             env_cooldown = 0.0
         self.min_delay = float(cooldown_seconds) if cooldown_seconds is not None else (env_cooldown if env_cooldown > 0 else 60.0)
 
-        # If max_workers not specified, check environment variable
-        if max_workers is None:
-            env_max_workers = os.getenv('MAX_WORKERS')
-            if env_max_workers:
-                try:
-                    max_workers = int(env_max_workers)
-                    print(f"🔧 Using MAX_WORKERS from .env: {max_workers}")
-                except ValueError:
-                    print(f"⚠️ Invalid MAX_WORKERS value in .env: {env_max_workers}. Using all available workers.")
+        # Force single worker mode for API key rotation on rate limits
+        max_workers = 1
+        print(f"🔧 Using single worker mode with automatic API key rotation on rate limits")
 
         # Validate max_workers parameter
         if max_workers is not None and max_workers < 1:
@@ -273,7 +284,7 @@ class APIKeyManager:
                     'last_request_time': 0,
                     'generation_config': types.GenerationConfig(
                         response_mime_type="application/json",
-                        max_output_tokens=1000000,
+                        max_output_tokens=60000,
                         temperature=0.2
                     )
                 }
@@ -313,6 +324,41 @@ class APIKeyManager:
         worker['last_request_time'] = time.time()
         worker['requests_made'] += 1
 
+    def mark_key_exhausted(self, api_key):
+        """Mark an API key as having hit its daily limit"""
+        self.exhausted_keys.add(api_key)
+        print(f"  ⛔ API key ...{api_key[-8:]} marked as exhausted (daily limit reached)")
+        print(f"  📊 Exhausted keys: {len(self.exhausted_keys)}/{len(self.api_keys)}")
+
+    def all_keys_exhausted(self):
+        """Check if all API keys have been exhausted"""
+        return len(self.exhausted_keys) >= len(self.api_keys)
+
+    def rotate_to_next_key(self):
+        """Rotate to the next available API key that hasn't hit daily limit"""
+        attempts = 0
+        max_attempts = len(self.api_keys)
+
+        while attempts < max_attempts:
+            # Try next key in sequence
+            self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+            next_key = self.api_keys[self.current_key_index]
+
+            # Check if this key is not exhausted
+            if next_key not in self.exhausted_keys:
+                print(f"  🔄 Rotating to API key {self.current_key_index + 1} (...{next_key[-8:]})")
+                # Reinitialize the worker with the new key
+                worker = self.workers[0]  # Single worker mode
+                genai.configure(api_key=next_key)
+                worker['model'] = genai.GenerativeModel(MODEL_NAME)
+                worker['api_key'] = next_key
+                return True
+
+            attempts += 1
+
+        # All keys are exhausted
+        return False
+
 class EventProcessor:
     def __init__(self, job_id=None, cancellation_callback=None, stats_callback=None, max_workers=None, cooldown_seconds: float | None = None):
         # Initialize API key manager with optional worker limit and cooldown override
@@ -330,6 +376,14 @@ class EventProcessor:
 
         # Initialize slug manager
         self.slug_manager = SimpleSlugManager(self.supabase)
+
+        # Prompt template configuration
+        self.default_prompt_template = self._read_default_prompt_template()
+        self.prompt_template = self.default_prompt_template
+        self.prompt_template_name = 'Default Event Prompt'
+        self.prompt_template_id = None
+        self.prompt_supports_tools = True
+        self._load_prompt_template()
 
         # Job tracking and cancellation support
         self.job_id = job_id
@@ -411,18 +465,17 @@ class EventProcessor:
         # Tool 2: Search dynamic slugs with all variations
         self.search_dynamic_slugs_function = types.FunctionDeclaration(
             name="search_dynamic_slugs",
-            description="Search for existing dynamic slugs. Returns ALL matching slugs regardless of parent_tag type (School, Church, Election, LobbyingTopic, BallotMeasure, Conference) to help identify the correct slug type.",
+            description="Search for existing dynamic slugs for Schools, Churches, Elections, Ballot Measures, or Conferences. Returns matches across ALL parent_tag types. ONLY use for: school names, church names, candidate names, ballot measure names, or conference names. DO NOT use for cities, states, or generic locations.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "search_term": {"type": "string", "description": "Term to search for in slug identifiers (e.g., 'Julie_Spilsbury', 'ASU', 'Mesa')"},
-                    "parent_tag_filter": {
-                        "type": "string", 
-                        "description": "Optional: filter by specific parent tag type",
-                        "enum": ["Institution", "BallotMeasure", "Recall", "Conference", "LobbyingTopic", "Primary", "GeneralElection"]
+                    "search_terms": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of terms to search for (e.g., ['Arizona_State_University', 'Kari_Lake', 'AmFest_2024']). ONLY include school/church/candidate/ballot/conference names - NOT cities or states."
                     }
                 },
-                "required": ["search_term"]
+                "required": ["search_terms"]
             }
         )
         
@@ -678,86 +731,58 @@ class EventProcessor:
             print(f"      ❌ Error in fallback text search: {e}")
             return []
 
-    def handle_search_dynamic_slugs(self, search_term, parent_tag_filter=None):
-        """Search ALL dynamic slugs, showing all parent_tag types for disambiguation"""
-        max_retries = 3
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                grouped = {}
-                
-                # Search in dynamic_slugs table
-                query = self.supabase.table('dynamic_slugs').select(
-                    'parent_tag, slug_identifier, full_slug'
-                )
-                
-                # Escape special characters for PostgreSQL ilike operator
-                # Escape % and _ which are wildcards in SQL LIKE/ILIKE
-                escaped_term = search_term.replace('%', '\\%').replace('_', '\\_')
-                
-                # Try different search strategies based on retry count
-                if retry_count == 0:
-                    # First try: wildcard search (most flexible)
-                    query = query.ilike('slug_identifier', f'%{escaped_term}%')
-                elif retry_count == 1:
-                    # Second try: prefix search (less flexible, more reliable)
-                    query = query.ilike('slug_identifier', f'{escaped_term}%')
-                else:
-                    # Final try: exact match (most reliable)
-                    query = query.ilike('slug_identifier', escaped_term)
-                
-                # Optional filter by parent_tag
-                if parent_tag_filter:
-                    query = query.eq('parent_tag', parent_tag_filter)
-                
-                result = query.execute()
-                
-                # If we get here, the query succeeded, break out of retry loop
-                break
-                
-            except Exception as e:
-                retry_count += 1
-                error_msg = str(e).lower()
-                
-                # Check for Cloudflare errors or server issues  
-                if ('cloudflare' in error_msg or 
-                    'worker threw exception' in error_msg or 
-                    'json could not be generated' in error_msg or
-                    'server disconnected' in error_msg or 
-                    'connection' in error_msg):
-                    
-                    if retry_count < max_retries:
-                        print(f"      ⚠️ Cloudflare/connection error in handle_search_dynamic_slugs (attempt {retry_count}/{max_retries}), trying simpler query...")
-                        time.sleep(1 + retry_count)  # Brief backoff
-                        
-                        continue
-                    else:
-                        print(f"      ⚠️ Cloudflare errors prevent slug search for '{search_term}' - continuing without dynamic slug matches")
-                        return {}
-                else:
-                    print(f"      ❌ Error in handle_search_dynamic_slugs: {e}")
-                    return {}
-        
+    def handle_search_dynamic_slugs(self, search_terms):
+        """Search dynamic slugs using batch RPC function - accepts array of search terms"""
         try:
-            # Group results by slug_identifier to show all parent_tag variations
-            for row in result.data or []:
+            # Ensure search_terms is a list
+            if not isinstance(search_terms, list):
+                search_terms = [search_terms]
+
+            if not search_terms:
+                return {}
+
+            # Call the batch search RPC function
+            result = self.supabase.rpc('search_dynamic_slugs_batch', {
+                'search_terms': search_terms
+            }).execute()
+
+            if not result.data:
+                print(f"      🔍 No slugs found for {len(search_terms)} search term(s)")
+                return {}
+
+            # Group results by search_term, then by slug_identifier
+            grouped = {}
+            for row in result.data:
+                search_term = row['search_term']
+                if not row['full_slug']:  # Skip null matches (no slug found for this term)
+                    continue
+
+                if search_term not in grouped:
+                    grouped[search_term] = {}
+
                 identifier = row['slug_identifier']
-                if identifier not in grouped:
-                    grouped[identifier] = []
-                grouped[identifier].append({
+                if identifier not in grouped[search_term]:
+                    grouped[search_term][identifier] = []
+
+                grouped[search_term][identifier].append({
                     'parent_tag': row['parent_tag'],
                     'full_slug': row['full_slug']
                 })
-            
-            # No longer need to search institution_slugs table since Schools and Churches 
-            # are now in dynamic_slugs with parent_tag='School' or 'Church'
-            
-            print(f"      🔍 Found {len(grouped)} unique slug identifiers with {sum(len(v) for v in grouped.values())} total variations")
+
+            # Calculate totals
+            total_terms_with_matches = len(grouped)
+            total_unique_identifiers = sum(len(identifiers) for identifiers in grouped.values())
+            total_variations = sum(
+                len(variations)
+                for term_results in grouped.values()
+                for variations in term_results.values()
+            )
+
+            print(f"      🔍 Found slugs for {total_terms_with_matches}/{len(search_terms)} terms ({total_unique_identifiers} identifiers, {total_variations} variations)")
             return grouped
-            
+
         except Exception as e:
-            print(f"      ❌ Error in handle_search_dynamic_slugs: {e}")
+            print(f"      ❌ Error in batch slug search: {e}")
             return {}
 
     def handle_link_posts_to_event(self, event_id, post_ids, reason):
@@ -962,6 +987,193 @@ class EventProcessor:
                 except Exception as e:
                     print(f"⚠️ Error calling stats callback: {e}")
 
+    def _read_default_prompt_template(self) -> str:
+        try:
+            if PROMPT_TEMPLATE_PATH.exists():
+                return PROMPT_TEMPLATE_PATH.read_text(encoding='utf-8')
+        except Exception as exc:
+            print(f"⚠️ Failed to read default prompt template: {exc}")
+        return DEFAULT_PROMPT_FALLBACK
+
+    def _load_prompt_template(self):
+        try:
+            prompt_response = self.supabase.table('automation_prompts') \
+                .select('id, name, prompt_template, supports_tools') \
+                .eq('is_default', True) \
+                .order('updated_at', desc=True) \
+                .limit(1) \
+                .execute()
+
+            prompt_rows = prompt_response.data or []
+
+            if not prompt_rows:
+                prompt_response = self.supabase.table('automation_prompts') \
+                    .select('id, name, prompt_template, supports_tools') \
+                    .order('created_at') \
+                    .limit(1) \
+                    .execute()
+                prompt_rows = prompt_response.data or []
+
+            if not prompt_rows:
+                print('ℹ️ No automation prompts found; using default template')
+                self.prompt_template = self.default_prompt_template
+                self.prompt_supports_tools = True
+                self.prompt_template_id = None
+                return
+
+            prompt_row = prompt_rows[0]
+            template = prompt_row.get('prompt_template')
+            prompt_id = prompt_row.get('id')
+
+            if not template:
+                print(f"⚠️ Prompt {prompt_id} missing template text; falling back to default")
+                self.prompt_template = self.default_prompt_template
+            else:
+                self.prompt_template = template
+
+            self.prompt_template_id = prompt_id
+            self.prompt_template_name = prompt_row.get('name') or 'Automation Prompt'
+            self.prompt_supports_tools = bool(prompt_row.get('supports_tools', True))
+
+            print(f"📝 Loaded automation prompt '{self.prompt_template_name}' (supports_tools={self.prompt_supports_tools})")
+        except Exception as exc:
+            print(f"⚠️ Failed to load automation prompt from Supabase: {exc}")
+            self.prompt_template = self.default_prompt_template
+            self.prompt_supports_tools = True
+            self.prompt_template_id = None
+
+    def _format_category_sections(self, allowed_tags, tag_rules):
+        if not allowed_tags:
+            definitions = 'No active category tags configured.'
+            allowed = '[]'
+            return definitions, allowed
+
+        lines = []
+        for tag_name in allowed_tags:
+            rule = tag_rules.get(tag_name, 'No description')
+            lines.append(f"- **{tag_name}**: {rule}")
+
+        tag_list_str = ", ".join(f'"{tag}"' for tag in allowed_tags)
+        allowed = f"[{tag_list_str}]"
+        definitions = "\n".join(lines)
+        return definitions, allowed
+
+    def _format_actor_bio_section(self, actor_bio):
+        if not actor_bio:
+            return ''
+
+        lines = ["**ACTOR BIOGRAPHICAL INFORMATION:**", "Here is background information about actors who authored posts in this batch:\n"]
+        for name, info in actor_bio.items():
+            actor_type = info.get('type', 'unknown')
+            if DEBUG:
+                print(f"[DEBUG] Processing actor {name}: {actor_type}")
+
+            if actor_type == 'person':
+                lines.append(f"- **{info.get('full_name', name)}**: {info.get('primary_role', 'N/A')}")
+                if info.get('organizations'):
+                    lines.append(f"  Organizations: {'; '.join(info.get('organizations', []))}")
+                location = info.get('location') or f"{info.get('city', '')}, {info.get('state', '')}".strip(', ')
+                if location:
+                    lines.append(f"  Location: {location}")
+                if info.get('usernames'):
+                    lines.append(f"  Handles: {', '.join(info.get('usernames', []))}")
+                about_text = info.get('about')
+                if about_text:
+                    if len(about_text) > 200:
+                        about_text = about_text[:200] + '...'
+                    lines.append(f"  About: {about_text}")
+            elif actor_type == 'chapter':
+                lines.append(f"- **{info.get('name', name)}** (Chapter)")
+                location = info.get('location') or f"{info.get('city', '')}, {info.get('state', '')}".strip(', ')
+                if location:
+                    lines.append(f"  Location: {location}")
+                if info.get('about'):
+                    lines.append(f"  About: {info.get('about')}")
+                if info.get('usernames'):
+                    lines.append(f"  Handles: {', '.join(info.get('usernames', []))}")
+            elif actor_type == 'organization':
+                lines.append(f"- **{info.get('name', name)}** (Organization)")
+                if info.get('about'):
+                    lines.append(f"  About: {info.get('about')}")
+                location = info.get('location')
+                if location:
+                    lines.append(f"  Location: {location}")
+                if info.get('usernames'):
+                    lines.append(f"  Handles: {', '.join(info.get('usernames', []))}")
+            else:
+                lines.append(f"- **{info.get('display_name', name)}** (Unknown Actor Handle: @{name})")
+                bio_text = info.get('bio') or 'N/A'
+                if bio_text != 'N/A' and len(bio_text) > 200:
+                    bio_text = bio_text[:200] + '...'
+                lines.append(f"  Bio: {bio_text}")
+                lines.append(f"  Location: {info.get('location') or 'N/A'}")
+
+            lines.append('')
+
+        return "\n".join(lines).strip()
+
+    def _format_existing_slugs_section(self):
+        """Load a small sample of dynamic slugs to give Gemini examples without overwhelming the prompt"""
+        if not self.slug_manager.existing_slugs:
+            # Try to load a small sample
+            try:
+                result = self.supabase.table('dynamic_slugs').select(
+                    'parent_tag, full_slug'
+                ).limit(30).execute()
+
+                if result.data:
+                    # Group by parent_tag
+                    samples_by_parent = {}
+                    for row in result.data:
+                        parent = row['parent_tag']
+                        if parent not in samples_by_parent:
+                            samples_by_parent[parent] = []
+                        samples_by_parent[parent].append(row['full_slug'])
+
+                    # Format as compact list
+                    lines = ["**Small example sample of dynamic slugs:**"]
+                    for parent, slugs in samples_by_parent.items():
+                        lines.append(f"- **{parent}**: {', '.join(slugs[:5])}")  # Max 5 per parent
+
+                    return "\n".join(lines)
+            except Exception as e:
+                print(f"⚠️ Could not load slug examples: {e}")
+
+        return ''
+
+    def _render_prompt_template(self, sections: dict[str, str]) -> str:
+        template = (self.prompt_template or self.default_prompt_template or DEFAULT_PROMPT_FALLBACK).strip()
+
+        if FINAL_INSTRUCTION_HEADING in template:
+            template = template.split(FINAL_INSTRUCTION_HEADING, 1)[0].rstrip()
+
+        for token in [
+            PROMPT_TOKEN_TOOL_INSTRUCTIONS,
+            PROMPT_TOKEN_ACTOR_BIO,
+            PROMPT_TOKEN_EXISTING_SLUGS,
+            PROMPT_TOKEN_CATEGORY_DEFINITIONS,
+            PROMPT_TOKEN_ALLOWED_TAGS
+        ]:
+            template = template.replace(token, '').strip()
+
+        ordered_sections = [
+            sections.get('tool_instructions', ''),
+            sections.get('actor_bio', ''),
+            sections.get('existing_slugs', ''),
+            sections.get('category_definitions', ''),
+            sections.get('allowed_tags', ''),
+        ]
+
+        parts = [template] if template else []
+
+        for section in ordered_sections:
+            if section:
+                parts.append(section.strip())
+
+        parts.append(FINAL_JSON_INSTRUCTIONS.strip())
+
+        return "\n\n".join(part for part in parts if part).strip()
+
     def get_category_tags_from_supabase(self):
         """Load active category tags from database and existing slugs"""
         try:
@@ -993,8 +1205,8 @@ class EventProcessor:
                     allowed_tags.append(tag_name)
                     tag_rules[tag_name] = tag_rule
 
-            # Load existing slugs
-            self.slug_manager.load_existing_slugs(force_reload=True)
+            # Slugs are now loaded dynamically via search_dynamic_slugs function tool
+            # No need to preload them into memory
 
             print(f"Loaded {len(allowed_tags)} child category tags from Supabase")
             return allowed_tags, tag_rules
@@ -1965,41 +2177,41 @@ class EventProcessor:
             self.unknown_actors_lookup = {}
 
     def find_unknown_actor_by_username(self, username, platform):
-        """Find unknown actor ID by username and platform"""
+        """Find unknown actor ID by username and platform - query database directly"""
         try:
-            if not self.unknown_actors_lookup:
-                self.load_unknown_actors_lookup()
+            unknown_actors_table = 'v2_unknown_actors' if USE_V2_SCHEMA else 'unknown_actors'
 
-            lookup_key = f"{platform}:{username.lower()}"
-            return self.unknown_actors_lookup.get(lookup_key)
+            result = self.supabase.table(unknown_actors_table).select(
+                'id'
+            ).eq('detected_username', username.lower()).eq('platform', platform).limit(1).execute()
+
+            if result.data and len(result.data) > 0:
+                actor_id = result.data[0]['id']
+                print(f"         🔍 Found unknown actor: @{username} ({platform}) → {actor_id}")
+                return actor_id
+
+            return None
 
         except Exception as e:
             print(f"   ⚠️  Error finding unknown actor {username}: {e}")
             return None
 
     def find_unknown_actors_in_text(self, text):
-        """Find unknown actors mentioned in text using common patterns"""
+        """Find unknown actors mentioned in text using common patterns - query database directly"""
         try:
-            if not self.unknown_actors_lookup:
-                self.load_unknown_actors_lookup()
-
             found_actor_ids = []
             text_lower = text.lower()
 
             # Look for @username patterns
             import re
             username_patterns = re.findall(r'@([a-zA-Z0-9_]+)', text_lower)
+
+            # Try to find each username in unknown actors (try both platforms)
             for username in username_patterns:
                 for platform in ['twitter', 'instagram']:
-                    lookup_key = f"{platform}:{username}"
-                    if lookup_key in self.unknown_actors_lookup:
-                        found_actor_ids.append(self.unknown_actors_lookup[lookup_key])
-
-            # Look for direct username mentions (without @)
-            for lookup_key, actor_id in self.unknown_actors_lookup.items():
-                platform, username = lookup_key.split(':', 1)
-                if username in text_lower and len(username) > 3:  # Avoid short false matches
-                    found_actor_ids.append(actor_id)
+                    actor_id = self.find_unknown_actor_by_username(username, platform)
+                    if actor_id:
+                        found_actor_ids.append(actor_id)
 
             return list(set(found_actor_ids))  # Remove duplicates
 
@@ -2249,9 +2461,13 @@ class EventProcessor:
         try:
             unknown_actor_links = []
 
+            # Track what we're looking for
+            all_handles_checked = []
+
             # Check participants field for unknown actors
             if event_data.get('participants'):
                 participants_text = event_data['participants'].lower()
+                print(f"         🔍 Checking participants text for unknown actors: {participants_text[:100]}...")
                 unknown_actors = self.find_unknown_actors_in_text(participants_text)
                 for actor_id in unknown_actors:
                     unknown_actor_links.append({
@@ -2263,7 +2479,9 @@ class EventProcessor:
 
             # Check twitter_handles for unknown actors
             if event_data.get('twitter_handles'):
+                print(f"         🔍 Checking Twitter handles: {event_data['twitter_handles']}")
                 for handle in event_data['twitter_handles']:
+                    all_handles_checked.append(f"@{handle} (twitter)")
                     actor_id = self.find_unknown_actor_by_username(handle.lower(), 'twitter')
                     if actor_id:
                         unknown_actor_links.append({
@@ -2275,7 +2493,9 @@ class EventProcessor:
 
             # Check instagram_handles for unknown actors
             if event_data.get('instagram_handles'):
+                print(f"         🔍 Checking Instagram handles: {event_data['instagram_handles']}")
                 for handle in event_data['instagram_handles']:
+                    all_handles_checked.append(f"@{handle} (instagram)")
                     actor_id = self.find_unknown_actor_by_username(handle.lower(), 'instagram')
                     if actor_id:
                         unknown_actor_links.append({
@@ -3341,11 +3561,9 @@ class EventProcessor:
         """Build prompt with static rules but dynamic context via function tools"""
         if DEBUG:
             print(f"[DEBUG] Building tool-based system prompt with {len(allowed_tags)} tags")
-        
-        tag_list_str = ", ".join(f'"{tag}"' for tag in allowed_tags)
-        tag_rules_str = "\n".join([f'- **{tag}**: {tag_rules.get(tag, "No description")}' for tag in allowed_tags])
-        
-        # Tool usage instructions
+
+        category_definitions, allowed_tags_display = self._format_category_sections(allowed_tags, tag_rules)
+
         tool_instructions = """
 DYNAMIC CONTEXT RETRIEVAL:
 
@@ -3385,503 +3603,36 @@ REQUIRED WORKFLOW:
    - Similar names alone aren't enough without matching dates/locations
 7. Search for dynamic slugs before creating new ones
 8. Output only truly NEW events in the JSON format
-"""
-        
-        # Return the complete prompt without embedded context
-        return """
-You are an expert data extraction assistant focused on tracking real-world, in-person political and organizational activities of Turning Point USA and its affiliates. Your job is to accurately scrape and structure data from social media posts to support researchers. The primary research goals are to map TPUSA's youth-to-staff pipeline, document their field activities (who, what, where, when), identify which electoral races they are involved in, and understand how they use public conflicts to mobilize supporters and influence institutions.
+""".strip()
 
-{tool_instructions}
+        sections = {
+            'tool_instructions': tool_instructions,
+            'actor_bio': '',
+            'existing_slugs': '',
+            'category_definitions': f"CATEGORY TAG DEFINITIONS:\n{category_definitions}" if category_definitions else '',
+            'allowed_tags': f"ALLOWED CATEGORY TAGS:\n{allowed_tags_display}"
+        }
 
-A post must pass this gate or it is discarded.
-
-
-GATE (Activity Gate)
-The content describes one or more of the following real-world activities:
-
-High-Priority Electioneering: Any form of direct voter or citizen engagement. This includes canvassing, door-knocking, signature gathering, phone banking, or voter registration drives. Crucially, this includes informal descriptions. A post saying "out talking with Moms about the Mesa Recall" or "hitting the pavement for the campaign" IS a valid canvassing event.
-
-Organized Gatherings: A scheduled or completed in-person event/activity such as a rally, training session, chapter meeting, conference, or tabling on campus. Anything in person activity. 
-
-Official Engagements & Public Conflict:
-- An actor in an official capacity testifies at or attends a government meeting (e.g., school board, city council).
-- A significant public conflict where an actor in an official capacity is a principal organizer, instigator, or direct target of controversy or institutional sanction (e.g., chapter de-recognition, event cancellation). Casual media hot-takes, podcast interviews, or Fox News spots are not controversies.
-
-Official Digital Programming: Coordinated virtual events with a defined goal run by an official organization (e.g., PragerU virtual lesson launch).
-
-WHEN IN DOUBT, DO NOT EXTRACT: Your default action should be to ignore a post. Only extract an event if it unambiguously meets the criteria. An empty output {{ "events": [] }} is a perfectly valid and often correct response.
-
-CRITICAL INSTRUCTIONS:
-
-REAL-WORLD EVENTS ONLY: Extract only actual, physical gatherings or organized activities. IGNORE general political commentary, online arguments, or simple media appearances (TV, podcasts).
-
-CONFIDENCE SCORE NUANCE (Official vs. Social Capacity): You MUST adjust the ConfidenceScore based on the actor's role.
-- High Confidence (0.9-1.0): The actor is clearly participating in an official capacity for their organization (e.g., a TPUSA Field Rep running a TPUSA canvassing event, a chapter hosting a speaker). The event aligns with the organization's mission.
-- Lower Confidence (0.3-0.7): An affiliated actor is present at a political or social event, but it's unclear if they are acting in their official capacity. For example, a known TPUSA staffer attends a rally organized by a different, unaffiliated group. In this case, you should still extract the event but use a lower score to flag the ambiguity. If it is, for example, a TPUSA staffer at a social event with no clear mention of their professional capacity, it should be even lower. 
-
-MAINSTREAM NEWS EVENT PENALTY (IMPORTANT): 
-- Downgrade confidence (multiply by 0.7) for events that would be mainstream news:
-  * ANY event primarily about Trump administration activities or appointments  
-  * High-profile political figures at major venues (Trump at Mar-a-Lago, DeSantis at state events)
-  * Celebrity appearances or endorsements
-  * Major campaign rallies covered by national media
-  * White House events, Congressional hearings, or federal government activities
-  * Any "Trump welcomes X" or "Trump appoints Y" type events
-  
-- EXCEPTION: Conferences organized BY affiliated actors (AmericaFest, Student Action Summit, etc.) maintain normal confidence
-  
-- BOOST confidence (multiply by 1.2, cap at 1.0) for grassroots activities:
-  * Field representatives meeting with local churches or community groups
-  * Youth groups organizing local events  
-  * School board testimonies by parents or local activists
-  * Door-to-door canvassing in neighborhoods
-  * Small-scale voter registration at local venues
-  * Chapter meetings at schools
-  * Local activists training sessions
-  
-- The more LOCAL and GRASSROOTS the activity, the HIGHER the confidence
-- The more NATIONAL NEWS WORTHY, the LOWER the confidence
-- Ask yourself: "Is this about Trump administration news?" If yes, multiply confidence by 0.7
-- Ask yourself: "Would CNN/Fox News cover this?" If yes, multiply confidence by 0.7
-- Ask yourself: "Is this hyperlocal organizing work?" If yes, multiply confidence by 1.2 (cap at 1.0)
-
-CANVASSING & ELECTIONEERING PRIORITY (CRITICAL): This is the highest priority activity. These events CANNOT be missed.
-- Recognize Informal Activity: Posts do not need to announce a formal event. Photographic evidence of door-knocking (e.g., people with clipboards, wearing campaign shirts at a door) or descriptive text like "Just a couple of Moms out here in Mesa talking with other Moms about the Mesa Recall" are sufficient proof of a canvassing event. Treat these as valid events.
-- Assume Separate Events: Electioneering happens frequently. Posts on different days are ALWAYS separate events. Posts on the same day but mentioning different locations or actors should also be treated as separate events. When in doubt, create a separate entry.
-- Date Inference: For canvassing, the date of the event is the date the post was made, unless the post is explicitly promoting a future event with a specific date.
-
-ONE ROW PER UNIQUE EVENT: Each unique occurrence (defined by activity, date, and location) gets its own row. If an event series occurs over multiple days, each day is a unique event.
-
-SEPARATE MULTI-STATE EVENTS: If a single announcement promotes activity in multiple states/locations, create a SEPARATE event entry for EACH location.
-
-INTELLIGENT DATE RESOLUTION: If no exact date is in the text, infer the month and year from the post timestamp and set the day to "01", unless Rule #3 (Canvassing) applies.
-
-DYNAMIC SLUG CREATION: You MUST generate a dynamic slug for certain activities. 
-IMPORTANT: Use the search_dynamic_slugs tool to check for existing slugs first.
-- If a matching slug exists (even under a different parent_tag), use the existing one with the CORRECT parent_tag
-- If NO matching slug exists, CREATE A NEW ONE by including it in CategoryTags
-
-NAMING CONVENTIONS (follow these exactly):
-- Elections: Election:[State]_[Office]_[Candidate]_[Year] (e.g., Election:AZ_Senate_Kari_Lake_2024)
-  * Without candidate: Election:[State]_[Office]_[Year] (do NOT add "_General" - it's redundant)
-  * Special elections: add "_Special" (e.g., Election:PA_House_District_35_Special_2025)
-  * Recalls: add "_Recall" (e.g., Election:AZ_Mesa_City_Council_Recall_2025)
-- Ballot Measures: BallotMeasure:[State]_Prop[Number]_[Topic]_[Year] (e.g., BallotMeasure:AZ_Prop139_Abortion_2024)
-- Schools: School:[State]_[SchoolName] or School:[State]_[District]_[Topic] (e.g., School:AZ_University_of_Arizona, School:CA_LAUSD_Board_Election)
-- Churches: Church:[Name]_[City]_[State] (e.g., Church:Calvary_Chapel_Chino_Hills_CA)
-- Conferences: Conference:[Name]_[Year]_[Location] (e.g., Conference:TPUSA_AmFest_2024_Phoenix)
-- LobbyingTopic: LobbyingTopic:[Topic] (e.g., LobbyingTopic:abortion_rights, LobbyingTopic:school_choice)
-
-MANDATORY TAG COMBINATIONS:
-- If any event is at a school, you MUST include a School:[State]_[SchoolName] slug.
-- If any event is at a church, you MUST include a Church:[Name]_[City]_[State] slug.
-- If any Lobbying tag is used, you MUST also include a LobbyingTopic:[Topic] slug.
-
-LOBBYING SCOPE:
-- Lobbying: Applies to direct, formal interactions with government bodies (testifying at a school board, meeting with a legislator). A post that is an official, coordinated call to action from an affiliated organization for its members to contact officials or attend a public meeting (e.g., "Call your reps about Bill XYZ!", "Show up to the school board meeting on Tuesday to testify!") also qualifies and should be tagged Lobbying. An individual's unsolicited complaint to a politician is NOT lobbying.
-
-### CONTROVERSY SCOPE  
-
-1. **Define "Controversy."**  
-   Extract **only** incidents where an affiliated actor's *real-world* action, decision, or official statement sparks public dispute **or** where the actor claims institutional suppression (e.g., de-recognition, event cancellation, disciplinary hearing, subpoena, lawsuit).
-
-2. **Include Actor-Instigated Misconduct.**  
-   Capture cases where a TPUSA-affiliated actor is the **instigator/perpetrator** of harassment, violence, threats, or other illicit conduct (e.g., assaulting a professor, doxxing protestors). These cases receive their own **Critical** tier (below).
-
-3. **Ignore "Frivolous" Posts by Default.**  
-   - A single tweet, Substack rant, or media clip with **no** coordinated call-to-action, **no** institutional response, and **no** offline consequence **is frivolous**.  
-   - Still extract **if** both gates pass, but classify it as **Low-Severity** so it receives a low `ConfidenceScore`.
-
-4. **Severity Tiers (used only for scoring).**
-
-| Tier | Triggering Conditions | Example | **SeverityWeight** |
-|------|----------------------|---------|--------------------|
-| **Critical** | Affiliated actor **initiates** harassment, violence, credible threat, or other criminal/misconduct action | TPUSA staffer assaults professor during protest; or an actor doxxes a "woke" professor and urgest people to contact his employer | **1.1** |
-| **High**   | Documented institutional action *or* offline consequence (resignation, policy change, cancelled speech, lawsuit filing, formal investigation, police report) **AND** the affiliated actor is the principal organizer/target | Chapter mobilizes parents; superintendent resigns | **1.0** |
-| **Medium** | Coordinated public campaign, organized protest, or press conference targeting an institution **but** no confirmed institutional action (yet) | TPUSA field rep launches petition; large turnout at board meeting | **0.8** |
-| **Low**    | Online outrage only (tweet thread, Substack post, podcast clip) **without** evidence of coordination or institutional response | Staffer tweets screenshot of "woke" email | **0.4** |
-
-5. **ConfidenceScore Calculation (Controversy Events).**
-BaseScore = 1.0 if actor clearly in official capacity, else 0.7
-ConfidenceScore = BaseScore × SeverityWeight
-*Examples:*  
-- High-severity + official actor ⇒ **1.0**  
-- Low-severity + unclear capacity ⇒ **0.28** (round to one decimal place → **0.3**)
-6. **Tag Usage.**  
-   Always apply the single tag **`Controversy`**. Use `ConfidenceScore` for seriousness ranking—no extra tags needed.
-7. **Justification Must Note Severity.**  
-   In the `Justification` field, explicitly state the detected severity tier and why (e.g., "High-severity: board opened investigation; actor led protest").
-8. Instances of actors engaging with school boards directly are priority to notice!! 
-
-PARTICIPANTS FIELD: Extract every individual or organization named. List all by their formal/display names, comma-separated. Do NOT include @handles.
-
-HANDLE FIELDS (InstagramHandles, TwitterHandles): Be EXHAUSTIVE. List ALL handles (without @) from the post author and any mentioned users. Missing handles are a critical error.
-
-ANNOUNCEMENTS VS. ACTUALS: If you see a post announcing an event AND a post showing the event happened within the same batch, combine them into a single event entry with all SourceIDs.
- a) **but** always track annoucements that indiate a new program or important news about one of the actors, (like tpusa high school chapters changing their name, or the launch of a new chase the vote program)
- b) general campaign annoucements must be made OFFICIALLY - not just "lets do this sometime!" as a tweet - it has to be a formal annoucement on behalf of an actors affiliated organizations. 
-
-SMART CITY INFERENCE: If a state is named but not a city, use the fallback ladder to infer a city and note the reasoning in the Justification.
-a) Venue clues in text.
-b) Primary actor's home base from bio (use search_actors tool).
-c) Largest city in the state/region.
-d) City from another event in the same batch (same actors/date).
-e) For Legislative Districts, use the largest city within that district.
-
-SCHOOL CHAPTER HANDLE RULE: If a handle clearly represents a school chapter (@tpusa_asu, @tpusa_lakewoodhs), you MUST add the correct education-level tag (College, High School, Homeschool) AND a matching Institution:<School_Name> slug (unless it is a large multi-chapter conference).
-
-CALENDAR POSTS: some posts with a url like https://calendar.example.com/event/https://nau.campuslabs.com/engage/event/11270387 or other non normal urls can be assumed to be ical events added to the dataset and can be assumed to be events at the date they are posted (happening at the date posted exactly)
-
-
-FIELD-SPECIFIC INSTRUCTIONS:
-- Date: "YYYY-MM-DD".
-- EventName: A concise, descriptive name for the event.
-- EventDescription: A detailed 2–4 sentences of what/how/why.
-- CategoryTags: A JSON list of strings. Choose from the allowed tags and generate required slugs.
-- Location, City, State: Extract as precisely as possible.
-- Participants: A single string of ALL formal/display names, comma-separated.
-- ConfidenceScore: 0.0–1.0. Adhere to Rule #2.
-- Justification: Briefly explain your reasoning. Your justification MUST explicitly state the connection to TPUSA or its affiliates (e.g., "Event was attended by TPUSA Field Rep Laci Williams," or "Controversy tag applied because TPUSA is framing the event cancellation as a free speech violation"). If you cannot establish this link, do not extract the event.
-- SourceIDs: A JSON list of the database UUID values (NOT post_id) for all posts that refer to this event. Use the UUID values provided in the post metadata, not the post_id field.
-- InstagramHandles & TwitterHandles: ALL handles (without @) from EVERY post - include the author handle AND ALL mentioned users. Be EXHAUSTIVE - missing handles means missing actor links!
-
-CATEGORY TAG DEFINITIONS:
-{tag_rules_str}
-
-ALLOWED CATEGORY TAGS:
-[{tag_list_str}]
-
-
-FINAL INSTRUCTION FOR THE MODEL:
-After you have finished using all necessary tools, your final response MUST be a single, valid JSON object. For best results, enclose this JSON object in a markdown code block like so:
-```json
-{{
-  "events": [
-    // ... your extracted events here ...
-  ]
-}}
-```
-Do NOT include any other text, conversation, or explanations before or after the JSON block in your final answer.
-
-""".format(
-            tool_instructions=tool_instructions,
-            tag_rules_str=tag_rules_str,
-            tag_list_str=tag_list_str,
-        )
+        return self._render_prompt_template(sections)
 
     def build_system_prompt(self, allowed_tags, tag_rules, actor_bio):
         """Build enhanced system prompt with hierarchical categories and existing slugs"""
         if DEBUG:
             print(f"[DEBUG] Building system prompt with {len(allowed_tags)} tags and {len(actor_bio)} actors")
 
-        tag_list_str = ", ".join(f'"{tag}"' for tag in allowed_tags)
-        tag_rules_str = "\n".join([f'- **{tag}**: {tag_rules.get(tag, "No description")}' for tag in allowed_tags])
+        category_definitions, allowed_tags_display = self._format_category_sections(allowed_tags, tag_rules)
+        actor_bio_section = self._format_actor_bio_section(actor_bio)
+        existing_slugs_section = self._format_existing_slugs_section()
 
-        # Format existing slugs for AI
-        existing_slugs_str = ""
-        if self.slug_manager.existing_slugs:
-            existing_slugs_str = "\n**EXISTING DYNAMIC SLUGS (Use these before creating new ones):**\n"
-            for parent, slugs in self.slug_manager.existing_slugs.items():
-                # Limit to most recent/common ones to keep prompt manageable
-                recent_slugs = slugs[:8]  # Only show 8 most recent
-                existing_slugs_str += f"- **{parent}**: {', '.join(recent_slugs)}\n"
+        sections = {
+            'tool_instructions': '',
+            'actor_bio': actor_bio_section,
+            'existing_slugs': existing_slugs_section,
+            'category_definitions': f"CATEGORY TAG DEFINITIONS:\n{category_definitions}" if category_definitions else '',
+            'allowed_tags': f"ALLOWED CATEGORY TAGS:\n{allowed_tags_display}"
+        }
 
-        actor_bio_str = ""
-        if actor_bio:
-            actor_bio_str = "\n**ACTOR BIOGRAPHICAL INFORMATION:**\n"
-            actor_bio_str += "Here is background information about actors who authored posts in this batch:\n\n"
-            for name, info in actor_bio.items():
-                if DEBUG:
-                    print(f"[DEBUG] Processing actor {name}: {info.get('type', 'unknown_type')}")
-
-                if info.get('type') == 'person':
-                    actor_bio_str += f"- **{info.get('full_name', name)}**: {info.get('primary_role', 'N/A')}\n"
-                    if info.get('organizations'):
-                        actor_bio_str += f"  Organizations: {'; '.join(info.get('organizations', []))}\n"
-                    location = info.get('location') or f"{info.get('city', '')}, {info.get('state', '')}".strip(', ')
-                    if location:
-                        actor_bio_str += f"  Location: {location}\n"
-                    if info.get('usernames'):
-                        actor_bio_str += f"  Handles: {', '.join(info.get('usernames', []))}\n"
-                    about_text = info.get('about')
-                    if about_text:
-                        if len(about_text) > 200:
-                            about_text = about_text[:200] + "..."
-                        actor_bio_str += f"  About: {about_text}\n"
-                elif info.get('type') == 'chapter':
-                    actor_bio_str += f"- **{info.get('name', name)}** (Chapter)\n"
-                    location = info.get('location') or f"{info.get('city', '')}, {info.get('state', '')}".strip(', ')
-                    if location:
-                        actor_bio_str += f"  Location: {location}\n"
-                    if info.get('about'):
-                        actor_bio_str += f"  About: {info.get('about')}\n"
-                    if info.get('usernames'):
-                        actor_bio_str += f"  Handles: {', '.join(info.get('usernames', []))}\n"
-                elif info.get('type') == 'organization':
-                    actor_bio_str += f"- **{info.get('name', name)}** (Organization)\n"
-                    if info.get('about'):
-                        actor_bio_str += f"  About: {info.get('about')}\n"
-                    location = info.get('location')
-                    if location:
-                        actor_bio_str += f"  Location: {location}\n"
-                    if info.get('usernames'):
-                        actor_bio_str += f"  Handles: {', '.join(info.get('usernames', []))}\n"
-                elif info.get('type') == 'unknown':
-                    actor_bio_str += f"- **{info.get('display_name', name)}** (Unknown Actor Handle: @{name})\n"
-                    bio_text = info.get('bio') or 'N/A'
-                    if bio_text != 'N/A' and len(bio_text) > 200:
-                        bio_text = bio_text[:200] + "..."
-                    actor_bio_str += f"  Bio: {bio_text}\n"
-                    actor_bio_str += f"  Location: {info.get('location') or 'N/A'}\n"
-
-                actor_bio_str += "\n"
-
-        if DEBUG:
-            print(f"[DEBUG] System prompt built successfully, total length: {len(actor_bio_str)} chars for actor bio")
-
-        # Return the complete enhanced system prompt
-        return """
-You are an expert data extraction assistant focused on tracking real-world, in-person political and organizational activities of Turning Point USA and its affiliates. Your job is to accurately scrape and structure data from social media posts to support researchers. The primary research goals are to map TPUSA's youth-to-staff pipeline, document their field activities (who, what, where, when), identify which electoral races they are involved in, and understand how they use public conflicts to mobilize supporters and influence institutions.
-
-A post must pass this gate or it is discarded.
-
-
-GATE (Activity Gate)
-The content describes one or more of the following real-world activities:
-
-High-Priority Electioneering: Any form of direct voter or citizen engagement. This includes canvassing, door-knocking, signature gathering, phone banking, or voter registration drives. Crucially, this includes informal descriptions. A post saying "out talking with Moms about the Mesa Recall" or "hitting the pavement for the campaign" IS a valid canvassing event.
-
-Organized Gatherings: A scheduled or completed in-person event/activity such as a rally, training session, chapter meeting, conference, or tabling on campus. Anything in person activity. 
-
-Official Engagements & Public Conflict:
-- An actor in an official capacity testifies at or attends a government meeting (e.g., school board, city council).
-- A significant public conflict where an actor in an official capacity is a principal organizer, instigator, or direct target of controversy or institutional sanction (e.g., chapter de-recognition, event cancellation). Casual media hot-takes, podcast interviews, or Fox News spots are not controversies.
-
-Official Digital Programming: Coordinated virtual events with a defined goal run by an official organization (e.g., PragerU virtual lesson launch).
-
-WHEN IN DOUBT, DO NOT EXTRACT: Your default action should be to ignore a post. Only extract an event if it unambiguously meets the criteria. An empty output {{ "events": [] }} is a perfectly valid and often correct response.
-
-CRITICAL INSTRUCTIONS:
-
-REAL-WORLD EVENTS ONLY: Extract only actual, physical gatherings or organized activities. IGNORE general political commentary, online arguments, or simple media appearances (TV, podcasts).
-
-CONFIDENCE SCORE NUANCE (Official vs. Social Capacity): You MUST adjust the ConfidenceScore based on the actor's role.
-- High Confidence (0.9-1.0): The actor is clearly participating in an official capacity for their organization (e.g., a TPUSA Field Rep running a TPUSA canvassing event, a chapter hosting a speaker). The event aligns with the organization's mission.
-- Lower Confidence (0.3-0.7): An affiliated actor is present at a political or social event, but it's unclear if they are acting in their official capacity. For example, a known TPUSA staffer attends a rally organized by a different, unaffiliated group. In this case, you should still extract the event but use a lower score to flag the ambiguity. If it is, for example, a TPUSA staffer at a social event with no clear mention of their professional capacity, it should be even lower. 
-
-MAINSTREAM NEWS EVENT PENALTY (IMPORTANT): 
-- Downgrade confidence (multiply by 0.7) for events that would be mainstream news:
-  * ANY event primarily about Trump administration activities or appointments  
-  * High-profile political figures at major venues (Trump at Mar-a-Lago, DeSantis at state events)
-  * Celebrity appearances or endorsements
-  * Major campaign rallies covered by national media
-  * White House events, Congressional hearings, or federal government activities
-  * Any "Trump welcomes X" or "Trump appoints Y" type events
-  
-- EXCEPTION: Conferences organized BY affiliated actors (AmericaFest, Student Action Summit, etc.) maintain normal confidence
-  
-- BOOST confidence (multiply by 1.2, cap at 1.0) for grassroots activities:
-  * Field representatives meeting with local churches or community groups
-  * Youth groups organizing local events  
-  * School board testimonies by parents or local activists
-  * Door-to-door canvassing in neighborhoods
-  * Small-scale voter registration at local venues
-  * Chapter meetings at schools
-  * Local activists training sessions
-  
-- The more LOCAL and GRASSROOTS the activity, the HIGHER the confidence
-- The more NATIONAL NEWS WORTHY, the LOWER the confidence
-- Ask yourself: "Is this about Trump administration news?" If yes, multiply confidence by 0.7
-- Ask yourself: "Would CNN/Fox News cover this?" If yes, multiply confidence by 0.7
-- Ask yourself: "Is this hyperlocal organizing work?" If yes, multiply confidence by 1.2 (cap at 1.0)
-
-CANVASSING & ELECTIONEERING PRIORITY (CRITICAL): This is the highest priority activity. These events CANNOT be missed.
-- Recognize Informal Activity: Posts do not need to announce a formal event. Photographic evidence of door-knocking (e.g., people with clipboards, wearing campaign shirts at a door) or descriptive text like "Just a couple of Moms out here in Mesa talking with other Moms about the Mesa Recall" are sufficient proof of a canvassing event. Treat these as valid events.
-- Assume Separate Events: Electioneering happens frequently. Posts on different days are ALWAYS separate events. Posts on the same day but mentioning different locations or actors should also be treated as separate events. When in doubt, create a separate entry.
-- Date Inference: For canvassing, the date of the event is the date the post was made, unless the post is explicitly promoting a future event with a specific date.
-
-ONE ROW PER UNIQUE EVENT: Each unique occurrence (defined by activity, date, and location) gets its own row. If an event series occurs over multiple days, each day is a unique event.
-
-SEPARATE MULTI-STATE EVENTS: If a single announcement promotes activity in multiple states/locations, create a SEPARATE event entry for EACH location.
-
-INTELLIGENT DATE RESOLUTION: If no exact date is in the text, infer the month and year from the post timestamp and set the day to "01", unless Rule #3 (Canvassing) applies.
-
-DYNAMIC SLUG CREATION: You MUST generate a dynamic slug for certain activities. Check existing slugs first.
-
-NAMING CONVENTIONS (follow these exactly):
-- Elections: Election:[State]_[Office]_[Candidate]_[Year] (e.g., Election:AZ_Senate_Kari_Lake_2024)
-  * Without candidate: Election:[State]_[Office]_[Year]
-  * Special elections: add "_Special"
-  * Recalls: add "_Recall"
-- Ballot Measures: BallotMeasure:[State]_Prop[Number]_[Topic]_[Year]
-- Schools: School:[State]_[SchoolName] or School:[State]_[District]_[Topic]
-- Churches: Church:[Name]_[City]_[State]
-- Conferences: Conference:[Name]_[Year]_[Location]
-- LobbyingTopic: LobbyingTopic:[Topic]
-
-MANDATORY TAG COMBINATIONS:
-- If any event is at a school, you MUST include a School:[State]_[SchoolName] slug.
-- If any event is at a church, you MUST include a Church:[Name]_[City]_[State] slug.
-- If any Lobbying tag is used, you MUST also include a LobbyingTopic:[Topic] slug.
-
-LOBBYING SCOPE:
-- Lobbying: Applies to direct, formal interactions with government bodies (testifying at a school board, meeting with a legislator). A post that is an official, coordinated call to action from an affiliated organization for its members to contact officials or attend a public meeting (e.g., "Call your reps about Bill XYZ!", "Show up to the school board meeting on Tuesday to testify!") also qualifies and should be tagged Lobbying. An individual's unsolicited complaint to a politician is NOT lobbying.
-
-### CONTROVERSY SCOPE  
-
-1. **Define “Controversy.”**  
-   Extract **only** incidents where an affiliated actor’s *real-world* action, decision, or official statement sparks public dispute **or** where the actor claims institutional suppression (e.g., de-recognition, event cancellation, disciplinary hearing, subpoena, lawsuit).
-
-2. **Include Actor-Instigated Misconduct.**  
-   Capture cases where a TPUSA-affiliated actor is the **instigator/perpetrator** of harassment, violence, threats, or other illicit conduct (e.g., assaulting a professor, doxxing protestors). These cases receive their own **Critical** tier (below).
-
-3. **Ignore “Frivolous” Posts by Default.**  
-   - A single tweet, Substack rant, or media clip with **no** coordinated call-to-action, **no** institutional response, and **no** offline consequence **is frivolous**.  
-   - Still extract **if** both gates pass, but classify it as **Low-Severity** so it receives a low `ConfidenceScore`.
-
-4. **Severity Tiers (used only for scoring).**
-
-| Tier | Triggering Conditions | Example | **SeverityWeight** |
-|------|----------------------|---------|--------------------|
-| **Critical** | Affiliated actor **initiates** harassment, violence, credible threat, or other criminal/misconduct action | TPUSA staffer assaults professor during protest; or an actor doxxes a "woke" professor and urgest people to contact his employer | **1.1** |
-| **High**   | Documented institutional action *or* offline consequence (resignation, policy change, cancelled speech, lawsuit filing, formal investigation, police report) **AND** the affiliated actor is the principal organizer/target | Chapter mobilizes parents; superintendent resigns | **1.0** |
-| **Medium** | Coordinated public campaign, organized protest, or press conference targeting an institution **but** no confirmed institutional action (yet) | TPUSA field rep launches petition; large turnout at board meeting | **0.8** |
-| **Low**    | Online outrage only (tweet thread, Substack post, podcast clip) **without** evidence of coordination or institutional response | Staffer tweets screenshot of “woke” email | **0.4** |
-
-5. **ConfidenceScore Calculation (Controversy Events).**
-BaseScore = 1.0 if actor clearly in official capacity, else 0.7
-ConfidenceScore = BaseScore × SeverityWeight
-*Examples:*  
-- High-severity + official actor ⇒ **1.0**  
-- Low-severity + unclear capacity ⇒ **0.28** (round to one decimal place → **0.3**)
-6. **Tag Usage.**  
-   Always apply the single tag **`Controversy`**. Use `ConfidenceScore` for seriousness ranking—no extra tags needed.
-7. **Justification Must Note Severity.**  
-   In the `Justification` field, explicitly state the detected severity tier and why (e.g., “High-severity: board opened investigation; actor led protest”).
-8. Instances of actors engaging with school boards directly are priority to notice!! 
-
-PARTICIPANTS FIELD: Extract every individual or organization named. List all by their formal/display names, comma-separated. Do NOT include @handles.
-
-HANDLE FIELDS (InstagramHandles, TwitterHandles): Be EXHAUSTIVE. List ALL handles (without @) from the post author and any mentioned users. Missing handles are a critical error.
-
-ANNOUNCEMENTS VS. ACTUALS: If you see a post announcing an event AND a post showing the event happened within the same batch, combine them into a single event entry with all SourceIDs.
- a) **but** always track annoucements that indiate a new program or important news about one of the actors, (like tpusa high school chapters changing their name, or the launch of a new chase the vote program)
- b) general campaign annoucements must be made OFFICIALLY - not just "lets do this sometime!" as a tweet - it has to be a formal annoucement on behalf of an actors affiliated organizations. 
-
-SMART CITY INFERENCE: If a state is named but not a city, use the fallback ladder to infer a city and note the reasoning in the Justification.
-a) Venue clues in text.
-b) Primary actor's home base from bio.
-c) Largest city in the state/region.
-d) City from another event in the same batch (same actors/date).
-e) For Legislative Districts, use the largest city within that district.
-
-SCHOOL CHAPTER HANDLE RULE: If a handle clearly represents a school chapter (@tpusa_asu, @tpusa_lakewoodhs), you MUST add the correct education-level tag (College, High School, Homeschool) AND a matching Institution:<School_Name> slug (unless it is a large multi-chapter conference).
-
-CALENDAR POSTS: some posts with a url like https://calendar.example.com/event/https://nau.campuslabs.com/engage/event/11270387 or other non normal urls can be assumed to be ical events added to the dataset and can be assumed to be events at the date they are posted (happening at the date posted exactly)
-
-
-FIELD-SPECIFIC INSTRUCTIONS:
-- Date: "YYYY-MM-DD".
-- EventName: A concise, descriptive name for the event.
-- EventDescription: A detailed 2–4 sentences of what/how/why.
-- CategoryTags: A JSON list of strings. Choose from the allowed tags and generate required slugs.
-- Location, City, State: Extract as precisely as possible.
-- Participants: A single string of ALL formal/display names, comma-separated.
-- ConfidenceScore: 0.0–1.0. Adhere to Rule #2.
-- Justification: Briefly explain your reasoning. Your justification MUST explicitly state the connection to TPUSA or its affiliates (e.g., "Event was attended by TPUSA Field Rep Laci Williams," or "Controversy tag applied because TPUSA is framing the event cancellation as a free speech violation"). If you cannot establish this link, do not extract the event.
-- SourceIDs: A JSON list of the database UUID values (NOT post_id) for all posts that refer to this event. Use the UUID values provided in the post metadata, not the post_id field.
-- InstagramHandles & TwitterHandles: ALL handles (without @) from EVERY post - include the author handle AND ALL mentioned users. Be EXHAUSTIVE - missing handles means missing actor links!
-
-EXAMPLE OF A PERFECT RESPONSE:
-{{
-"events": [
-    {{
-        "Date": "2023-10-01",
-        "EventName": "TPUSA vs ASU Administration Controversy",
-        "EventDescription": "TPUSA chapter at Arizona State University faced censorship when the administration banned their 'America First' banner from campus grounds. The chapter organized a response rally and is claiming this as an example of institutional bias against conservative students.",
-        "CategoryTags": ["Controversy", "College", "Institution:Arizona_State_University", "Rally"],
-        "Location": "Arizona State University, Tempe, AZ",
-        "City": "Tempe",
-        "State": "AZ",
-        "Participants": "TPUSA ASU Chapter, Campus Administration, Student Government",
-        "ConfidenceScore": 0.90,
-        "Justification": "Clear controversy involving institutional pushback against TPUSA. The connection to TPUSA is direct, as it involves their ASU chapter and was amplified by national staff.",
-        "SourceIDs": ["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"],
-        "InstagramHandles": ["tpusa_asu"],
-        "TwitterHandles": ["tpusa_asu", "charliekirk11"]
-    }}
-]
-}}
-
-{{
-"events": [
-    {{
-        "Date": "2024-09-10",
-        "EventName": "TPUSA Rep Testifies at PVUSD School Board Meeting",
-        "EventDescription": "A TPUSA field representative attended and provided public testimony at the Paradise Valley Unified School District board meeting. The testimony focused on the 'Make America Healthy Again' initiative, advocating for changes to the district's school lunch program to align with their health and wellness standards.",
-        "CategoryTags": ["School Board", "High School", "Health", "LobbyingTopic:School_Lunch_Policy", "Institution:Paradise_Valley_Unified_School_District"],
-        "Location": "Paradise Valley Unified School District Board Room, Phoenix, AZ",
-        "City": "Phoenix",
-        "State": "AZ",
-        "Participants": "John Doe (TPUSA Field Rep), Paradise Valley Unified School District Board",
-        "ConfidenceScore": 1.0,
-        "Justification": "Direct lobbying activity by a known TPUSA affiliate in an official capacity. The Lobbying tag applies due to testimony at a government meeting. LobbyingTopic and Institution slugs are generated as required.",
-        "SourceIDs": ["550e8400-e29b-41d4-a716-446655440003"],
-        "InstagramHandles": ["tpusa_pvchapter", "johndoe_az"],
-        "TwitterHandles": ["tpusa_pvchapter", "johndoe_az"]
-    }}
-]
-}}
-
-{{
-"events": [
-    {{
-        "Date": "2025-05-23",
-        "EventName": "TPAction Canvassing for Julie Spilsbury Recall",
-        "EventDescription": "A get-out-the-signature event organized by Turning Point Action. Volunteers went door-to-door in Mesa's District 2 to gather signatures for the recall petition against Councilwoman Julie Spilsbury, whom they have labeled a 'RINO'.",
-        "CategoryTags": ["Canvassing", "Recall:Julie_Spilsbury"],
-        "Location": "Mesa Council District 2, Mesa, AZ",
-        "City": "Mesa",
-        "State": "AZ",
-        "Participants": "TPAction Arizona Team, Jane Smith (Organizer)",
-        "ConfidenceScore": 1.0,
-        "Justification": "Direct electoral activity organized by TPAction. The connection is explicit. The Canvassing tag is used for the door-knocking activity. The Recall:Julie_Spilsbury slug identifies the specific political race.",
-        "SourceIDs": ["550e8400-e29b-41d4-a716-446655440004"],
-        "InstagramHandles": ["tpaction_az", "janesmith_tpa"],
-        "TwitterHandles": ["tpaction_az", "janesmith_tpa"]
-    }}
-]
-}}
-
-CONTEXT: 
-{actor_bio_str}
-
-
-CATEGORY TAG DEFINITIONS:
-{tag_rules_str}
-
-ALLOWED CATEGORY TAGS:
-[{tag_list_str}]
-
-{existing_slugs_str}
-
-FINAL INSTRUCTION FOR THE MODEL:
-Your response MUST be a single, valid JSON object. For best results, enclose this JSON object in a markdown code block like so:
-```json
-{{
-  "events": [
-    // ... your extracted events here ...
-  ]
-}}
-```
-Do NOT include any other text, conversation, or explanations before or after the JSON block in your response.
-
-""".format(
-            actor_bio_str=actor_bio_str,
-            tag_rules_str=tag_rules_str,
-            tag_list_str=tag_list_str,
-            existing_slugs_str=existing_slugs_str,
-        )
+        return self._render_prompt_template(sections)
 
     def process_batch_with_worker_delayed(self, batch, allowed_tags, tag_rules, batch_num, total_batches, worker, delay):
         """Process a batch with a specific worker after applying a startup delay"""
@@ -3911,20 +3662,8 @@ Do NOT include any other text, conversation, or explanations before or after the
         except Exception as e:
             print(f"  ⚠️ {worker.get('worker_id', 'unknown')}: Failed to update batch stats: {e}")
         
-        # Reload dynamic slugs before processing
-        slug_reload_start = time.time()
-        try:
-            before_count = sum(len(slugs) for slugs in self.slug_manager.existing_slugs.values())
-            self.slug_manager.load_existing_slugs()
-            after_count = sum(len(slugs) for slugs in self.slug_manager.existing_slugs.values())
-            slug_reload_time = time.time() - slug_reload_start
-            
-            if after_count != before_count:
-                print(f"  🔄 {worker.get('worker_id', 'unknown')}: Reloaded slugs for batch {batch_num}: {before_count}→{after_count} ({slug_reload_time:.2f}s)")
-            else:
-                print(f"  📋 {worker.get('worker_id', 'unknown')}: Slugs up-to-date for batch {batch_num} ({after_count} total)")
-        except Exception as e:
-            print(f"  ⚠️ {worker.get('worker_id', 'unknown')}: Could not reload slugs: {e}")
+        # Slugs are now loaded dynamically via search_dynamic_slugs function tool
+        # No need to reload them before processing each batch
         
         worker_id = worker['worker_id']
         
@@ -4010,7 +3749,7 @@ Do NOT include any other text, conversation, or explanations before or after the
                     
                     # Modified generation config to NOT force JSON (incompatible with tools)
                     generation_config = types.GenerationConfig(
-                        max_output_tokens=100000,
+                        max_output_tokens=60000,
                         temperature=0.2,
                         top_p=0.9,
                         top_k=40
@@ -4033,9 +3772,35 @@ Do NOT include any other text, conversation, or explanations before or after the
                             break  # Success, exit retry loop
                             
                         except Exception as api_e:
-                            api_retry_count += 1
                             error_msg = str(api_e).lower()
-                            
+
+                            # Check for rate limit / quota errors
+                            if '429' in str(api_e) or 'quota' in error_msg or 'resource_exhausted' in error_msg or 'rate limit' in error_msg:
+                                print(f"  🚫 {worker_id}: Rate limit hit - {api_e}")
+
+                                # Mark current key as exhausted
+                                current_key = worker['api_key']
+                                self.api_manager.mark_key_exhausted(current_key)
+
+                                # Check if all keys are exhausted
+                                if self.api_manager.all_keys_exhausted():
+                                    print(f"  ❌ All API keys have hit their daily limits. Stopping early.")
+                                    raise Exception("All API keys exhausted - daily limits reached on all keys")
+
+                                # Try to rotate to next key
+                                if self.api_manager.rotate_to_next_key():
+                                    print(f"  ✅ Switched to new API key, retrying request...")
+                                    # Reset worker reference after rotation
+                                    worker = self.api_manager.get_worker(0)
+                                    worker_id = worker['worker_id']
+                                    api_retry_count = 0  # Reset retry count for new key
+                                    time.sleep(2)  # Brief pause before retry
+                                    continue
+                                else:
+                                    raise Exception("Could not rotate to available API key")
+
+                            api_retry_count += 1
+
                             if 'server disconnected' in error_msg or 'connection' in error_msg or 'deadline exceeded' in error_msg:
                                 if api_retry_count < max_api_retries:
                                     print(f"  ⚠️ {worker_id}: Connection error (attempt {api_retry_count}/{max_api_retries}): {api_e}")
@@ -4063,24 +3828,27 @@ Do NOT include any other text, conversation, or explanations before or after the
                                         has_function_calls = True
                                         fc = part.function_call
                                         print(f"  {worker_id}: Processing function call: {fc.name}")
-                                        
+
+                                        # Import protos for creating function responses
+                                        from google.generativeai import protos
+
                                         if fc.name == "search_actors":
                                             actors = fc.args.get('actors', [])
                                             result = self.handle_search_actors(actors)
                                             # Create a Part with function_response
-                                            from google.generativeai import protos
                                             function_responses.append(protos.Part(
                                                 function_response=protos.FunctionResponse(
                                                     name=fc.name,
                                                     response={"actors": result}
                                                 )
                                             ))
-                                            
+
                                         elif fc.name == "search_dynamic_slugs":
-                                            result = self.handle_search_dynamic_slugs(
-                                                search_term=fc.args.get('search_term'),
-                                                parent_tag_filter=fc.args.get('parent_tag_filter')
-                                            )
+                                            # Get search_terms array from function call and convert to list
+                                            search_terms_raw = fc.args.get('search_terms', [])
+                                            # Convert protobuf RepeatedComposite to regular Python list
+                                            search_terms = list(search_terms_raw) if search_terms_raw else []
+                                            result = self.handle_search_dynamic_slugs(search_terms)
                                             function_responses.append(protos.Part(
                                                 function_response=protos.FunctionResponse(
                                                     name=fc.name,
@@ -4116,20 +3884,63 @@ Do NOT include any other text, conversation, or explanations before or after the
                         # Call the model again with the function responses
                         # This time, ask for JSON output explicitly by not providing tools
                         final_generation_config = types.GenerationConfig(
-                            max_output_tokens=100000,
+                            max_output_tokens=60000,
                             temperature=0.2,
                             top_p=0.9,
                             top_k=40,
                             response_mime_type="application/json"  # Request JSON response
                         )
-                        
-                        response = worker['model'].generate_content(
-                            content_with_responses,
-                            generation_config=final_generation_config,
-                            # Don't provide tools this time to get the final JSON response
-                            request_options={'timeout': gemini_timeout}
-                        )
-                        
+
+                        # Retry loop for final response with rate limit handling
+                        final_api_retry_count = 0
+                        while final_api_retry_count < max_api_retries:
+                            try:
+                                response = worker['model'].generate_content(
+                                    content_with_responses,
+                                    generation_config=final_generation_config,
+                                    # Don't provide tools this time to get the final JSON response
+                                    request_options={'timeout': gemini_timeout}
+                                )
+                                break  # Success
+                            except Exception as final_api_e:
+                                error_msg = str(final_api_e).lower()
+
+                                # Check for rate limit / quota errors
+                                if '429' in str(final_api_e) or 'quota' in error_msg or 'resource_exhausted' in error_msg or 'rate limit' in error_msg:
+                                    print(f"  🚫 {worker_id}: Rate limit hit on final call - {final_api_e}")
+
+                                    # Mark current key as exhausted
+                                    current_key = worker['api_key']
+                                    self.api_manager.mark_key_exhausted(current_key)
+
+                                    # Check if all keys are exhausted
+                                    if self.api_manager.all_keys_exhausted():
+                                        print(f"  ❌ All API keys have hit their daily limits. Stopping early.")
+                                        raise Exception("All API keys exhausted - daily limits reached on all keys")
+
+                                    # Try to rotate to next key
+                                    if self.api_manager.rotate_to_next_key():
+                                        print(f"  ✅ Switched to new API key, retrying final request...")
+                                        worker = self.api_manager.get_worker(0)
+                                        worker_id = worker['worker_id']
+                                        final_api_retry_count = 0  # Reset retry count
+                                        time.sleep(2)
+                                        continue
+                                    else:
+                                        raise Exception("Could not rotate to available API key")
+
+                                final_api_retry_count += 1
+
+                                if 'server disconnected' in error_msg or 'connection' in error_msg:
+                                    if final_api_retry_count < max_api_retries:
+                                        print(f"  ⚠️ {worker_id}: Connection error on final call (attempt {final_api_retry_count}/{max_api_retries})")
+                                        time.sleep(2 ** final_api_retry_count)
+                                        continue
+                                    else:
+                                        raise
+                                else:
+                                    raise
+
                         print(f"  {worker_id}: Received final response from model")
                     
                     # Get the final text response (JSON with events)
@@ -4140,6 +3951,13 @@ Do NOT include any other text, conversation, or explanations before or after the
                     try:
                         if response and hasattr(response, 'text'):
                             response_text = response.text.strip()
+                            # Save raw response for debugging
+                            import json
+                            from datetime import datetime
+                            debug_file = f"/tmp/gemini_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                            with open(debug_file, 'w') as f:
+                                json.dump({'response_text': response_text, 'worker_id': worker_id, 'batch_num': batch_num}, f, indent=2)
+                            print(f"  💾 {worker_id}: Saved raw Gemini response to {debug_file}")
                     except Exception as e:
                         # If we can't get text, check if we have candidates with content
                         if response and hasattr(response, 'candidates') and response.candidates:
@@ -4153,6 +3971,78 @@ Do NOT include any other text, conversation, or explanations before or after the
                                     break
                     
                     if response_text is None:
+                        # DEBUG: Save info about why response_text is None
+                        import json
+                        from datetime import datetime
+                        from google.protobuf.json_format import MessageToDict
+
+                        debug_file = f"/tmp/gemini_response_none_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+                        # Try to extract full response details
+                        candidates_info = []
+                        if response and hasattr(response, 'candidates'):
+                            for i, candidate in enumerate(response.candidates):
+                                candidate_dict = {
+                                    'index': i,
+                                    'finish_reason': str(candidate.finish_reason) if hasattr(candidate, 'finish_reason') else None,
+                                    'has_content': hasattr(candidate, 'content'),
+                                    'has_parts': hasattr(candidate.content, 'parts') if hasattr(candidate, 'content') else False,
+                                    'parts_count': len(candidate.content.parts) if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') else 0,
+                                    'safety_ratings': []
+                                }
+
+                                # Get safety ratings if available
+                                if hasattr(candidate, 'safety_ratings'):
+                                    for rating in candidate.safety_ratings:
+                                        candidate_dict['safety_ratings'].append({
+                                            'category': str(rating.category) if hasattr(rating, 'category') else None,
+                                            'probability': str(rating.probability) if hasattr(rating, 'probability') else None,
+                                            'blocked': rating.blocked if hasattr(rating, 'blocked') else None
+                                        })
+
+                                # Try to get parts content
+                                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                                    candidate_dict['parts'] = []
+                                    for part in candidate.content.parts:
+                                        part_info = {'has_text': hasattr(part, 'text')}
+                                        if hasattr(part, 'text'):
+                                            part_info['text_preview'] = part.text[:200] if part.text else None
+                                        candidate_dict['parts'].append(part_info)
+
+                                candidates_info.append(candidate_dict)
+
+                        debug_info = {
+                            'worker_id': worker_id,
+                            'batch_num': batch_num,
+                            'response_text': None,
+                            'has_response': response is not None,
+                            'has_text_attr': hasattr(response, 'text') if response else False,
+                            'has_candidates': hasattr(response, 'candidates') if response else False,
+                            'candidates_count': len(response.candidates) if response and hasattr(response, 'candidates') else 0,
+                            'candidates_details': candidates_info,
+                            'already_linked_posts': len(already_linked_posts) if already_linked_posts else 0,
+                            'usage_metadata': {
+                                'prompt_tokens': response.usage_metadata.prompt_token_count if response and hasattr(response, 'usage_metadata') else None,
+                                'total_tokens': response.usage_metadata.total_token_count if response and hasattr(response, 'usage_metadata') else None,
+                                'output_tokens': (response.usage_metadata.total_token_count - response.usage_metadata.prompt_token_count) if response and hasattr(response, 'usage_metadata') else None
+                            }
+                        }
+                        with open(debug_file, 'w') as f:
+                            json.dump(debug_info, f, indent=2)
+                        print(f"  ⚠️  {worker_id}: response_text is None - saved debug info to {debug_file}")
+
+                        # Check if blocked by safety filters
+                        is_blocked = False
+                        if candidates_info:
+                            for candidate in candidates_info:
+                                for rating in candidate.get('safety_ratings', []):
+                                    if rating.get('blocked'):
+                                        is_blocked = True
+                                        print(f"  🚫 {worker_id}: Response blocked by safety filter: {rating.get('category')}")
+                                if candidate.get('finish_reason') and 'SAFETY' in str(candidate.get('finish_reason')):
+                                    is_blocked = True
+                                    print(f"  🚫 {worker_id}: Finish reason indicates safety block: {candidate.get('finish_reason')}")
+
                         # If no text response, that's OK - posts might have been linked to existing events
                         if already_linked_posts:
                             print(f"  ✅ {worker_id}: {len(already_linked_posts)} posts linked to existing events")
@@ -4270,10 +4160,24 @@ Do NOT include any other text, conversation, or explanations before or after the
                             raise MissingSourceIdsError(
                                 f"{worker_id}: Event '{event_obj.EventName[:60]}' produced no valid SourceIDs from {event_obj.SourceIDs}"
                             )
-                        
+
                         content_hash = self.generate_event_hash(event_dict)
-                        event_date = event_dict.get('Date', '')
-                        
+                        event_date_value = event_dict.get('EventDate') or event_dict.get('Date', '')
+                        if event_date_value and event_date_value.endswith('-00'):
+                            event_date_value = event_date_value.replace('-00', '-01')
+                            if DEBUG:
+                                print(
+                                    f"[DEBUG] Invalid date format {event_dict.get('EventDate') or event_dict.get('Date')} converted to {event_date_value}"
+                                )
+                        elif not event_date_value:
+                            event_date_value = None
+
+                        if event_date_value is None:
+                            print(
+                                f"  ❌ {worker_id}: Event '{event_obj.EventName[:60]}' missing EventDate/Date; skipping insert"
+                            )
+                            continue
+
                         # Generate embedding for the event with better error handling
                         location_text = f"{event_dict.get('City', '')} {event_dict.get('State', '')}".strip()
                         try:
@@ -4290,11 +4194,11 @@ Do NOT include any other text, conversation, or explanations before or after the
                             print(f"  ❌ {worker_id}: Exception generating embedding: {e}")
                             print(f"     Event will be saved without embedding for semantic search")
                             embedding = None
-                        
+
                         event_record = {
                             'event_name': event_dict['EventName'],
                             'event_description': event_dict.get('EventDescription', ''),
-                            'event_date': event_date if event_date else None,
+                            'event_date': event_date_value,
                             'location': event_dict.get('Location', ''),
                             'city': event_dict.get('City', ''),
                             'state': event_dict.get('State', ''),
@@ -4302,6 +4206,13 @@ Do NOT include any other text, conversation, or explanations before or after the
                             'category_tags': event_dict.get('CategoryTags', []),
                             'confidence_score': event_dict.get('ConfidenceScore', 0.5),
                             'justification': event_dict.get('Justification', ''),
+                            'source_post_ids': source_uuids,
+                            'instagram_handles': event_dict.get('InstagramHandles', []),
+                            'twitter_handles': event_dict.get('TwitterHandles', []),
+                            'event_type': 'extracted',
+                            'extracted_by': f"{MODEL_NAME}_concurrent_{len(self.api_manager.workers)}workers",
+                            'extracted_at': datetime.now().isoformat(),
+                            'verified': False,
                             'content_hash': content_hash,
                             'project_id': DEFAULT_PROJECT_ID,
                             'embedding': embedding  # Add the embedding
@@ -4394,7 +4305,10 @@ Do NOT include any other text, conversation, or explanations before or after the
     def process_batch_with_worker(self, batch, allowed_tags, tag_rules, batch_num, total_batches, worker):
         """Process a single batch with a specific worker"""
         # Check if we should use the new tool-based approach
-        use_tools = os.getenv('USE_FUNCTION_TOOLS', 'true').lower() == 'true'
+        env_use_tools = os.getenv('USE_FUNCTION_TOOLS', 'true').lower() == 'true'
+        use_tools = env_use_tools and getattr(self, 'prompt_supports_tools', True)
+        if env_use_tools and not use_tools:
+            print('ℹ️ Prompt template disabled function tools; using legacy prompt mode')
         
         if use_tools:
             return self.process_batch_with_worker_with_tools(
@@ -4416,19 +4330,8 @@ Do NOT include any other text, conversation, or explanations before or after the
 
         # Reload dynamic slugs before processing this batch to get any new ones created by previous batches
         # This ensures each batch has access to slugs created by previous batches
-        slug_reload_start = time.time()
-        try:
-            before_count = sum(len(slugs) for slugs in self.slug_manager.existing_slugs.values())
-            self.slug_manager.load_existing_slugs()
-            after_count = sum(len(slugs) for slugs in self.slug_manager.existing_slugs.values())
-            slug_reload_time = time.time() - slug_reload_start
-
-            if after_count != before_count:
-                print(f"  🔄 {worker.get('worker_id', 'unknown')}: Reloaded slugs for batch {batch_num}: {before_count}→{after_count} ({slug_reload_time:.2f}s)")
-            else:
-                print(f"  📋 {worker.get('worker_id', 'unknown')}: Slugs up-to-date for batch {batch_num} ({after_count} total)")
-        except Exception as e:
-            print(f"  ⚠️ {worker.get('worker_id', 'unknown')}: Could not reload slugs: {e}")
+        # Slugs are now loaded dynamically via search_dynamic_slugs function tool
+        # No need to reload them before processing each batch
 
         if not isinstance(worker, dict):
             error_msg = f"Worker is not a dict for batch {batch_num}. Got: {type(worker)}"
@@ -4542,11 +4445,58 @@ Do NOT include any other text, conversation, or explanations before or after the
                     api_start_time = time.time()
                     # Get timeout from environment or use default
                     gemini_timeout = int(os.getenv('GEMINI_API_TIMEOUT', '600'))  # Default 10 minutes
-                    response = worker['model'].generate_content(
-                        content_parts,
-                        generation_config=worker['generation_config'],
-                        request_options={'timeout': gemini_timeout}
-                    )
+
+                    # Retry loop with rate limit handling
+                    legacy_api_retry_count = 0
+                    max_api_retries = 3
+                    response = None
+                    while legacy_api_retry_count < max_api_retries:
+                        try:
+                            response = worker['model'].generate_content(
+                                content_parts,
+                                generation_config=worker['generation_config'],
+                                request_options={'timeout': gemini_timeout}
+                            )
+                            break  # Success
+                        except Exception as legacy_api_e:
+                            error_msg = str(legacy_api_e).lower()
+
+                            # Check for rate limit / quota errors
+                            if '429' in str(legacy_api_e) or 'quota' in error_msg or 'resource_exhausted' in error_msg or 'rate limit' in error_msg:
+                                print(f"  🚫 {worker_id}: Rate limit hit - {legacy_api_e}")
+
+                                # Mark current key as exhausted
+                                current_key = worker['api_key']
+                                self.api_manager.mark_key_exhausted(current_key)
+
+                                # Check if all keys are exhausted
+                                if self.api_manager.all_keys_exhausted():
+                                    print(f"  ❌ All API keys have hit their daily limits. Stopping early.")
+                                    raise Exception("All API keys exhausted - daily limits reached on all keys")
+
+                                # Try to rotate to next key
+                                if self.api_manager.rotate_to_next_key():
+                                    print(f"  ✅ Switched to new API key, retrying request...")
+                                    worker = self.api_manager.get_worker(0)
+                                    worker_id = worker['worker_id']
+                                    legacy_api_retry_count = 0  # Reset retry count
+                                    time.sleep(2)
+                                    continue
+                                else:
+                                    raise Exception("Could not rotate to available API key")
+
+                            legacy_api_retry_count += 1
+
+                            if 'server disconnected' in error_msg or 'connection' in error_msg:
+                                if legacy_api_retry_count < max_api_retries:
+                                    print(f"  ⚠️ {worker_id}: Connection error (attempt {legacy_api_retry_count}/{max_api_retries})")
+                                    time.sleep(2 ** legacy_api_retry_count)
+                                    continue
+                                else:
+                                    raise
+                            else:
+                                raise
+
                     api_duration = time.time() - api_start_time
                     print(f"  {worker_id}: Gemini API call completed in {api_duration:.1f}s")
 

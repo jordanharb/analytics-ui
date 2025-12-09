@@ -109,3 +109,4 @@ LIMIT 10;
 -- Refresh materialized view
 REFRESH MATERIALIZED VIEW mv_entities_search;
 
+

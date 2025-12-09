@@ -62,7 +62,7 @@ export function convertDateFiltersToEmailPeriod(filters: Filters): ConvertedDate
 export function getDatePeriodDescription(converted: ConvertedDatePeriod): string {
   switch (converted.period_type) {
     case 'last_week':
-      return 'Last calendar week (Mon-Sun)';
+      return 'Past 7 days (rolling)';
 
     case 'last_month':
       return 'Last calendar month';

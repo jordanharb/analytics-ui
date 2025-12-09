@@ -24,7 +24,9 @@ const formatResult = (value: unknown) => {
 };
 
 const ToolInvocationCard: React.FC<{ invocation: ToolInvocation }> = ({ invocation }) => {
-  const { toolName, state, args, result } = invocation;
+  const { toolName, args } = invocation;
+  const invocationState = (invocation.state ?? 'call') as string;
+  const result = (invocation as { result?: unknown }).result ?? (invocation as { output?: unknown }).output;
   const [isExpanded, setIsExpanded] = useState(false);
   const formattedArgs = args ? formatResult(args) : null;
   const formattedResult = formatResult(result);
@@ -56,12 +58,13 @@ const ToolInvocationCard: React.FC<{ invocation: ToolInvocation }> = ({ invocati
         <span
           className={clsx(
             'rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide font-semibold',
-            state === 'call' && 'bg-amber-100 text-amber-700',
-            state === 'result' && 'bg-emerald-100 text-emerald-700',
-            state === 'error' && 'bg-rose-100 text-rose-700'
+            invocationState === 'call' && 'bg-amber-100 text-amber-700',
+            invocationState === 'result' && 'bg-emerald-100 text-emerald-700',
+            invocationState === 'partial-call' && 'bg-blue-100 text-blue-700',
+            invocationState !== 'call' && invocationState !== 'result' && invocationState !== 'partial-call' && 'bg-rose-100 text-rose-700'
           )}
         >
-          {state}
+          {invocationState}
         </span>
       </button>
       {isExpanded && (

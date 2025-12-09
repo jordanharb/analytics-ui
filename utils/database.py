@@ -124,13 +124,13 @@ class _SupabaseSingleton:
         """Build the client with generous PostgREST & Storage time-outs."""
         key = SUPABASE_SERVICE_KEY or SUPABASE_KEY
         opts = ClientOptions(
-            postgrest_client_timeout=60,
-            storage_client_timeout=60,
+            postgrest_client_timeout=300,  # Increased to 5 minutes for large queries
+            storage_client_timeout=300,
             schema="public",
         )
         # Use our custom function that handles new key format
         client = _create_client_with_new_key(SUPABASE_URL, key, options=opts)
-        logger.info("✅ Supabase client initialised (60 s PostgREST timeout)")
+        logger.info("✅ Supabase client initialised (300 s PostgREST timeout)")
         return client
 
 
@@ -266,14 +266,14 @@ class MultiKeySupabaseManager:
         for i, service_key in enumerate(SUPABASE_SERVICE_KEYS):
             client_id = f"worker_{i}"
             opts = ClientOptions(
-                postgrest_client_timeout=60,
-                storage_client_timeout=60,
+                postgrest_client_timeout=300,  # Increased to 5 minutes for large queries
+                storage_client_timeout=300,
                 schema="public",
             )
             # Use our custom function that handles new key format
             self.clients[client_id] = _create_client_with_new_key(SUPABASE_URL, service_key, options=opts)
             self.rate_limiters[client_id] = SupabaseRateLimiter(SUPABASE_RPS_PER_KEY)
-            logger.info(f"✅ Supabase client '{client_id}' initialized with dedicated service key")
+            logger.info(f"✅ Supabase client '{client_id}' initialized with dedicated service key (300 s timeout)")
     
     def get_client_for_worker(self, worker_id: int) -> Client:
         """Get a dedicated Supabase client for a specific worker."""

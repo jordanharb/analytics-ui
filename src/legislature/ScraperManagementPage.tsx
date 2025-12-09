@@ -26,7 +26,7 @@ const workers: Worker[] = [
   {
     id: 'legislature',
     name: 'Legislature Updater',
-    description: 'Updates sessions, bills, votes, and bill content',
+    description: 'Updates sessions, bills (HTML+API), votes, RTS positions, and bill content',
     scriptPath: 'scripts/run_legislature_update.sh',
     status: 'idle'
   }
@@ -292,7 +292,8 @@ export function ScraperManagementPage() {
         <h3 className="text-lg font-semibold text-blue-900 mb-2">How to Use</h3>
         <ul className="list-disc list-inside space-y-1 text-sm text-blue-800">
           <li><strong>Campaign Finance Updater:</strong> Runs incremental update (new entities only, first 100 for transactions, first 50 PDFs)</li>
-          <li><strong>Legislature Updater:</strong> Updates current session (129) with new bills, votes, and content</li>
+          <li><strong>Legislature Updater:</strong> Updates current session (129) with bills (HTML+API), votes, RTS positions, and content</li>
+          <li>The legislature updater runs three separate scrapers in sequence for better reliability</li>
           <li>Click "Run" to start a worker and view live console output</li>
           <li>Click "Stop" to interrupt a running worker (progress is saved)</li>
           <li>Click "Show Console" to view output without starting the worker</li>

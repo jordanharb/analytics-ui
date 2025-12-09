@@ -50,6 +50,26 @@ POLL_SECONDS = int(os.getenv('AUTOMATION_WORKER_POLL_SECONDS', '60'))
 LOG_LINE_LIMIT = int(os.getenv('AUTOMATION_WORKER_LOG_LINES', '200'))
 
 
+def _get_event_posts_limit() -> int:
+    """Get event posts limit from database settings (with fallback to env)."""
+    try:
+        from automation.utils.settings import get_event_posts_limit
+        return get_event_posts_limit()
+    except Exception as e:
+        print(f"⚠️  Could not fetch event_posts_limit from database: {e}")
+        return int(os.getenv('AUTOMATION_EVENT_POSTS_LIMIT', '300'))
+
+
+def _get_dedup_events_limit() -> int:
+    """Get dedup events limit from database settings (with fallback to env)."""
+    try:
+        from automation.utils.settings import get_dedup_events_limit
+        return get_dedup_events_limit()
+    except Exception as e:
+        print(f"⚠️  Could not fetch dedup_events_limit from database: {e}")
+        return int(os.getenv('AUTOMATION_DEDUP_EVENTS_LIMIT', '20'))
+
+
 @dataclass
 class PipelineStep:
     name: str
@@ -189,7 +209,7 @@ PIPELINE_STEPS: List[PipelineStep] = [
             str(AUTOMATION_DIR / 'processors' / 'flash_standalone_event_processor.py'),
             '--max-workers', os.getenv('AUTOMATION_EVENT_MAX_WORKERS', '6'),
             '--cooldown-seconds', os.getenv('AUTOMATION_WORKER_COOLDOWN', '60'),
-            '--job-limit', os.getenv('AUTOMATION_EVENT_POSTS_LIMIT', '1000')
+            '--job-limit', str(_get_event_posts_limit())
         ]
     ),
     PipelineStep(
@@ -199,7 +219,7 @@ PIPELINE_STEPS: List[PipelineStep] = [
             str(AUTOMATION_DIR / 'scripts' / 'deduplicate_events_with_gemini.py'),
             '--live', '--yes', '--once',
             '--sleep-seconds', os.getenv('AUTOMATION_DEDUP_SLEEP_SECONDS', '120'),
-            '--limit', os.getenv('AUTOMATION_DEDUP_EVENTS_LIMIT', '500')
+            '--limit', str(_get_dedup_events_limit())
         ]
     ),
     PipelineStep(
@@ -213,7 +233,7 @@ PIPELINE_STEPS: List[PipelineStep] = [
     ),
     PipelineStep(
         name='coordinate_backfill',
-        command=[sys.executable, str(AUTOMATION_DIR / 'scripts' / 'backfill_coordinates.py')]
+        command=[sys.executable, str(AUTOMATION_DIR / 'scripts' / 'backfill_coordinates_simple.py')]
     )
 ]
 

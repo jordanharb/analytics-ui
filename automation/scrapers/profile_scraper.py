@@ -7,11 +7,34 @@ import csv
 import asyncio
 import os
 import re
+import sys
+from pathlib import Path
 from twscrape import API, User
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
 import json
+
+# Ensure repo + analytics-ui directories are importable for shared helpers
+CURRENT_FILE = Path(__file__).resolve()
+SCRAPERS_DIR = CURRENT_FILE.parent
+AUTOMATION_DIR = SCRAPERS_DIR.parent
+ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
+WEB_DIR = ANALYTICS_UI_DIR.parent
+REPO_ROOT = WEB_DIR.parent
+
+for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 from utils.database import get_supabase, fetch_all_rows
-from config.settings import COOKIE_CSV, NUM_ACCOUNTS, OUTPUT_DIR, TEST_MODE
+from config.settings import (
+    COOKIE_CSV,
+    NUM_ACCOUNTS,
+    OUTPUT_DIR,
+    TEST_MODE,
+    PROFILE_SCRAPER_CONCURRENCY,
+)
 
 # Configuration constants (instead of importing from config)
 FORCE_RESCRAPE = False  # Set to True if you want to re-scrape existing profiles
@@ -43,10 +66,6 @@ class UnknownActorProfileManager:
                 .select('id, detected_username, platform, mention_count, author_count, x_profile_data')\
                 .eq('platform', 'twitter')\
                 .eq('review_status', 'pending')
-
-            # If not forcing rescrape, exclude those already scraped
-            if not FORCE_RESCRAPE:
-                query = query.is_('x_profile_data', 'null')
             
             # Use fetch_all_rows to handle pagination automatically
             rows = fetch_all_rows(query)
@@ -311,10 +330,9 @@ class UnknownActorProfileManager:
         try:
             # Prepare update data
             update_data = {
-                'x_profile_data': profile_data,
-                'last_profile_update': datetime.now().isoformat()
+                'x_profile_data': profile_data
             }
-            
+
             # If it's real profile data, extract and populate the profile fields
             if not is_placeholder and profile_data:
                 displayname, bio, location = self.extract_profile_fields(profile_data)
@@ -327,6 +345,10 @@ class UnknownActorProfileManager:
                 
                 self.stats['profile_data_populated'] += 1
             
+            # Debug: ensure we're not sending columns the table lacks
+            # Remove keys with None values to avoid unnecessary updates
+            update_data = {k: v for k, v in update_data.items() if v is not None}
+
             result = self.supabase.table('v2_unknown_actors')\
                 .update(update_data)\
                 .eq('id', actor_id)\
@@ -357,43 +379,187 @@ class UnknownActorProfileManager:
             self.stats['errors'] += 1
             return False
 
+def _parse_netscape_cookie_file_to_df(file_path: str) -> pd.DataFrame:
+    """Parse cookies.txt-like files (Netscape or JSON) into a DataFrame."""
+    keys_of_interest = {"personalization_id", "gt", "kdt", "auth_token", "ct0", "twid"}
+    domains = ("x.com", ".x.com", "twitter.com", ".twitter.com")
+    accounts: dict[str, dict[str, str]] = {}
+    current_key: str | None = None
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        raw = f.read()
+
+    # Try JSON first
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and 'cookies' in data:
+            data = data['cookies']
+        if isinstance(data, list):
+            bucket = {}
+            for c in data:
+                name = c.get('name')
+                value = c.get('value')
+                dom = c.get('domain', '')
+                if name in keys_of_interest and (not dom or any(d in dom for d in domains)):
+                    bucket[name] = value
+            if bucket:
+                accounts['json'] = bucket
+        elif isinstance(data, dict):
+            bucket = {k: v for k, v in data.items() if k in keys_of_interest}
+            if bucket:
+                accounts['json'] = bucket
+    except Exception:
+        # Fallback to Netscape 7-field format
+        for line in raw.splitlines():
+            if not line.strip() or line.startswith('#'):
+                continue
+            parts = line.strip().split('\t')
+            if len(parts) != 7:
+                continue
+            domain, _, _, _, _, name, value = parts
+            if not any(d in domain for d in domains):
+                continue
+            if name not in keys_of_interest:
+                continue
+
+            identifier = None
+            if name == 'auth_token':
+                identifier = value
+            elif name == 'twid':
+                identifier = value
+            elif name == 'ct0':
+                identifier = value
+            elif current_key:
+                identifier = current_key
+
+            if identifier is None:
+                current_key = None
+                continue
+
+            current_key = identifier
+            account = accounts.setdefault(identifier, {})
+            account[name] = value
+
+    rows = []
+    for idx, (identifier, jar) in enumerate(accounts.items()):
+        if 'auth_token' not in jar or 'ct0' not in jar:
+            continue
+        order = ["personalization_id", "gt", "kdt", "auth_token", "ct0", "twid"]
+        header_parts = [f"{k}={jar[k]}" for k in order if k in jar]
+        if not header_parts:
+            header_parts = [f"{k}={v}" for k, v in jar.items()]
+        header = '; '.join(header_parts)
+        suffix_source = identifier or f"idx{idx}"
+        suffix = hashlib.sha1(suffix_source.encode()).hexdigest()[:8]
+        rows.append({
+            "username": f"cookie_{suffix}",
+            "password": "",
+            "email": "",
+            "email_password": "",
+            "cookie_string": header,
+            "cookie_header": header,
+        })
+
+    if not rows:
+        raise RuntimeError("No X/Twitter cookies found in provided file")
+
+    return pd.DataFrame(rows)
+
+
+def _normalize_cookie_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    records = []
+    seen_usernames: set[str] = set()
+
+    for idx, row in df.iterrows():
+        cookie_value = row.get('cookie_string') or row.get('cookie_header')
+        if not isinstance(cookie_value, str) or not cookie_value.strip():
+            continue
+        if 'auth_token' not in cookie_value or 'ct0' not in cookie_value:
+            continue
+
+        username = str(row.get('username') or '').strip()
+        if not username:
+            suffix = hashlib.sha1((cookie_value + str(idx)).encode()).hexdigest()[:10]
+            username = f"cookie_{suffix}"
+        elif username in seen_usernames:
+            suffix = hashlib.sha1((username + cookie_value + str(idx)).encode()).hexdigest()[:6]
+            username = f"{username}_{suffix}"
+
+        seen_usernames.add(username)
+
+        records.append({
+            'username': username,
+            'password': row.get('password', '') or '',
+            'email': row.get('email', '') or '',
+            'email_password': row.get('email_password', '') or '',
+            'cookie_string': cookie_value,
+            'cookie_header': row.get('cookie_header', '') or cookie_value
+        })
+
+    return pd.DataFrame(records)
+
 async def setup_api():
     """Initialize the twscrape API with accounts from the cookie file"""
     print("🔧 Setting up Twitter API accounts...")
     api = API()
-    
+
     try:
         # Look for cookies in multiple locations
         cookie_paths = [
             os.path.join('data', 'cookies_master.csv'),
             'cookies_master.csv',
-            COOKIE_CSV
+            os.getenv('COOKIE_CSV') or COOKIE_CSV,
+            os.path.join('data', 'cookies.txt'),
+            'cookies.txt',
+            os.getenv('COOKIE_TXT'),
+            os.getenv('TW_COOKIES_FILE')
         ]
-        
+
+        cookie_paths = [p for p in cookie_paths if p]
+
         df = None
         for path in cookie_paths:
-            if os.path.exists(path): 
-                df = pd.read_csv(path)
-                print(f"   📄 Found cookies at: {path}")
+            if os.path.exists(path):
+                try:
+                    if path.lower().endswith('.txt'):
+                        print(f"   📄 Found Netscape cookies file: {path}")
+                        df = _parse_netscape_cookie_file_to_df(path)
+                    else:
+                        df = pd.read_csv(path)
+                        print(f"   📄 Found CSV cookies file: {path}")
+                except Exception as e:
+                    print(f"   ⚠️  Failed parsing {path} as CSV: {e}")
+                    # Fallback: try Netscape/JSON parse even if extension is .csv
+                    try:
+                        df = _parse_netscape_cookie_file_to_df(path)
+                        print(f"   📄 Parsed {path} as Netscape/JSON cookie file")
+                    except Exception as alt_err:
+                        print(f"   ⚠️  Also failed Netscape/JSON parse for {path}: {alt_err}")
+                        df = None
+                        continue
                 break
-        
+
         if df is None:
             print(f"❌ Cookie file not found. Tried paths: {cookie_paths}")
             return None
-            
+
     except Exception as e:
         print(f"❌ Error reading cookie file: {e}")
         return None
-        
+
+    df = _normalize_cookie_dataframe(df)
+    if df.empty:
+        print("❌ No valid cookies (auth_token + ct0) found after parsing.")
+        return None
+
     sample_df = df.sample(n=min(NUM_ACCOUNTS, len(df)))
-    
+
     for _, row in sample_df.iterrows():
         await api.pool.add_account(
-            username=row["username"], 
-            password="placeholder_password",
-            email="placeholder_email@example.com", 
-            email_password="placeholder",
-            cookies=row["cookie_header"]
+            username=row.get("username", "unknown"), 
+            password=row.get("password", ""),
+            email=row.get("email", ""), 
+            email_password=row.get("email_password", "placeholder"),
+            cookies=row.get("cookie_header") or row.get("cookie_string", "")
         )
     
     print("🔑 Logging in API accounts...")
@@ -676,31 +842,69 @@ async def main():
         print(f"🧪 Testing with {len(all_actors)} actors (limited from {len(known_actors) + len(unknown_actors)} total)...\n")
     else:
         print(f"\n🔄 Processing {len(all_actors)} actor profiles ({len(known_actors)} known, {len(unknown_actors)} unknown)...\n")
-    
+
+    # Use batch processing instead of pure concurrency to avoid SQLite database conflicts
+    # SQLite (used by twscrape) can't handle many concurrent writes
+    batch_size = min(3, len(all_actors))  # Safe limit for SQLite concurrent access
+    if batch_size > 1:
+        print(f"⚡️ Processing {batch_size} profiles per batch to avoid database conflicts.\n")
+
     no_data_log = []
-    
-    for i, actor_data in enumerate(all_actors, 1):
-        is_known = actor_data.get('is_known_actor', False)
-        actor_type = "Known" if is_known else "Unknown"
-        
-        if is_known:
-            actor_name = actor_data.get('actor_name', '')
-            print(f"[{i}/{len(all_actors)}] {actor_type} - {actor_name} (@{actor_data['username']}): ", end="")
-        else:
-            print(f"[{i}/{len(all_actors)}] {actor_type} - @{actor_data['username']}: ", end="")
-        
-        # Scrape the profile
-        if is_known:
-            # For known actors, use similar scraping logic
-            profile, error_log = await scrape_known_actor_profile(api, actor_data, profile_manager)
-        else:
-            profile, error_log = await scrape_unknown_actor_profile(api, actor_data, profile_manager)
-        
-        if error_log:
-            no_data_log.append(error_log)
-        
-        # Small delay to avoid rate limiting
-        await asyncio.sleep(1)
+    total_actors = len(all_actors)
+
+    async def process_actor(actor_data, index):
+        """Scrape a single actor."""
+        error_log = None
+        actor_username = actor_data.get('username', 'unknown')
+        actor_type = "Known" if actor_data.get('is_known_actor', False) else "Unknown"
+
+        try:
+            if actor_data.get('is_known_actor', False):
+                actor_name = actor_data.get('actor_name', '')
+                print(f"[{index}/{total_actors}] {actor_type} - {actor_name} (@{actor_username}): ", end="")
+            else:
+                print(f"[{index}/{total_actors}] {actor_type} - @{actor_username}: ", end="")
+
+            is_known = actor_data.get('is_known_actor', False)
+            if is_known:
+                _, error_log = await scrape_known_actor_profile(api, actor_data, profile_manager)
+            else:
+                _, error_log = await scrape_unknown_actor_profile(api, actor_data, profile_manager)
+
+        except Exception as unexpected_error:
+            print(f"   ❌ Unexpected error scraping @{actor_username}: {unexpected_error}")
+            profile_manager.stats['errors'] += 1
+            error_log = {
+                "username": actor_username,
+                "actor_id": actor_data.get('id'),
+                "reason": str(unexpected_error)
+            }
+
+        return error_log
+
+    # Process in batches to avoid SQLite concurrent write issues
+    results = []
+    for batch_start in range(0, len(all_actors), batch_size):
+        batch_end = min(batch_start + batch_size, len(all_actors))
+        batch = all_actors[batch_start:batch_end]
+
+        # Create tasks for this batch
+        tasks = []
+        for i, actor_data in enumerate(batch):
+            index = batch_start + i + 1
+            tasks.append(process_actor(actor_data, index))
+
+        # Process batch concurrently
+        batch_results = await asyncio.gather(*tasks, return_exceptions=False)
+        results.extend(batch_results)
+
+        # Small delay between batches
+        if batch_end < len(all_actors):
+            await asyncio.sleep(0.5)
+
+    for result in results:
+        if result:
+            no_data_log.append(result)
     
     # Save error log
     if no_data_log and OUTPUT_DIR:

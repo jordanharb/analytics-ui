@@ -117,12 +117,15 @@ class SocialMediaProcessor:
         mentions = []
         try:
             if isinstance(mentioned_users_raw, str):
+                value = mentioned_users_raw.strip()
+                if not value or value.lower() in ("none", "null", "nan"):
+                    return []
                 # Try parsing as JSON first
-                if mentioned_users_raw.startswith('['):
-                    raw_mentions = json.loads(mentioned_users_raw)
+                if value.startswith('['):
+                    raw_mentions = json.loads(value)
                 else:
                     # Otherwise split by semicolon
-                    raw_mentions = [u.strip() for u in mentioned_users_raw.split(';') if u.strip()]
+                    raw_mentions = [u.strip() for u in value.split(';') if u.strip()]
             elif isinstance(mentioned_users_raw, list):
                 raw_mentions = mentioned_users_raw
             else:
@@ -146,20 +149,35 @@ class SocialMediaProcessor:
         
         try:
             if isinstance(hashtags_raw, str):
-                # Split by semicolon
-                return [h.strip() for h in hashtags_raw.split(';') if h.strip()]
+                value = hashtags_raw.strip()
+                if not value or value.lower() in ("none", "null", "nan"):
+                    return []
+                if value.startswith('['):
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return [str(h).strip() for h in parsed if str(h).strip()]
+                    if isinstance(parsed, str):
+                        value = parsed
+                # Split using common delimiters
+                if ';' in value:
+                    parts = value.split(';')
+                elif ',' in value:
+                    parts = value.split(',')
+                else:
+                    parts = value.split()
+                return [h.strip() for h in parts if h.strip()]
             elif isinstance(hashtags_raw, list):
-                return hashtags_raw
+                return [str(h).strip() for h in hashtags_raw if str(h).strip()]
         except:
             pass
-        
+
         return []
     
     def extract_hashtags_from_text(self, text):
         """Extract hashtags from text content"""
         if not text:
             return []
-        
+
         # Find all hashtags
         hashtags = re.findall(r'#\w+', text)
         return list(set(hashtags))
@@ -204,6 +222,71 @@ class SocialMediaProcessor:
             return "truth_social"
         else:
             return platform_lower
+
+    def ensure_string_array(self, value):
+        """Coerce various input formats into a clean list of strings."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip() and str(v).strip().lower() not in ("none", "null", "nan")]
+        if isinstance(value, str):
+            val = value.strip()
+            if not val or val.lower() in ("none", "null", "nan", "[]"):
+                return []
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, list):
+                    return [str(v).strip() for v in parsed if str(v).strip()]
+                if isinstance(parsed, str):
+                    val = parsed.strip()
+                    if not val:
+                        return []
+            except Exception:
+                pass
+            # Fallback delimiters
+            if ';' in val:
+                parts = val.split(';')
+            elif ',' in val:
+                parts = val.split(',')
+            else:
+                parts = val.split()
+            return [p.strip() for p in parts if p.strip()]
+        # Fallback to string representation
+        text = str(value).strip()
+        if not text:
+            return []
+        return [text]
+
+    def normalize_post_record(self, post: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of post with array fields normalized for RPC consumption."""
+        record = dict(post)
+
+        record['media_urls'] = self.ensure_string_array(record.get('media_urls'))
+        record['hashtags'] = list(dict.fromkeys(self.ensure_string_array(record.get('hashtags'))))
+
+        mentions = self.ensure_string_array(record.get('mentioned_users'))
+        normalized_mentions = []
+        for mention in mentions:
+            normalized = mention.lstrip('@').lower()
+            if normalized and normalized not in normalized_mentions:
+                normalized_mentions.append(normalized)
+        record['mentioned_users'] = normalized_mentions
+
+        other_data = record.get('other_data')
+        if isinstance(other_data, str):
+            try:
+                parsed = json.loads(other_data)
+                if isinstance(parsed, dict):
+                    other_data = parsed
+                else:
+                    other_data = {}
+            except Exception:
+                other_data = {}
+        elif not isinstance(other_data, dict):
+            other_data = {}
+        record['other_data'] = other_data
+
+        return record
 
     def load_known_usernames(self):
         """Load all known usernames from actor_usernames table"""
@@ -355,12 +438,12 @@ class SocialMediaProcessor:
         for i in range(0, len(posts_to_insert), batch_size):
             batch = posts_to_insert[i:i+batch_size]
 
+            # Ensure RPC receives properly normalized JSON arrays/objects
+            normalized_batch = [self.normalize_post_record(post) for post in batch]
+
             try:
                 # Use RPC function with ON CONFLICT handling
-                import json
-                posts_jsonb = json.dumps(batch)
-
-                result = self.supabase.rpc('bulk_insert_posts', {'posts': posts_jsonb}).execute()
+                result = self.supabase.rpc('bulk_insert_posts', {'posts': normalized_batch}).execute()
 
                 if result.data:
                     # Count actual inserts vs duplicates
@@ -397,7 +480,7 @@ class SocialMediaProcessor:
                 else:
                     print(f"   ⚠️  Error in batch {i//batch_size + 1}: {e}")
                     # Try individual inserts for debugging
-                    for post in batch[:3]:  # Just try first 3 to see what's wrong
+                    for post in normalized_batch[:3]:  # Just try first 3 to see what's wrong
                         try:
                             result = self.supabase.table("v2_social_media_posts")\
                                 .insert([post])\
@@ -1038,6 +1121,22 @@ class SocialMediaProcessor:
 
         # Insert in batches with on_conflict to let Postgres handle duplicates
         if link_records:
+            # Deduplicate within this batch to avoid ON CONFLICT hitting same row twice
+            priority = {'author': 3, 'tagged': 2, 'mentioned': 1}
+            dedup: dict[tuple[str, str], dict] = {}
+            for link in link_records:
+                key = (link['post_id'], link['actor_id'])
+                if key not in dedup:
+                    dedup[key] = link
+                else:
+                    existing_rel = dedup[key]['relationship_type']
+                    new_rel = link.get('relationship_type', existing_rel)
+                
+                    if priority.get(new_rel, 0) > priority.get(existing_rel, 0):
+                        dedup[key] = {**link, 'relationship_type': new_rel}
+
+            link_records = list(dedup.values())
+
             batch_size = 1000
             for i in range(0, len(link_records), batch_size):
                 batch = link_records[i : i + batch_size]

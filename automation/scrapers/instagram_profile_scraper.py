@@ -6,10 +6,12 @@ import asyncio
 import os
 import re
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from utils.database import get_supabase
+from automation.utils.database import fetch_all_rows
 import jmespath
 from loguru import logger as log
 from scrapfly import ScrapeConfig, ScrapflyClient
@@ -169,13 +171,13 @@ class InstagramProfileScraper:
                 known_handles_query = known_handles_query.or_(f'last_profile_update.is.null,last_profile_update.lt.{thirty_days_ago}')
             
             print("  📊 Fetching all actor data in single query...")
-            known_handles_result = known_handles_query.execute()
-            
+            known_handles_data = fetch_all_rows(known_handles_query)
+
             # Process results to find who needs profiles
             known_actors_needing_profiles = []
             actors_needing_full_scrape = 0
-            
-            for handle_record in known_handles_result.data:
+
+            for handle_record in known_handles_data:
                 # Actor data is already included in the response
                 actor = handle_record.get('v2_actors')
                 if not actor:
@@ -218,29 +220,40 @@ class InstagramProfileScraper:
                 print(f"   - Force re-scraping all profiles")
             
             # Then get Instagram handles marked for scraping (original logic for unknown actors)
+            # FILTER: Only include profiles mentioned 2+ times, exclude hashtag relationships
             print("🔍 Checking unknown actors for Instagram profile scraping...")
+            print("   ⚙️  Filters: Mentioned 2+ times, excluding hashtag relationships")
+
+            # Get mention counts and relationship types for unknown actors
             handles_query = self.supabase.table('actor_usernames')\
-                .select('id, username, actor_id, actor_type, last_profile_update')\
+                .select('id, username, actor_id, actor_type, last_profile_update, mention_count, relationship_type')\
                 .eq('platform', 'instagram')\
-                .eq('should_scrape', True)
+                .eq('should_scrape', True)\
+                .gte('mention_count', 2)  # Only 2+ mentions
             
             # If not force rescraping, only get handles without recent profile data
             if not force_rescrape:
                 thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
                 handles_query = handles_query.or_(f'last_profile_update.is.null,last_profile_update.lt.{thirty_days_ago}')
-            
-            handles_result = handles_query.execute()
-            
-            print(f"📊 Found {len(handles_result.data)} Instagram handles marked for scraping")
-            
+
+            handles_data = fetch_all_rows(handles_query)
+
+            print(f"📊 Found {len(handles_data)} Instagram handles marked for scraping")
+
             instagram_handles = []
             skipped_errors = 0
-            
-            for record in handles_result.data:
+
+            for record in handles_data:
                 handle = self.clean_instagram_handle(record['username'])
                 if not handle:
                     continue
-                    
+
+                # FILTER: Exclude hashtag relationships
+                relationship_type = record.get('relationship_type', '')
+                if relationship_type and 'hashtag' in relationship_type.lower():
+                    print(f"   ⏭️  Skipping @{handle} - hashtag relationship")
+                    continue
+
                 # Check if actor has error data in their profile BEFORE adding to list
                 table_name = f"{record['actor_type']}s"  # people, organizations, chapters
                 

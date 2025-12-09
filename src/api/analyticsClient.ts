@@ -15,10 +15,15 @@ class AnalyticsClient {
   
   private convertFiltersForBackend(filters: T.Filters): any {
     const converted: any = { ...filters };
-    
+
     // ✅ PRESERVE period and date_range in the converted object for debugging
     // These will be converted to min_date/max_date but kept for reference
-    
+
+    // Convert projects to project_ids (UI stores as 'projects', SQL expects 'project_ids')
+    if (filters.projects && Array.isArray(filters.projects) && filters.projects.length > 0) {
+      converted.project_ids = filters.projects;
+    }
+
     // Convert period to min_date/max_date
     if (filters.period && filters.period !== 'all') {
       const today = new Date();

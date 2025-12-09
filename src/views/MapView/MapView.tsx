@@ -52,15 +52,26 @@ export const MapView: React.FC = () => {
     }
   }, [showFilters]);
 
+  // Prevent concurrent loads
+  const loadingRef = useRef(false);
+
   // Load map data function (defined before useEffects)
   const loadMapData = async (retryCount = 0) => {
-    // Prevent infinite retries
-    if (retryCount > 10) {
-      console.error('Max retries reached, stopping');
-      setLoading(false);
+    // Prevent concurrent loads
+    if (loadingRef.current) {
+      console.log('Load already in progress, skipping');
       return;
     }
-    
+
+    // Prevent infinite retries
+    if (retryCount > 3) { // Reduced from 10 to 3
+      console.error('Max retries reached, stopping');
+      setLoading(false);
+      loadingRef.current = false;
+      return;
+    }
+
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     
@@ -118,21 +129,26 @@ export const MapView: React.FC = () => {
           } else {
             console.log('No geocoded points returned from API');
           }
-        } else if (retryCount < 10) {
-          console.log(`Map source not ready yet, retry ${retryCount + 1}/10...`);
-          // Retry after map loads
-          setTimeout(() => loadMapData(retryCount + 1), 500);
+        } else if (retryCount < 3) {
+          console.log(`Map source not ready yet, retry ${retryCount + 1}/3...`);
+          loadingRef.current = false; // Release lock before retry
+          // Retry after map loads (increased delay)
+          setTimeout(() => loadMapData(retryCount + 1), 1000);
+          return; // Don't release lock in finally block
         }
-      } else if (retryCount < 10) {
-        console.log(`Map not ready yet, retry ${retryCount + 1}/10...`);
-        // Retry after map loads
-        setTimeout(() => loadMapData(retryCount + 1), 500);
+      } else if (retryCount < 3) {
+        console.log(`Map not ready yet, retry ${retryCount + 1}/3...`);
+        loadingRef.current = false; // Release lock before retry
+        // Retry after map loads (increased delay)
+        setTimeout(() => loadMapData(retryCount + 1), 1000);
+        return; // Don't release lock in finally block
       }
     } catch (err: any) {
       console.error('Failed to load map data:', err);
       setError(err.message || 'Failed to load map data');
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   };
 

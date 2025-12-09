@@ -15,7 +15,8 @@ ANALYTICS_UI_DIR = AUTOMATION_DIR.parent
 WEB_DIR = ANALYTICS_UI_DIR.parent
 REPO_ROOT = WEB_DIR.parent
 
-for candidate in (REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
+# Add AUTOMATION_DIR to path for packaged app
+for candidate in (AUTOMATION_DIR, REPO_ROOT, WEB_DIR, ANALYTICS_UI_DIR):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
@@ -27,6 +28,7 @@ import os
 import re
 from twscrape import API
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import uuid
 import logging
@@ -53,9 +55,149 @@ class TwitterScraper:
         self.job_id = None  # Will be set by Celery task
         # Behavior flags
         self.clear_pool_on_start = os.getenv('TW_CLEAR_TWSCRAPE_CACHE', '1') in ('1', 'true', 'True')
-        self.cookie_mode = os.getenv('TW_COOKIE_MODE', 'auto').lower()  # 'auto' | 'cookies' | 'none'
-        self.allow_cookieless_fallback = os.getenv('TW_COOKIELESS_FALLBACK', '1') in ('1', 'true', 'True')
+        # FORCE cookie mode to 'auto' - ignore environment variable
+        self.cookie_mode = 'auto'  # FORCED to 'auto' - was: os.getenv('TW_COOKIE_MODE', 'auto').lower()
+        self.allow_cookieless_fallback = False  # DISABLED - force cookies only
         self.is_cookie_less = False
+
+    def _parse_netscape_cookie_file_to_df(self, file_path: str) -> pd.DataFrame:
+        """Parse a cookies.txt-like file into a DataFrame with cookie_string/header.
+
+        Supports:
+          - Netscape cookies.txt (tab-delimited 7 columns)
+          - JSON array of cookie objects [{name, value, ...}]
+          - JSON object map {name: value}
+        """
+        try:
+            keys_of_interest = {"personalization_id", "gt", "kdt", "auth_token", "ct0", "twid"}
+            domains = ("x.com", ".x.com", "twitter.com", ".twitter.com")
+            accounts: dict[str, dict[str, str]] = {}
+            current_key: str | None = None
+
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                raw = f.read()
+
+            # Try JSON first
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict) and 'cookies' in data:
+                    data = data['cookies']
+                if isinstance(data, list):
+                    bucket = {}
+                    for c in data:
+                        name = c.get('name')
+                        value = c.get('value')
+                        dom = c.get('domain', '')
+                        if name in keys_of_interest and (not dom or any(d in dom for d in domains)):
+                            bucket[name] = value
+                    if bucket:
+                        accounts['json'] = bucket
+                elif isinstance(data, dict):
+                    bucket = {k: v for k, v in data.items() if k in keys_of_interest}
+                    if bucket:
+                        accounts['json'] = bucket
+            except Exception:
+                # Fallback to Netscape format
+                for line in raw.splitlines():
+                    if not line.strip() or line.startswith('#'):
+                        continue
+                    parts = line.strip().split('\t')
+                    if len(parts) != 7:
+                        continue
+                    domain, _, _, _, _, name, value = parts
+                    if not any(d in domain for d in domains):
+                        continue
+                    if name not in keys_of_interest:
+                        continue
+
+                    identifier = None
+                    if name == 'auth_token':
+                        identifier = value
+                    elif name == 'twid':
+                        identifier = value
+                    elif name == 'ct0':
+                        identifier = value
+                    elif current_key:
+                        identifier = current_key
+
+                    if identifier is None:
+                        current_key = None
+                        continue
+
+                    current_key = identifier
+                    account = accounts.setdefault(identifier, {})
+                    account[name] = value
+
+            rows = []
+            for idx, (identifier, jar) in enumerate(accounts.items()):
+                if 'auth_token' not in jar or 'ct0' not in jar:
+                    continue
+                order = ["personalization_id", "gt", "kdt", "auth_token", "ct0", "twid"]
+                header_parts = [f"{k}={jar[k]}" for k in order if k in jar]
+                if not header_parts:
+                    header_parts = [f"{k}={v}" for k, v in jar.items()]
+                header = '; '.join(header_parts)
+                suffix_source = identifier or f"idx{idx}"
+                suffix = hashlib.sha1(suffix_source.encode()).hexdigest()[:8]
+                rows.append({
+                    "username": f"cookie_{suffix}",
+                    "password": "",
+                    "email": "",
+                    "email_password": "",
+                    "cookie_string": header,
+                    "cookie_header": header,
+                })
+
+            if not rows:
+                raise ValueError("No X/Twitter cookies found in provided file")
+
+            return pd.DataFrame(rows)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse cookies file at {file_path}: {e}")
+
+    def _normalize_cookie_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensure cookie rows have required fields and unique usernames."""
+        records = []
+        seen_usernames: set[str] = set()
+
+        for idx, row in df.iterrows():
+            # Check if CSV has separate auth_token and ct0 columns (common format)
+            auth_token = row.get('auth_token')
+            ct0 = row.get('ct0')
+
+            # If separate columns exist, build cookie_string from them
+            if auth_token and ct0 and isinstance(auth_token, str) and isinstance(ct0, str):
+                cookie_value = f"auth_token={auth_token.strip()}; ct0={ct0.strip()}"
+            else:
+                # Otherwise use existing cookie_string or cookie_header column
+                cookie_value = row.get('cookie_string') or row.get('cookie_header')
+
+            if not isinstance(cookie_value, str) or not cookie_value.strip():
+                continue
+            if 'auth_token' not in cookie_value or 'ct0' not in cookie_value:
+                continue
+
+            # Use account_name column if it exists, otherwise use username
+            username = str(row.get('account_name') or row.get('username') or '').strip()
+            if not username:
+                suffix = hashlib.sha1((cookie_value + str(idx)).encode()).hexdigest()[:10]
+                username = f"cookie_{suffix}"
+            elif username in seen_usernames:
+                suffix = hashlib.sha1((username + cookie_value + str(idx)).encode()).hexdigest()[:6]
+                username = f"{username}_{suffix}"
+
+            seen_usernames.add(username)
+
+            records.append({
+                'username': username,
+                'password': row.get('password', '') or '',
+                'email': row.get('email', '') or '',
+                'email_password': row.get('email_password', '') or '',
+                'cookie_string': cookie_value,
+                'cookie_header': row.get('cookie_header', '') or cookie_value
+            })
+
+        return pd.DataFrame(records)
 
     def check_cancellation_signal(self):
         """Check if job should be cancelled"""
@@ -92,11 +234,19 @@ class TwitterScraper:
         return val if val else None
 
     def get_twitter_handles_from_database(self):
-        """Gets Twitter handles marked for scraping from the database (should_scrape = TRUE)"""
+        """Gets Twitter handles marked for scraping from the database (should_scrape = TRUE)
+
+        Filters out accounts that were scraped within the last 24 hours.
+        """
 
         try:
-            # Check for handle limit (for testing)
-            handle_limit = int(os.getenv('TWITTER_HANDLE_LIMIT', '0'))
+            # Get handle limit from database settings (falls back to env if settings unavailable)
+            try:
+                from automation.utils.settings import get_twitter_handle_limit
+                handle_limit = get_twitter_handle_limit()
+            except Exception as e:
+                print(f"⚠️  Could not fetch settings from database, using env fallback: {e}")
+                handle_limit = int(os.getenv('TWITTER_HANDLE_LIMIT', '0'))
 
             # Query for Twitter handles where should_scrape is TRUE
             query = self.supabase.table('v2_actor_usernames')\
@@ -109,24 +259,56 @@ class TwitterScraper:
 
             result = query.execute()
 
+            # Calculate 24 hours ago
+            twenty_four_hours_ago = datetime.now() - timedelta(hours=24)
+
             twitter_data = []
+            skipped_recent = []
+
             for record in result.data:
                 handle = self.clean_twitter_handle(record['username'])
-                if handle:
-                    twitter_data.append({
-                        "actor_id": record['actor_id'],
-                        "actor_type": record['actor_type'],
-                        "handle": handle,
-                        "last_scrape": record.get('last_scrape')
-                    })
+                if not handle:
+                    continue
+
+                # Check if account was scraped in the last 24 hours
+                last_scrape = record.get('last_scrape')
+                if last_scrape:
+                    try:
+                        last_scrape_str = last_scrape.replace('Z', '+00:00')
+                        last_scrape_dt = datetime.fromisoformat(last_scrape_str)
+                        last_scrape_naive = last_scrape_dt.replace(tzinfo=None)
+
+                        if last_scrape_naive > twenty_four_hours_ago:
+                            skipped_recent.append(handle)
+                            continue
+                    except Exception:
+                        pass  # If date parsing fails, proceed to scrape
+
+                twitter_data.append({
+                    "actor_id": record['actor_id'],
+                    "actor_type": record['actor_type'],
+                    "handle": handle,
+                    "last_scrape": last_scrape
+                })
 
             limit_msg = f" (limited to {handle_limit})" if handle_limit > 0 else ""
             print(f"📋 Found {len(twitter_data)} Twitter handles marked for scraping{limit_msg}")
+
+            if skipped_recent:
+                print(f"⏭️  Skipped {len(skipped_recent)} handles scraped within last 24 hours")
+                if len(skipped_recent) <= 10:
+                    print(f"   Recently scraped: {', '.join([f'@{h}' for h in skipped_recent])}")
+                else:
+                    print(f"   Recently scraped: {', '.join([f'@{h}' for h in skipped_recent[:10]])}... and {len(skipped_recent) - 10} more")
+
             if len(twitter_data) == 0:
-                print("💡 Use the Scraping Manager web interface to select handles for scraping")
+                if skipped_recent:
+                    print("💡 All handles were recently scraped. Try again in 24 hours or adjust selection.")
+                else:
+                    print("💡 Use the Scraping Manager web interface to select handles for scraping")
 
             return twitter_data
-            
+
         except Exception as e:
             print(f"❌ Error loading Twitter handles from database: {e}")
             return []
@@ -177,38 +359,72 @@ class TwitterScraper:
         api = API()
         
         try:
-            # Look for cookies in data directory (local backup) or main directory
+            # Look for cookies in common locations and env-specified paths
             cookie_paths = [
+                # Relative paths (for development)
                 os.path.join('data', 'cookies_master.csv'),
                 'cookies_master.csv',
-                COOKIE_CSV
+                os.getenv('COOKIE_CSV') or COOKIE_CSV,
+                os.path.join('data', 'cookies.txt'),
+                'cookies.txt',
+                # Production/installed paths
+                '/usr/local/tpusa-automation/data/cookies_master.csv',
+                os.path.join(str(AUTOMATION_DIR.parent), 'data', 'cookies_master.csv'),
+                # Environment variable overrides
+                os.getenv('COOKIE_TXT'),
+                os.getenv('TW_COOKIES_FILE')
             ]
-            
+
+            cookie_paths = [p for p in cookie_paths if p]
+
             df = None
+            found_path = None
             for path in cookie_paths:
                 if os.path.exists(path):
-                    df = pd.read_csv(path)
-                    print(f"   📄 Found cookies at: {path}")
+                    found_path = path
+                    try:
+                        if path.lower().endswith('.txt'):
+                            print(f"   📄 Found Netscape cookies file: {path}")
+                            df = self._parse_netscape_cookie_file_to_df(path)
+                        else:
+                            df = pd.read_csv(path)
+                            print(f"   📄 Found CSV cookies file: {path}")
+                    except Exception as parse_err:
+                        print(f"   ⚠️  Failed parsing {path} as CSV: {parse_err}")
+                        # Fallback: try parsing as Netscape/JSON even if extension is .csv
+                        try:
+                            df = self._parse_netscape_cookie_file_to_df(path)
+                            print(f"   📄 Parsed {path} as Netscape/JSON cookie file")
+                        except Exception as alt_err:
+                            print(f"   ⚠️  Also failed Netscape/JSON parse for {path}: {alt_err}")
+                            df = None
+                            found_path = None
+                            continue
                     break
-            
+
             if df is None:
-                print(f"❌ Cookie file not found. Tried paths: {cookie_paths}")
+                print(f"❌ Cookie file not found or unreadable. Tried paths: {cookie_paths}")
                 return None
-                
+
         except Exception as e:
-            print(f"❌ Error reading cookie file: {e}")
+            print(f"❌ Error resolving cookie file: {e}")
             return None
-            
+
+        df = self._normalize_cookie_dataframe(df)
+        if df.empty:
+            print("❌ No valid cookies (auth_token + ct0) found after parsing. Aborting.")
+            return None
+
         # Function to add a sampled set of accounts and try login, returning active count
         async def add_and_login(sample_df):
             for _, row in sample_df.iterrows():
                 try:
                     await api.pool.add_account(
                         username=row.get("username", "unknown"),
-                        password="placeholder_password",
-                        email="placeholder_email@example.com",
-                        email_password="placeholder",
-                        cookies=row.get("cookie_header", "")
+                        password=row.get("password", ""),
+                        email=row.get("email", ""),
+                        email_password=row.get("email_password", "placeholder"),
+                        cookies=row.get("cookie_string", "")
                     )
                 except Exception as e:
                     print(f"   ⚠️  Skipped adding account {row.get('username')}: {e}")
@@ -218,23 +434,27 @@ class TwitterScraper:
             except Exception as e:
                 print(f"   ⚠️  login_all reported issues: {e}")
             # Inspect pool statuses
-            active = 0; suspended = 0; locked = 0; other = 0
+            active = 0; has_cookies = 0; has_error = 0; other = 0
             try:
                 accounts = await api.pool.get_all()
                 for acc in accounts:
-                    status = getattr(acc, 'status', '')
-                    if status == 'active':
+                    # Check the actual 'active' boolean field, not a non-existent 'status' string
+                    is_active = getattr(acc, 'active', False)
+                    has_cookie = bool(getattr(acc, 'cookies', {}))
+                    has_error_msg = bool(getattr(acc, 'error_msg', ''))
+
+                    if is_active:
                         active += 1
-                    elif status == 'suspended':
-                        suspended += 1
-                    elif status == 'locked':
-                        locked += 1
+                    elif has_error_msg:
+                        has_error += 1
+                    elif has_cookie:
+                        has_cookies += 1
                     else:
                         other += 1
             except Exception as e:
                 print(f"   ⚠️  Could not list account statuses: {e}")
-            print(f"   📈 Pool status after login: active={active}, suspended={suspended}, locked={locked}, other={other}")
-            return active
+            print(f"   📈 Pool status after login: active={active}, with_cookies={has_cookies}, errors={has_error}, other={other}")
+            return active + has_cookies  # Return count of usable accounts (active OR has cookies)
 
         # Use more accounts for better speed and redundancy; attempt up to 3 samples until we get active accounts
         num_accounts_to_use = min(NUM_ACCOUNTS, len(df))
@@ -248,7 +468,7 @@ class TwitterScraper:
             active_count = await add_and_login(sample_df)
 
         if active_count == 0:
-            msg = "❌ No active accounts available after login. Cookies may be expired."
+            msg = "❌ No usable accounts available after login. Cookies may be expired."
             if self.cookie_mode == 'cookies' and not self.allow_cookieless_fallback:
                 print(msg + " Aborting due to cookie-only mode.")
                 return api
@@ -258,7 +478,7 @@ class TwitterScraper:
             else:
                 print(msg + " Update cookies_master.csv or enable fallback.")
         else:
-            print("✅ API setup complete with active accounts.")
+            print(f"✅ API setup complete with {active_count} usable accounts (active or with cookies).")
 
         return api
 
@@ -308,7 +528,7 @@ class TwitterScraper:
 
     async def _search_with_probe(self, api, handle: str, start_date: str, limit: int):
         """Check account status with user_by_login, then search. If empty but account exists with tweets,
-        refresh the pool via a fresh API and retry once.
+        retry up to 3 times with exponential backoff.
         """
         # Probe existence
         user_obj = None
@@ -332,36 +552,89 @@ class TwitterScraper:
             print(f"   🔒 @{handle} is protected; skipping.")
             return []
 
-        # Normal search
+        # Try with date filter - if nothing found on first attempt, account is up-to-date
         tweets = await self._fetch_tweets_for_handle(api, handle, start_date, limit)
         if tweets:
             return tweets
 
-        # If user has tweets but we couldn't fetch any, refresh and retry once
-        statuses = getattr(user_obj, 'statusesCount', None)
-        if isinstance(statuses, int) and statuses > 0:
-            if not self.is_cookie_less:
-                print(f"   🔁 @{handle}: user exists with {statuses} tweets but none returned; refreshing pool and retrying once...")
-                try:
-                    fresh_api = await self.setup_api(clear_cache=False)
-                    if fresh_api:
-                        # Re-probe to avoid 404/rename cases
-                        try:
-                            u2 = await fresh_api.user_by_login(handle)
-                            if u2 and not getattr(u2, 'protected', False):
-                                tweets = await self._fetch_tweets_for_handle(fresh_api, handle, start_date, limit)
-                                if tweets:
-                                    return tweets
-                        except Exception as e:
-                            print(f"   ⚠️ Retry probe failed for @{handle}: {e}")
-                except Exception as e:
-                    print(f"   ⚠️ Pool refresh failed: {e}")
-
+        # No tweets found on first attempt - account is up-to-date
+        print(f"   ✓ @{handle}: up-to-date (no new tweets since last scrape)")
         return []
 
-    async def _fetch_tweets_for_handle(self, api, handle: str, start_date: str, limit: int):
-        """Fetch tweets for a handle using the provided API and date bounds."""
-        query = f"(from:{handle}) since:{start_date} until:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+    async def _wait_for_available_accounts(self, api):
+        """Check if accounts are rate limited and wait until they're available."""
+        if self.is_cookie_less:
+            return  # Skip check for cookie-less mode
+
+        try:
+            # Get all accounts from the pool
+            accounts = await api.pool.get_all()
+            if not accounts:
+                return  # No accounts to check
+
+            # Check if all accounts are rate limited
+            now = datetime.now(timezone.utc)
+            earliest_available = None
+
+            for acc in accounts:
+                # Check if account has rate limit info
+                locks = getattr(acc, 'locks', {})
+                if not locks:
+                    continue  # Account is available
+
+                # Find the earliest time when an account will be available
+                for queue_name, unlock_time in locks.items():
+                    if queue_name == 'UserByScreenName':  # The queue we use for searches
+                        if isinstance(unlock_time, (int, float)):
+                            unlock_dt = datetime.fromtimestamp(unlock_time, tz=timezone.utc)
+                            if unlock_dt > now:
+                                if earliest_available is None or unlock_dt < earliest_available:
+                                    earliest_available = unlock_dt
+
+            # If all accounts are locked, wait until the earliest one is available
+            if earliest_available:
+                wait_seconds = (earliest_available - now).total_seconds()
+                if wait_seconds > 0:
+                    wait_minutes = wait_seconds / 60
+                    print(f"\n⏳ All accounts rate limited. Waiting {wait_minutes:.1f} minutes until {earliest_available.strftime('%H:%M:%S')}...")
+
+                    # Wait in 30-second increments so we can check for cancellation
+                    remaining = wait_seconds
+                    while remaining > 0:
+                        sleep_time = min(30, remaining)
+                        await asyncio.sleep(sleep_time)
+                        remaining -= sleep_time
+
+                        # Check for cancellation during wait
+                        if self.check_cancellation_signal():
+                            print("🛑 Cancellation detected during rate limit wait")
+                            return
+
+                        if remaining > 0:
+                            print(f"   ⏳ Still waiting... {remaining/60:.1f} minutes remaining")
+
+                    print(f"✅ Rate limit wait complete - resuming scraping...")
+
+        except Exception as e:
+            # If we can't check rate limits, just continue (best effort)
+            print(f"   ⚠️ Could not check account rate limits: {e}")
+
+    async def _fetch_tweets_for_handle(self, api, handle: str, start_date: str, limit: int, skip_date_filter: bool = False):
+        """Fetch tweets for a handle using the provided API and date bounds.
+
+        Args:
+            api: Twitter API instance
+            handle: Twitter username
+            start_date: Start date for filtering (YYYY-MM-DD)
+            limit: Maximum number of tweets
+            skip_date_filter: If True, ignore date filter and get any tweets
+        """
+        if skip_date_filter:
+            query = f"from:{handle}"
+            print(f"   🔍 Trying without date filter: {query}")
+        else:
+            query = f"(from:{handle}) since:{start_date} until:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+
         tweets = []
         async for tweet in api.search(query, limit=limit):
             tweets.append(tweet)
@@ -459,10 +732,16 @@ class TwitterScraper:
         if upload_success:
             print(f"✅ Batch saved successfully: {len(self.pending_tweets)} tweets")
 
-            # Update last_scrape timestamps ONLY for handles that had tweets in this batch
+            # Update last_scrape timestamps ONLY for handles that ACTUALLY had tweets in this batch
+            # Do NOT update timestamps for accounts that returned 0 tweets (likely rate limited)
             unique_actor_ids = set()
             for tweet in self.pending_tweets:
                 unique_actor_ids.add(tweet['actor_id'])
+
+            if not unique_actor_ids:
+                print(f"   ⚠️  No tweets to save - skipping timestamp updates")
+                self.pending_tweets = []
+                return True
 
             # Use bulk RPC function instead of individual updates
             try:
@@ -472,7 +751,7 @@ class TwitterScraper:
                 }).execute()
 
                 updated_count = result.data if result.data is not None else 0
-                print(f"   📅 Updated {updated_count} handle timestamps in single bulk query")
+                print(f"   📅 Updated {updated_count} handle timestamps (only accounts with tweets)")
 
                 # Track successfully uploaded handles
                 for tweet in self.pending_tweets:
@@ -664,7 +943,10 @@ class TwitterScraper:
                 # Update job status
                 self.update_scraping_job_progress(job_id, len(twitter_data), None, 'cancelled')
                 return
-                
+
+            # Check if accounts are rate limited and wait if needed
+            await self._wait_for_available_accounts(api)
+
             batch_end = min(batch_start + concurrent_batch_size, len(twitter_data))
             batch = twitter_data[batch_start:batch_end]
             

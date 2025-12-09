@@ -1,10 +1,11 @@
-import mapboxgl from 'mapbox-gl';
+import mapboxgl, { CirclePaint, SymbolPaint, LngLatBounds } from 'mapbox-gl';
 
 // Set token from env
 // Note: Using a public token instead of secret token for client-side use
 // The secret token (sk.*) should only be used server-side
 // For now, disabling the map until a proper public token is provided
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
+export const MAPBOX_ENABLED = Boolean(mapboxgl.accessToken);
 
 export const MAPBOX_STYLE = 'mapbox://styles/mapbox/light-v11';
 
@@ -13,7 +14,7 @@ export const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
 export const DEFAULT_ZOOM = 4;
 
 // Cluster configuration - Size and color scale proportionally with event count
-export const CLUSTER_PAINT: mapboxgl.CirclePaint = {
+export const CLUSTER_PAINT: CirclePaint = {
   // Blue gradient that darkens with more events
   'circle-color': [
     'interpolate',
@@ -44,7 +45,7 @@ export const CLUSTER_PAINT: mapboxgl.CirclePaint = {
 };
 
 // Unclustered point configuration - Matches cluster styling for visual consistency
-export const UNCLUSTERED_PAINT: mapboxgl.CirclePaint = {
+export const UNCLUSTERED_PAINT: CirclePaint = {
   // Blue gradient that darkens with more events
   'circle-color': [
     'interpolate',
@@ -73,7 +74,7 @@ export const UNCLUSTERED_PAINT: mapboxgl.CirclePaint = {
 };
 
 // Cluster text label
-export const CLUSTER_COUNT_PAINT: mapboxgl.SymbolPaint = {
+export const CLUSTER_COUNT_PAINT: SymbolPaint = {
   'text-color': '#ffffff'
 };
 
@@ -84,7 +85,7 @@ export const getMapBounds = (points: Array<{ lat: number; lon: number }>) => {
   
   if (validPoints.length === 0) return undefined;
   
-  const bounds = new mapboxgl.LngLatBounds();
+  const bounds = new LngLatBounds();
   validPoints.forEach(p => bounds.extend([p.lon, p.lat]));
   return bounds;
 };

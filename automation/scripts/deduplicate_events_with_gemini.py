@@ -49,39 +49,39 @@ class GroupBasedDeduplicator:
         
     def refresh_duplicate_groups(self):
         """Refresh the materialized view with latest data"""
-        print("🔄 Refreshing duplicate groups view...")
+        print("🔄 Refreshing duplicate groups view...", flush=True)
         try:
             result = self.supabase.rpc('refresh_duplicate_groups').execute()
-            print("✅ Duplicate groups refreshed")
+            print("✅ Duplicate groups refreshed", flush=True)
             return True
         except Exception as e:
-            print(f"⚠️ Could not refresh view: {e}")
+            print(f"⚠️ Could not refresh view: {e}", flush=True)
             return False
-    
+
     def get_duplicate_groups(self, min_score=0.5, confidence_level=None, limit=None):
         """Fetch duplicate groups from the view"""
-        print("📊 Fetching duplicate groups from database...")
-        
+        print("📊 Fetching duplicate groups from database...", flush=True)
+
         query = self.supabase.table('v2_potential_duplicate_groups').select('*')
-        
+
         # Filter by minimum score
         if min_score:
             query = query.gte('max_similarity_score', min_score)
-        
+
         # Filter by confidence if specified
         if confidence_level:
             query = query.eq('confidence_level', confidence_level)
-        
+
         # Order by group size first (larger groups more important), then by score
         query = query.order('group_size', desc=True).order('max_similarity_score', desc=True)
-        
+
         if limit:
             query = query.limit(limit)
-        
+
         result = query.execute()
         groups = result.data or []
-        
-        print(f"✅ Found {len(groups)} duplicate groups")
+
+        print(f"✅ Found {len(groups)} duplicate groups", flush=True)
         return groups
     
     def get_group_details(self, group_id):

@@ -12,6 +12,8 @@ import {
   linkUnknownActor,
   promoteUnknownActor,
   searchExistingActors,
+  createNewActor,
+  type CreateActorPayload,
 } from '../../api/actorClassifierService';
 import type {
   ClassifierView,
@@ -33,6 +35,10 @@ interface LinkModalState {
   actor?: UnknownActor;
 }
 
+interface CreateActorModalState {
+  open: boolean;
+}
+
 interface PersonFormState {
   fullName: string;
   presentRole: string;
@@ -42,7 +48,6 @@ interface PersonFormState {
   about: string;
   isTpusaStaff: boolean;
   isTpusaAffiliated: boolean;
-  primaryOrganizationId: string;
 }
 
 interface OrganizationFormState {
@@ -89,6 +94,19 @@ interface PromoteModalProps {
     fields?: Record<string, any>;
     links?: PromoteLinkInput[];
   }) => void;
+  organizations: Array<Pick<Actor, 'id' | 'name'>>;
+  roleCategories: string[];
+  relationshipLookups: {
+    relationships: string[];
+    roles: string[];
+    roleCategories: string[];
+  };
+}
+
+interface CreateActorModalProps {
+  state: CreateActorModalState;
+  onClose: () => void;
+  onCreate: (payload: CreateActorPayload) => void;
   organizations: Array<Pick<Actor, 'id' | 'name'>>;
   roleCategories: string[];
   relationshipLookups: {
@@ -237,6 +255,7 @@ export const ActorClassifierView: React.FC = () => {
   const [total, setTotal] = useState<number>(0);
   const [promoteModal, setPromoteModal] = useState<PromoteModalState>({ open: false });
   const [linkModal, setLinkModal] = useState<LinkModalState>({ open: false });
+  const [createActorModal, setCreateActorModal] = useState<CreateActorModalState>({ open: false });
   const [linkSearchTerm, setLinkSearchTerm] = useState<string>('');
   const [linkResults, setLinkResults] = useState<Actor[]>([]);
   const [linkIsSearching, setLinkIsSearching] = useState<boolean>(false);
@@ -486,14 +505,44 @@ export const ActorClassifierView: React.FC = () => {
     [linkModal.actor, refreshAfterOperation],
   );
 
+  const createActor = useCallback(
+    async (payload: CreateActorPayload) => {
+      try {
+        const newActorId = await createNewActor(payload);
+        setCreateActorModal({ open: false });
+        setOperationMessage(`Actor created successfully! ID: ${newActorId}`);
+        setTimeout(() => setOperationMessage(null), 4000);
+        // Note: No need to refresh unknown actors list since this is a new actor
+      } catch (error) {
+        console.error('Failed to create actor', error);
+        setOperationMessage('Actor creation failed – check console for details.');
+        setTimeout(() => setOperationMessage(null), 3000);
+      }
+    },
+    [],
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto flex w-full max-w-[1380px] flex-col px-6 py-10">
         <header className="mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Actor Classifier</h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Review high-priority unknown actors, promote confirmed identities, and link to existing entities.
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Actor Classifier</h1>
+              <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                Review high-priority unknown actors, promote confirmed identities, and link to existing entities.
+              </p>
+            </div>
+            <button
+              onClick={() => setCreateActorModal({ open: true })}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Create New Actor
+            </button>
+          </div>
         </header>
 
         <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -572,6 +621,7 @@ export const ActorClassifierView: React.FC = () => {
                     <tr>
                       <Th>Handle</Th>
                       <Th>Display Name</Th>
+                      <Th>Bio</Th>
                       <Th>Platform</Th>
                       <Th>Mentions</Th>
                       <Th>Authors</Th>
@@ -583,41 +633,122 @@ export const ActorClassifierView: React.FC = () => {
                       const score = (actor.mention_count ?? 0) * 2 + (actor.author_count ?? 0) * 5;
                       const isSelected = actor.id === selectedActorId;
                       return (
-                        <tr
-                          key={actor.id}
-                          onClick={() => handleActorSelect(actor.id)}
-                          className={`cursor-pointer transition ${
-                            isSelected ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
-                          }`}
-                        >
-                          <Td>
-                            <div className="flex flex-col">
-                              <span className="font-semibold text-slate-900">@{actor.detected_username ?? 'unknown'}</span>
-                              <span className="text-xs text-slate-500">
-                                {actor.first_seen_date ? `First seen ${new Date(actor.first_seen_date).toLocaleDateString()}` : 'First seen —'}
+                        <React.Fragment key={actor.id}>
+                          <tr
+                            onClick={() => handleActorSelect(actor.id)}
+                            className={`cursor-pointer transition ${
+                              isSelected ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            <Td>
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-slate-900">@{actor.detected_username ?? 'unknown'}</span>
+                                <span className="text-xs text-slate-500">
+                                  {actor.first_seen_date ? `First seen ${new Date(actor.first_seen_date).toLocaleDateString()}` : 'First seen —'}
+                                </span>
+                              </div>
+                            </Td>
+                            <Td>
+                              <span className="text-sm text-slate-700">{actor.profile_displayname ?? '—'}</span>
+                            </Td>
+                            <Td>
+                              <div className="max-w-xs truncate text-xs text-slate-600" title={actor.profile_bio ?? 'No bio'}>
+                                {actor.profile_bio ? actor.profile_bio.substring(0, 100) + (actor.profile_bio.length > 100 ? '...' : '') : '—'}
+                              </div>
+                            </Td>
+                            <Td>
+                              <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                {actor.platform ?? '—'}
                               </span>
-                            </div>
-                          </Td>
-                          <Td>
-                            <span className="text-sm text-slate-700">{actor.profile_displayname ?? '—'}</span>
-                          </Td>
-                          <Td>
-                            <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
-                              {actor.platform ?? '—'}
-                            </span>
-                          </Td>
-                          <Td>
-                            <span className="font-semibold text-slate-800">{actor.mention_count ?? 0}</span>
-                          </Td>
-                          <Td>
-                            <span className="font-semibold text-slate-800">{actor.author_count ?? 0}</span>
-                          </Td>
-                          <Td>
-                            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                              {score}
-                            </span>
-                          </Td>
-                        </tr>
+                            </Td>
+                            <Td>
+                              <span className="font-semibold text-slate-800">{actor.mention_count ?? 0}</span>
+                            </Td>
+                            <Td>
+                              <span className="font-semibold text-slate-800">{actor.author_count ?? 0}</span>
+                            </Td>
+                            <Td>
+                              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                {score}
+                              </span>
+                            </Td>
+                          </tr>
+                          {isSelected && detailActor && detailActor.id === actor.id && (
+                            <tr className="bg-blue-50">
+                              <td colSpan={7} className="px-4 py-4">
+                                <div className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm">
+                                  <div className="mb-4 space-y-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div>
+                                        <h3 className="text-lg font-semibold text-slate-900">@{detailActor.detected_username}</h3>
+                                        <p className="text-sm text-slate-600">{detailActor.profile_displayname}</p>
+                                      </div>
+                                      {(() => {
+                                        const platform = detailActor.platform?.toLowerCase();
+                                        const username = detailActor.detected_username;
+                                        let url = '';
+                                        if (platform === 'twitter' || platform === 'x') {
+                                          url = `https://twitter.com/${username}`;
+                                        } else if (platform === 'instagram') {
+                                          url = `https://instagram.com/${username}`;
+                                        } else if (platform === 'tiktok') {
+                                          url = `https://tiktok.com/@${username}`;
+                                        } else if (platform === 'truth_social') {
+                                          url = `https://truthsocial.com/@${username}`;
+                                        }
+
+                                        return url ? (
+                                          <a
+                                            href={url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-1 rounded-md bg-slate-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-500"
+                                          >
+                                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                            </svg>
+                                            View Profile
+                                          </a>
+                                        ) : null;
+                                      })()}
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3 text-sm">
+                                      <InfoRow label="Platform" value={detailActor.platform ?? '—'} />
+                                      <InfoRow label="Mentions" value={(detailActor.mention_count ?? 0).toLocaleString()} />
+                                      <InfoRow label="Authors" value={(detailActor.author_count ?? 0).toLocaleString()} />
+                                      <InfoRow
+                                        label="Priority Score"
+                                        value={
+                                          ((detailActor.mention_count ?? 0) * 2 + (detailActor.author_count ?? 0) * 5).toLocaleString()
+                                        }
+                                      />
+                                    </div>
+                                    <div>
+                                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bio</span>
+                                      <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                                        {detailActor.profile_bio?.trim() || 'No bio available.'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-col gap-2 border-t border-slate-200 pt-4">
+                                    <button
+                                      onClick={() => setPromoteModal({ open: true, actor: detailActor })}
+                                      className="rounded-lg bg-emerald-500 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-400"
+                                    >
+                                      Promote to Actor
+                                    </button>
+                                    <button
+                                      onClick={() => setLinkModal({ open: true, actor: detailActor })}
+                                      className="rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500"
+                                    >
+                                      Link to Existing Actor
+                                    </button>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -729,6 +860,14 @@ export const ActorClassifierView: React.FC = () => {
         advancedFilters={linkAdvancedFilters}
         setAdvancedFilters={filters => setLinkAdvancedFilters(filters)}
       />
+      <CreateActorModal
+        state={createActorModal}
+        onClose={() => setCreateActorModal({ open: false })}
+        onCreate={createActor}
+        organizations={organizations}
+        roleCategories={roleCategories}
+        relationshipLookups={relationshipLookups}
+      />
     </div>
   );
 };
@@ -791,7 +930,6 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
       new Set([
         'present_role',
         'role_category',
-        'primary_organization_id',
         'about',
         'type',
         'summary_focus',
@@ -813,12 +951,44 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
   const [linkSearchResults, setLinkSearchResults] = useState<Actor[]>([]);
   const [linkSelections, setLinkSelections] = useState<LinkSelection[]>([]);
   const [linkIsSearching, setLinkIsSearching] = useState(false);
+  const [suggestedLinks, setSuggestedLinks] = useState<Actor[]>([]);
 
   useEffect(() => {
     if (state.open) {
       setActorType('person');
+      // Fetch suggested links based on username similarity
+      if (actor?.detected_username) {
+        searchExistingActors(actor.detected_username, { limit: 5 })
+          .then(results => {
+            setSuggestedLinks(results);
+            // Auto-add top result if very similar
+            if (results.length > 0 && linkSelections.length === 0) {
+              const topResult = results[0];
+              const username = actor.detected_username.toLowerCase();
+              const actorName = topResult.name.toLowerCase();
+              // If username closely matches name, auto-suggest it
+              if (actorName.includes(username) || username.includes(actorName)) {
+                setLinkingEnabled(true);
+                setLinkSelections([{
+                  actor: topResult,
+                  relationship: '',
+                  role: '',
+                  roleCategory: '',
+                  isPrimary: false,
+                  startDate: '',
+                  endDate: '',
+                  metadata: {}
+                }]);
+              }
+            }
+          })
+          .catch(err => console.error('Failed to fetch suggested links:', err));
+      }
+    } else {
+      // Reset when modal closes
+      setSuggestedLinks([]);
     }
-  }, [state.open]);
+  }, [state.open, actor]);
 
   useEffect(() => {
     if (!state.open || !actor) return;
@@ -833,7 +1003,6 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
         about: actor.profile_bio ?? '',
         isTpusaStaff: false,
         isTpusaAffiliated: false,
-        primaryOrganizationId: '',
       });
     } else if (actorType === 'organization') {
       setOrganizationForm({
@@ -941,10 +1110,10 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
     setLinkIsSearching(true);
     const handler = setTimeout(async () => {
       try {
-        const selectedIds = new Set(linkSelections.map(selection => selection.actor.id));
         const results = await searchExistingActors(term, { limit: MAX_LINK_SEARCH_RESULTS });
         if (!cancelled) {
-          setLinkSearchResults(results.filter(result => !selectedIds.has(result.id)));
+          // Filter out already selected actors when displaying results
+          setLinkSearchResults(results);
         }
       } catch (error) {
         if (!cancelled) {
@@ -962,7 +1131,7 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
       cancelled = true;
       clearTimeout(handler);
     };
-  }, [linkingEnabled, linkSearchTerm, linkSelections]);
+  }, [linkingEnabled, linkSearchTerm]);
 
   const handleAddLinkSelection = (actorToAdd: Actor) => {
     setLinkSelections(prev => {
@@ -1070,7 +1239,6 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
       stateValue = personForm.state.trim() || undefined;
       fields.present_role = personForm.presentRole.trim() || null;
       fields.role_category = personForm.roleCategory.trim() || null;
-      fields.primary_organization_id = personForm.primaryOrganizationId || null;
       fields.about = personForm.about.trim() || null;
       fields.is_tpusa_staff = personForm.isTpusaStaff;
       fields.is_tpusa_affiliated = personForm.isTpusaAffiliated;
@@ -1265,24 +1433,6 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
           />
           TPUSA Affiliated
         </label>
-      </div>
-      <div className="space-y-1">
-        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="promote-person-primary-org">
-          Primary Organization (optional)
-        </label>
-        <select
-          id="promote-person-primary-org"
-          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-          value={personForm.primaryOrganizationId}
-          onChange={event => setPersonForm(prev => ({ ...prev, primaryOrganizationId: event.target.value }))}
-        >
-          <option value="">Select organization…</option>
-          {organizations.map(org => (
-            <option key={org.id} value={org.id}>
-              {org.name ?? 'Unnamed Organization'}
-            </option>
-          ))}
-        </select>
       </div>
     </div>
   );
@@ -1532,6 +1682,33 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
 
   const renderLinkingSection = () => (
     <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+      {suggestedLinks.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Suggested Links</div>
+          <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50 p-2">
+            {suggestedLinks.map(suggestion => (
+              <div
+                key={suggestion.id}
+                className="flex items-center justify-between rounded border border-blue-300 bg-white px-3 py-2 text-sm"
+              >
+                <div>
+                  <div className="font-medium text-slate-800">{suggestion.name}</div>
+                  <div className="text-xs text-slate-500">
+                    {[suggestion.actor_type, [suggestion.city, suggestion.state].filter(Boolean).join(', ')].filter(Boolean).join(' • ')}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md bg-blue-600 px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-500"
+                  onClick={() => handleAddLinkSelection(suggestion)}
+                >
+                  Add
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="space-y-1">
         <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="promote-link-search">
           Search Existing Actors
@@ -1547,11 +1724,11 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
       </div>
       {linkIsSearching && <LoadingState message="Searching actors" />}
       {!linkIsSearching && linkSearchResults.length > 0 && (
-        <div className="space-y-2">
-          {linkSearchResults.map(result => (
+        <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+          {linkSearchResults.filter(result => !linkSelections.some(sel => sel.actor.id === result.id)).map(result => (
             <div
               key={result.id}
-              className="flex items-center justify-between rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600"
+              className="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600"
             >
               <div>
                 <div className="font-medium text-slate-800">{result.name ?? 'Unnamed Actor'}</div>
@@ -1718,6 +1895,53 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
   return (
     <ModalShell title="Promote Unknown Actor" onClose={onClose}>
       <form className="space-y-6" onSubmit={handleSubmit}>
+        {/* Actor Info Section */}
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <h3 className="text-base font-semibold text-slate-900">@{actor?.detected_username ?? 'unknown'}</h3>
+              <div className="mt-2 text-sm text-slate-600">
+                <div><strong>Platform:</strong> {actor?.platform ?? 'Unknown'}</div>
+                {actor?.profile_displayname && (
+                  <div className="mt-1"><strong>Display Name:</strong> {actor.profile_displayname}</div>
+                )}
+                {actor?.follower_count != null && (
+                  <div className="mt-1"><strong>Followers:</strong> {actor.follower_count.toLocaleString()}</div>
+                )}
+              </div>
+            </div>
+            {/* View Profile Button */}
+            {(() => {
+              const platform = actor?.platform?.toLowerCase();
+              const username = actor?.detected_username;
+              let url = '';
+              if (platform === 'twitter' || platform === 'x') {
+                url = `https://twitter.com/${username}`;
+              } else if (platform === 'instagram') {
+                url = `https://instagram.com/${username}`;
+              } else if (platform === 'tiktok') {
+                url = `https://tiktok.com/@${username}`;
+              } else if (platform === 'truth_social') {
+                url = `https://truthsocial.com/@${username}`;
+              }
+
+              return url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 rounded-md bg-slate-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-500"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  View Profile
+                </a>
+              ) : null;
+            })()}
+          </div>
+        </section>
+
         <div>
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actor Type</label>
           <div className="mt-1 grid grid-cols-3 gap-2">
@@ -1793,6 +2017,279 @@ const PromoteModal: React.FC<PromoteModalProps> = ({
           <option key={roleCategory} value={roleCategory} />
         ))}
       </datalist>
+    </ModalShell>
+  );
+};
+
+const CreateActorModal: React.FC<CreateActorModalProps> = ({
+  state,
+  onClose,
+  onCreate,
+  organizations,
+  roleCategories,
+  relationshipLookups,
+}) => {
+  const [actorType, setActorType] = useState<'person' | 'organization' | 'chapter'>('person');
+  const [personForm, setPersonForm] = useState<PersonFormState>({
+    fullName: '',
+    presentRole: '',
+    roleCategory: '',
+    city: '',
+    state: '',
+    about: '',
+    isTpusaStaff: false,
+    isTpusaAffiliated: false,
+  });
+  const [organizationForm, setOrganizationForm] = useState<OrganizationFormState>({
+    name: '',
+    type: 'external',
+    summaryFocus: '',
+    regionScope: '',
+    isTpusa: false,
+  });
+  const [chapterForm, setChapterForm] = useState<ChapterFormState>({
+    name: '',
+    schoolType: 'college',
+    city: '',
+    stateCode: '',
+    active: true,
+  });
+
+  // Reset form when modal opens/closes
+  useEffect(() => {
+    if (!state.open) {
+      setActorType('person');
+      setPersonForm({
+        fullName: '',
+        presentRole: '',
+        roleCategory: '',
+        city: '',
+        state: '',
+        about: '',
+        isTpusaStaff: false,
+        isTpusaAffiliated: false,
+      });
+      setOrganizationForm({
+        name: '',
+        type: 'external',
+        summaryFocus: '',
+        regionScope: '',
+        isTpusa: false,
+      });
+      setChapterForm({
+        name: '',
+        schoolType: 'college',
+        city: '',
+        stateCode: '',
+        active: true,
+      });
+    }
+  }, [state.open]);
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+
+    let actorName = '';
+    let city: string | undefined = undefined;
+    let stateVal: string | undefined = undefined;
+    const fields: Record<string, any> = {};
+
+    if (actorType === 'person') {
+      actorName = personForm.fullName;
+      city = personForm.city || undefined;
+      stateVal = personForm.state || undefined;
+      fields.present_role = personForm.presentRole;
+      fields.role_category = personForm.roleCategory;
+      fields.about = personForm.about;
+      fields.is_tpusa_staff = personForm.isTpusaStaff;
+      fields.is_tpusa_affiliated = personForm.isTpusaAffiliated;
+    } else if (actorType === 'organization') {
+      actorName = organizationForm.name;
+      fields.type = organizationForm.type;
+      fields.summary_focus = organizationForm.summaryFocus;
+      fields.is_tpusa = organizationForm.isTpusa;
+    } else {
+      actorName = chapterForm.name;
+      city = chapterForm.city || undefined;
+      stateVal = chapterForm.stateCode || undefined;
+      fields.school_type = chapterForm.schoolType;
+      fields.state_code = chapterForm.stateCode;
+      fields.active = chapterForm.active;
+    }
+
+    onCreate({
+      actorType,
+      actorName,
+      city,
+      state: stateVal,
+      fields,
+    });
+  };
+
+  const renderPersonFields = () => (
+    <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="space-y-1">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Full Name *</label>
+        <input
+          type="text"
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          value={personForm.fullName}
+          onChange={e => setPersonForm(prev => ({ ...prev, fullName: e.target.value }))}
+          required
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Present Role</label>
+        <input
+          type="text"
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          value={personForm.presentRole}
+          onChange={e => setPersonForm(prev => ({ ...prev, presentRole: e.target.value }))}
+        />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">City</label>
+          <input
+            type="text"
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+            value={personForm.city}
+            onChange={e => setPersonForm(prev => ({ ...prev, city: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">State</label>
+          <input
+            type="text"
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+            value={personForm.state}
+            onChange={e => setPersonForm(prev => ({ ...prev, state: e.target.value }))}
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">About</label>
+        <textarea
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          rows={3}
+          value={personForm.about}
+          onChange={e => setPersonForm(prev => ({ ...prev, about: e.target.value }))}
+        />
+      </div>
+    </div>
+  );
+
+  const renderOrganizationFields = () => (
+    <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="space-y-1">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Organization Name *</label>
+        <input
+          type="text"
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          value={organizationForm.name}
+          onChange={e => setOrganizationForm(prev => ({ ...prev, name: e.target.value }))}
+          required
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Summary/Focus</label>
+        <textarea
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          rows={3}
+          value={organizationForm.summaryFocus}
+          onChange={e => setOrganizationForm(prev => ({ ...prev, summaryFocus: e.target.value }))}
+        />
+      </div>
+    </div>
+  );
+
+  const renderChapterFields = () => (
+    <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="space-y-1">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Chapter Name *</label>
+        <input
+          type="text"
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          value={chapterForm.name}
+          onChange={e => setChapterForm(prev => ({ ...prev, name: e.target.value }))}
+          required
+        />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">City</label>
+          <input
+            type="text"
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+            value={chapterForm.city}
+            onChange={e => setChapterForm(prev => ({ ...prev, city: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">State Code</label>
+          <input
+            type="text"
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+            value={chapterForm.stateCode}
+            maxLength={2}
+            onChange={e => setChapterForm(prev => ({ ...prev, stateCode: e.target.value.toUpperCase() }))}
+          />
+        </div>
+      </div>
+    </div>
+  );
+
+  if (!state.open) return null;
+
+  const actorTypes = [
+    { id: 'person', label: 'Person' },
+    { id: 'organization', label: 'Organization' },
+    { id: 'chapter', label: 'Chapter' },
+  ];
+
+  return (
+    <ModalShell title="Create New Actor" onClose={onClose}>
+      <form className="space-y-6" onSubmit={handleSubmit}>
+        <div>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actor Type</label>
+          <div className="mt-1 grid grid-cols-3 gap-2">
+            {actorTypes.map(type => (
+              <button
+                key={type.id}
+                type="button"
+                className={`rounded-md border px-3 py-2 text-center text-sm font-medium transition ${
+                  actorType === type.id
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:text-emerald-600'
+                }`}
+                onClick={() => setActorType(type.id as 'person' | 'organization' | 'chapter')}
+              >
+                {type.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {actorType === 'person' && renderPersonFields()}
+        {actorType === 'organization' && renderOrganizationFields()}
+        {actorType === 'chapter' && renderChapterFields()}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-400"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500"
+          >
+            Create Actor
+          </button>
+        </div>
+      </form>
     </ModalShell>
   );
 };
@@ -2013,9 +2510,9 @@ const ModalShell: React.FC<{
   onClose: () => void;
   children: React.ReactNode;
 }> = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/25 backdrop-blur-sm">
-    <div className="relative w-[min(600px,94vw)] rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-      <div className="mb-4 flex items-center justify-between">
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/25 backdrop-blur-sm p-4">
+    <div className="relative w-[min(600px,94vw)] max-h-[90vh] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
+      <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 flex-shrink-0">
         <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
         <button
           onClick={onClose}
@@ -2024,7 +2521,9 @@ const ModalShell: React.FC<{
           Close
         </button>
       </div>
-      {children}
+      <div className="overflow-y-auto px-6 py-4">
+        {children}
+      </div>
     </div>
   </div>
 );

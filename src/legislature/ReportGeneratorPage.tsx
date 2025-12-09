@@ -778,11 +778,11 @@ const ReportGeneratorPage: React.FC = () => {
       const allReports = [];
 
       if (themeReports.data) {
-        allReports.push(...themeReports.data.map(r => ({ ...r, report_type: 'theme_analysis' })));
+        allReports.push(...themeReports.data.map((r: any) => ({ ...r, report_type: 'theme_analysis' })));
       }
 
       if (singleStepReports.data) {
-        allReports.push(...singleStepReports.data.map(r => ({ ...r, report_type: 'single_step' })));
+        allReports.push(...singleStepReports.data.map((r: any) => ({ ...r, report_type: 'single_step' })));
       }
 
       if (themeReports.error) {

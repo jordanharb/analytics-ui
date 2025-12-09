@@ -97,3 +97,4 @@ SELECT
 FROM mv_legislators_search
 WHERE all_entity_ids IS NULL OR array_length(all_entity_ids, 1) = 0;
 
+

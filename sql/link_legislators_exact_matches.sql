@@ -134,3 +134,4 @@ WHERE all_entity_ids IS NOT NULL
 DROP FUNCTION IF EXISTS extract_last_name(TEXT);
 DROP FUNCTION IF EXISTS extract_first_name(TEXT);
 
+

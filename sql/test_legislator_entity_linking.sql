@@ -74,3 +74,4 @@ WHERE cer.entity_type LIKE '%Candidate%'
 ORDER BY l.full_name
 LIMIT 10;
 
+

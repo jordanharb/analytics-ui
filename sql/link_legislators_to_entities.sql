@@ -251,3 +251,4 @@ WHERE all_entity_ids IS NOT NULL
 DROP FUNCTION IF EXISTS normalize_name_for_matching(TEXT);
 DROP FUNCTION IF EXISTS calculate_name_similarity(TEXT, TEXT);
 
+

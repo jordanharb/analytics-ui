@@ -207,3 +207,4 @@ REFRESH MATERIALIZED VIEW mv_legislators_search;
 DROP FUNCTION IF EXISTS normalize_name_for_matching(TEXT);
 DROP FUNCTION IF EXISTS calculate_name_similarity(TEXT, TEXT);
 
+

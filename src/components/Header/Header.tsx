@@ -44,6 +44,14 @@ export const Header: React.FC = () => {
           Actor Classifier
         </NavLink>
         <NavLink
+          to="/bulk-project-assignment"
+          className={({ isActive }) =>
+            `nav-tab ${isActive ? 'active' : ''}`
+          }
+        >
+          Projects
+        </NavLink>
+        <NavLink
           to="/chat"
           className={({ isActive }) =>
             `nav-tab ${isActive ? 'active' : ''}`
@@ -58,6 +66,14 @@ export const Header: React.FC = () => {
           }
         >
           Automation
+        </NavLink>
+        <NavLink
+          to="/email-reports"
+          className={({ isActive }) =>
+            `nav-tab ${isActive ? 'active' : ''}`
+          }
+        >
+          Email Reports
         </NavLink>
       </div>
       

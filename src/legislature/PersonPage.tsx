@@ -564,7 +564,7 @@ const PersonPage: React.FC = () => {
       return;
     }
 
-    const currentExists = finance.entity_details.some(entity => entity.entity_id === topDonorEntityId);
+    const currentExists = finance?.entity_details?.some(entity => entity.entity_id === topDonorEntityId) ?? false;
     if (!topDonorEntityId || !currentExists) {
       setTopDonorEntityId(firstEntityId);
       setTopDonorPage(0);

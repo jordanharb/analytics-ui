@@ -1,6 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export async function readJsonBody<T = unknown>(req: VercelRequest): Promise<T> {
+  const existingBody = (req as any)?.body;
+  if (existingBody !== undefined) {
+    return existingBody as T;
+  }
+
   return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', chunk => {

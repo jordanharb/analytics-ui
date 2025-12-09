@@ -28,6 +28,7 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from utils.database import get_supabase
+from automation.utils.database import fetch_all_rows
 from loguru import logger as log
 from scrapfly import ScrapeConfig, ScrapflyClient
 import jmespath
@@ -212,7 +213,14 @@ async def scrape_instagram_user_posts(username: str, page_size=12, max_pages: Op
             await asyncio.sleep(2)
             
         except Exception as e:
+            error_msg = str(e)
             log.error(f"Error scraping page {page_number} for @{username}: {e}")
+
+            # If this is an API error (401, 403, etc.), raise it so caller knows to not update last_scrape
+            if "401" in error_msg or "Invalid API key" in error_msg or "403" in error_msg or "429" in error_msg:
+                log.error(f"API authentication/rate limit error for @{username} - will not update last_scrape")
+                raise Exception(f"API Error: {error_msg}")
+
             break
 
     log.info(f"✅ Scraped {len(all_posts)} total posts from @{username}")
@@ -392,134 +400,123 @@ class InstagramPostScraper:
         except Exception as e:
             print(f"❌ Error ending scraping session: {e}")
     
-    def check_profile_has_error(self, actor_id: str, actor_type: str, username: str) -> bool:
+    def check_profile_has_error(self, profile_data: Any) -> bool:
         """
         Check if an actor's Instagram profile data contains an error
-        
-        IMPROVED VERSION: More detailed logging and better error handling
+
+        OPTIMIZED VERSION: Uses pre-fetched profile data (no database query)
         """
-        try:
-            print(f"   🔍 Checking profile errors for @{username} (actor_type: {actor_type}, actor_id: {actor_id})")
-            
-            # Determine which table to check based on actor_type
-            table_name = actor_type + 's'  # chapters, people, organizations
-            print(f"   📋 Querying table: {table_name}")
-            
-            result = self.supabase.table(table_name)\
-                .select('instagram_profile_data')\
-                .eq('id', actor_id)\
-                .execute()
-            
-            print(f"   📊 Query returned {len(result.data) if result.data else 0} records")
-            
-            if result.data and len(result.data) > 0:
-                profile_data = result.data[0].get('instagram_profile_data')
-                print(f"   💾 Profile data type: {type(profile_data)}")
-                
-                if profile_data is None:
-                    print(f"   ✅ No profile data found - OK to scrape @{username}")
-                    return False
-                
-                # Convert to string for easier inspection
-                profile_str = str(profile_data) if profile_data else ""
-                print(f"   📄 Profile data preview: {profile_str[:100]}{'...' if len(profile_str) > 100 else ''}")
-                
-                # Check if profile_data is a string containing 'error'
-                if isinstance(profile_data, str) and 'error' in profile_data.lower():
-                    print(f"   🚨 SKIP @{username} - profile data string contains 'error'")
-                    return True
-                
-                # Check if profile_data is a dict with an 'error' key
-                if isinstance(profile_data, dict) and 'error' in profile_data:
-                    error_type = profile_data.get('error', 'unknown')
-                    attempted_at = profile_data.get('attempted_at', 'unknown time')
-                    print(f"   🚨 SKIP @{username} - error: {error_type} (attempted: {attempted_at})")
-                    return True
-                
-                # Check if profile_data is a dict with error-related content (stringified search)
-                if isinstance(profile_data, dict):
-                    profile_json_str = json.dumps(profile_data).lower()
-                    if 'error' in profile_json_str or 'account_not_found' in profile_json_str:
-                        print(f"   🚨 SKIP @{username} - profile JSON contains error keywords")
-                        return True
-                
-                print(f"   ✅ No errors detected in profile data - OK to scrape @{username}")
-                return False
-            else:
-                print(f"   ⚠️ No record found in {table_name} for actor_id {actor_id}")
-                print(f"   ✅ Defaulting to scrape @{username} (no profile record found)")
-                return False
-            
-        except Exception as e:
-            print(f"   ❌ Exception checking profile for @{username}: {e}")
-            print(f"   ✅ Defaulting to scrape @{username} (error in check)")
-            return False  # Don't skip on error, let the scraper try
+        if profile_data is None:
+            return False
+
+        # Check if profile_data is a string containing 'error'
+        if isinstance(profile_data, str) and 'error' in profile_data.lower():
+            return True
+
+        # Check if profile_data is a dict with an 'error' key
+        if isinstance(profile_data, dict) and 'error' in profile_data:
+            return True
+
+        # Check if profile_data is a dict with error-related content
+        if isinstance(profile_data, dict):
+            profile_json_str = json.dumps(profile_data).lower()
+            if 'error' in profile_json_str or 'account_not_found' in profile_json_str:
+                return True
+
+        return False
     
     def get_instagram_handles_for_post_scraping(self) -> List[Dict]:
         """
         Get Instagram handles for post scraping, filtering out accounts with profile errors and recently scraped accounts
-        
-        IMPROVED VERSION: Better logging, error tracking, and 15-day skip condition
+
+        OPTIMIZED VERSION: Bulk profile fetch, pagination support, faster verification
         """
         try:
             print("📋 Loading Instagram handles for post scraping...")
-            
-            result = self.supabase.table('v2_actor_usernames')\
+
+            # Use fetch_all_rows for pagination (fetches ALL records, not just 1000)
+            query = self.supabase.table('v2_actor_usernames')\
                 .select('id, username, actor_id, actor_type, last_scrape')\
                 .eq('platform', 'instagram')\
                 .eq('should_scrape', True)\
-                .execute()
-            
+                .order('id')  # Required for stable pagination
+
+            handles_data = fetch_all_rows(query)
+
+            if not handles_data or not isinstance(handles_data, list):
+                print("❌ No handles data returned or invalid format")
+                return []
+
+            print(f"📊 Found {len(handles_data)} Instagram handles marked for scraping")
+
+            # Bulk-fetch all profile data in batches (URL length limit with .in_() filter)
+            print("⚡ Bulk-fetching profile data for validation...")
+            actor_ids = list(set([h.get('actor_id') for h in handles_data if isinstance(h, dict) and h.get('actor_id')]))
+            profile_data_map = {}
+
+            if actor_ids:
+                # Fetch in batches of 100 to avoid URL length limits
+                batch_size = 100
+                for i in range(0, len(actor_ids), batch_size):
+                    batch = actor_ids[i:i + batch_size]
+                    profiles_result = self.supabase.table('v2_actors')\
+                        .select('id, instagram_profile_data')\
+                        .in_('id', batch)\
+                        .execute()
+
+                    for profile in profiles_result.data:
+                        profile_data_map[profile['id']] = profile.get('instagram_profile_data')
+
+                print(f"✅ Loaded {len(profile_data_map)} profile records from {len(actor_ids)} actors")
+
             all_handles = []
             valid_handles = []
             skipped_handles = []
             recent_handles = []
-            
-            self.stats['total_handles'] = len(result.data)
+
+            self.stats['total_handles'] = len(handles_data)
             self.stats['skipped_recent'] = 0
-            print(f"📊 Found {self.stats['total_handles']} Instagram handles marked for scraping")
-            
-            # Calculate 15 days ago
+
+            # Calculate 7 days ago (one week)
             from datetime import datetime, timedelta
-            fifteen_days_ago = datetime.now() - timedelta(days=15)
-            
-            for record in result.data:
+            seven_days_ago = datetime.now() - timedelta(days=7)
+
+            for i, record in enumerate(handles_data, 1):
                 handle_data = {
                     "handle_id": record['id'],
                     "actor_id": record['actor_id'],
                     "actor_type": record['actor_type'],
                     "username": record['username'].strip().lstrip('@'),
-                    "last_scrape": record.get('last_scrape')  # Include individual last_scrape
+                    "last_scrape": record.get('last_scrape')
                 }
                 all_handles.append(handle_data)
-                
+
                 username = handle_data['username']
-                print(f"\n🔍 [{len(all_handles)}/{self.stats['total_handles']}] Checking @{username}...")
-                
-                # Check if account was scraped in the last 15 days
+
+                # Show progress every 100 handles
+                if i % 100 == 0 or i == len(handles_data):
+                    print(f"🔍 Processing handles: {i}/{len(handles_data)}")
+
+                # Check if account was scraped in the last 7 days (one week)
                 if handle_data['last_scrape']:
                     try:
                         last_scrape_str = handle_data['last_scrape'].replace('Z', '+00:00')
                         last_scrape_dt = datetime.fromisoformat(last_scrape_str)
-                        # Convert to naive datetime for comparison
                         last_scrape_naive = last_scrape_dt.replace(tzinfo=None)
-                        if last_scrape_naive > fifteen_days_ago:
-                            days_ago = (datetime.now() - last_scrape_naive).days
-                            print(f"   ⏭️ SKIPPED @{username} - scraped {days_ago} days ago (< 15 days)")
+                        if last_scrape_naive > seven_days_ago:
                             skipped_handles.append(username)
                             recent_handles.append(handle_data)
                             self.stats['skipped_recent'] += 1
                             continue
-                    except Exception as e:
-                        print(f"   ⚠️ Error parsing last_scrape date for @{username}: {e}")
-                
-                # Check if this account has profile errors
-                if self.check_profile_has_error(handle_data['actor_id'], handle_data['actor_type'], username):
-                    print(f"   ⏭️ SKIPPED @{username} due to profile errors")
+                    except Exception:
+                        pass  # If date parsing fails, proceed to scrape
+
+                # Check if this account has profile errors (using bulk-fetched data)
+                profile_data = profile_data_map.get(handle_data['actor_id'])
+                if self.check_profile_has_error(profile_data):
                     skipped_handles.append(username)
                     self.stats['skipped_errors'] = self.stats.get('skipped_errors', 0) + 1
                 else:
-                    print(f"   ✅ VALID @{username} - will be scraped")
                     valid_handles.append(handle_data)
             
             self.stats['valid_handles'] = len(valid_handles)
@@ -545,31 +542,24 @@ class InstagramPostScraper:
             return []
 
     def save_posts_to_storage(self, username: str, posts: List[Dict]) -> bool:
-        """Save posts to Supabase storage bucket"""
+        """Save posts to local raw-instagram-data directory"""
         try:
-            # Upload to raw-instagram-data bucket
+            # Save to local raw-instagram-data directory (parallel to data/output for Twitter)
+            # Twitter uses data/output, so Instagram uses data/raw-instagram-data
+            instagram_output_dir = os.path.join('data', 'raw-instagram-data')
+            os.makedirs(instagram_output_dir, exist_ok=True)
+
             filename = f"{username}_posts.json"
+            local_path = os.path.join(instagram_output_dir, filename)
             content = json.dumps(posts, indent=2, ensure_ascii=False)
-            
-            result = self.supabase.storage.from_('raw-instagram-data').upload(
-                path=filename,
-                file=content.encode('utf-8'),
-                file_options={"content-type": "application/json", "upsert": "true"}
-            )
-            
-            # Check for errors in the new Supabase response format
-            if hasattr(result, 'error') and result.error:
-                print(f"❌ Storage upload failed for @{username}: {result.error}")
-                return False
-            elif hasattr(result, 'data') and result.data:
-                # Upload successful - result.data contains the file info
-                print(f"✅ Uploaded {len(posts)} posts for @{username} to storage")
-                return True
-            else:
-                # Assume success if no error and we got a response
-                print(f"✅ Uploaded {len(posts)} posts for @{username} to storage")
-                return True
-                
+
+            # Write to file
+            with open(local_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            print(f"✅ Saved {len(posts)} posts for @{username} to {local_path}")
+            return True
+
         except Exception as e:
             print(f"❌ Error saving posts for @{username}: {e}")
             return False
@@ -694,7 +684,7 @@ class InstagramPostScraper:
                             self.stats['completed_accounts'] = i
                             self.log_console(f"✅ Successfully scraped {len(posts)} posts for @{username}")
                             self.update_progress()
-                            
+
                             # Update last scrape timestamp for this specific handle
                             self.update_last_scrape_timestamp(handle_id, username)
                         else:
@@ -706,13 +696,19 @@ class InstagramPostScraper:
                         self.stats['successful_scrapes'] += 1
                         self.stats['empty_accounts'] += 1
                         self.save_posts_to_storage(username, [])  # Save empty file
-                        
+
                         # Update timestamp even if no new posts (prevents repeated checking)
                         self.update_last_scrape_timestamp(handle_id, username)
-                    
+
                 except Exception as e:
+                    error_msg = str(e)
                     print(f"❌ Error scraping @{username}: {e}")
                     self.stats['failed_scrapes'] += 1
+
+                    # DO NOT update last_scrape for API errors - let it retry later
+                    if "API Error" not in error_msg:
+                        # Only for non-API errors, we might want to track this
+                        pass
                 
                 # Update v2_batch progress after EVERY account
                 if job_id:

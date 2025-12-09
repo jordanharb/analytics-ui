@@ -273,22 +273,31 @@ export async function fetchUnknownActors({
   let builder = supabaseClient
     .from('v2_unknown_actors')
     .select('*', { count: 'exact' })
-    .eq('review_status', 'pending')
-    .order('mention_count', { ascending: false })
-    .range(offset, offset + limit - 1);
+    .eq('review_status', 'pending');
 
-  builder = applyFilterConfig(builder, config);
-
+  // Apply platform filter first
   if (platform) {
     builder = builder.eq('platform', platform);
   }
 
+  // Apply view-specific filters
+  builder = applyFilterConfig(builder, config);
+
+  // Apply search term
   if (searchTerm) {
     const clause = buildKeywordClause(searchTerm);
     if (clause) {
       builder = builder.or(clause);
     }
   }
+
+  // Then apply ordering (from config or default to mention_count)
+  const orderColumn = config?.order_by || 'mention_count';
+  const orderAscending = config?.order_ascending ?? false;
+  builder = builder.order(orderColumn, { ascending: orderAscending });
+
+  // Finally apply range (pagination)
+  builder = builder.range(offset, offset + limit - 1);
 
   const { data, error, count } = await builder;
   if (error) throw error;
@@ -326,7 +335,7 @@ export async function promoteUnknownActor(payload: PromoteActorPayload): Promise
   const { data, error } = await supabaseClient.rpc('promote_v2_unknown_to_actor', {
     p_unknown_actor_id: payload.unknownActorId,
     p_actor_type: payload.actorType,
-    p_actor_name: payload.actorName,
+    p_name: payload.actorName,
     p_city: payload.city ?? null,
     p_state: payload.state ?? null,
     p_fields: payload.fields ?? null,
@@ -334,6 +343,78 @@ export async function promoteUnknownActor(payload: PromoteActorPayload): Promise
 
   if (error) throw error;
   return (Array.isArray(data) ? data[0] : data) ?? null;
+}
+
+export interface CreateActorPayload {
+  actorType: string;
+  actorName: string;
+  city?: string;
+  state?: string;
+  fields?: Record<string, any>;
+  links?: PromoteLinkInput[];
+}
+
+export async function createNewActor(payload: CreateActorPayload): Promise<string | null> {
+  // Get actor_type_id
+  const { data: actorTypeData, error: typeError } = await supabaseClient
+    .from('v2_actor_types')
+    .select('id')
+    .eq('name', payload.actorType)
+    .single();
+
+  if (typeError) throw typeError;
+
+  const actorTypeId = actorTypeData?.id;
+  if (!actorTypeId) throw new Error('Actor type not found');
+
+  // Build actor insert data
+  const actorData: any = {
+    actor_type: payload.actorType,
+    actor_type_id: actorTypeId,
+    name: payload.actorName,
+    city: payload.city ?? null,
+    state: payload.state ?? null,
+    should_scrape: true,
+  };
+
+  // Add type-specific custom fields
+  if (payload.actorType === 'person' && payload.fields) {
+    actorData.custom_text_1 = payload.fields.present_role ?? null;
+    actorData.custom_text_2 = payload.fields.role_category ?? null;
+    actorData.custom_text_3 = payload.fields.division ?? null;
+    actorData.custom_bool_1 = payload.fields.is_tpusa_staff ?? false;
+    actorData.custom_bool_2 = payload.fields.is_tpusa_affiliated ?? false;
+    actorData.about = payload.fields.about ?? null;
+  } else if (payload.actorType === 'organization' && payload.fields) {
+    actorData.custom_text_1 = payload.fields.type ?? null;
+    actorData.custom_text_2 = payload.fields.parent_organization ?? null;
+    actorData.custom_bool_1 = payload.fields.is_tpusa ?? false;
+    actorData.about = payload.fields.summary_focus ?? null;
+  } else if (payload.actorType === 'chapter' && payload.fields) {
+    actorData.custom_text_1 = payload.fields.school_type ?? null;
+    actorData.custom_text_2 = payload.fields.state_code ?? null;
+    actorData.custom_numeric_1 = payload.fields.active_members ?? null;
+    actorData.custom_bool_1 = payload.fields.active ?? true;
+  }
+
+  // Insert actor
+  const { data: newActor, error: insertError } = await supabaseClient
+    .from('v2_actors')
+    .insert(actorData)
+    .select('id')
+    .single();
+
+  if (insertError) throw insertError;
+
+  const newActorId = newActor?.id;
+  if (!newActorId) throw new Error('Failed to create actor');
+
+  // Create actor links if provided
+  if (payload.links && payload.links.length > 0) {
+    await createActorLinks(newActorId, payload.links);
+  }
+
+  return newActorId;
 }
 
 export async function fetchUnknownActorById(id: string): Promise<UnknownActor | null> {
@@ -351,11 +432,13 @@ export async function searchExistingActors(
   term: string,
   options: SearchExistingActorsOptions = {},
 ): Promise<Actor[]> {
+  const limit = options.limit ?? 25;
+
   let builder = supabaseClient
     .from('v2_actors')
     .select('id,name,actor_type,city,state,about,region,custom_text_1,custom_text_2,custom_text_3')
     .order('name', { ascending: true })
-    .limit(options.limit ?? 25);
+    .limit(limit);
 
   if (options.actorType) {
     builder = builder.eq('actor_type', options.actorType);
@@ -365,9 +448,7 @@ export async function searchExistingActors(
   const searchTerm = term?.trim();
   if (searchTerm) {
     const encoded = searchTerm.replace(/%/g, '\\%');
-    builder = builder.or(
-      `name.ilike.*${encoded}*,about.ilike.*${encoded}*,city.ilike.*${encoded}*,state.ilike.*${encoded}*,region.ilike.*${encoded}*`,
-    );
+    builder = builder.ilike('name', `%${encoded}%`);
   }
 
   // Apply advanced filters as AND conditions
@@ -407,7 +488,7 @@ export async function fetchFieldMappings(actorType: string): Promise<FieldMappin
 
   const { data, error } = await supabaseClient
     .from('v2_actor_type_field_mappings')
-    .select('id,actor_type_id,field_name,column_name,data_type,is_indexed,is_metadata')
+    .select('id,actor_type_id,field_name,column_name,data_type,is_indexed')
     .eq('actor_type_id', typeRow.id)
     .order('field_name', { ascending: true });
 

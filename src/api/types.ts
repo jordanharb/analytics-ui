@@ -18,7 +18,8 @@ export interface Filters {
     embedding?: number[];
     min_similarity?: number;
   };
-  project_id?: string; // UUID
+  project_id?: string; // UUID (deprecated, use projects instead)
+  projects?: string[]; // UUIDs - events are filtered by actors linked to these projects
 }
 
 // Filter options response - Updated structure from backend patch

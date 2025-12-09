@@ -219,17 +219,31 @@ BEGIN
   ) orgs;
 
   -- Top universities (from category_tags JSONB)
-  -- Handles both "Institution:University_Name" and plain "University_Name" formats
+  -- Handles multiple formats:
+  --   "School: Name" (space after colon)
+  --   "School:Name_With_Underscores"
+  --   "School:AZ_Name" (state prefix)
+  --   "Institution:Name"
   SELECT jsonb_agg(jsonb_build_object('name', inst_name, 'count', cnt))
   INTO v_universities
   FROM (
     SELECT
-      REPLACE(
-        CASE
-          WHEN tag_value LIKE 'Institution:%' THEN SUBSTRING(tag_value FROM 13)
-          ELSE tag_value
-        END,
-        '_', ' '
+      -- First strip prefix, then replace underscores, then strip state code if present
+      REGEXP_REPLACE(
+        REPLACE(
+          CASE
+            -- "School: Name" (with space) -> strip "School: " (8 chars)
+            WHEN tag_value LIKE 'School: %' THEN SUBSTRING(tag_value FROM 9)
+            -- "School:Name" (no space) -> strip "School:" (7 chars)
+            WHEN tag_value LIKE 'School:%' THEN SUBSTRING(tag_value FROM 8)
+            -- "Institution:Name" -> strip prefix
+            WHEN tag_value LIKE 'Institution:%' THEN SUBSTRING(tag_value FROM 13)
+            ELSE tag_value
+          END,
+          '_', ' '
+        ),
+        '^[A-Z]{2} ',  -- Strip leading state code like "AZ "
+        ''
       ) as inst_name,
       COUNT(*) as cnt
     FROM v2_events e
@@ -254,12 +268,18 @@ BEGIN
       )
       AND (tag_value ILIKE '%University%' OR tag_value ILIKE '%College%')
     GROUP BY
-      REPLACE(
-        CASE
-          WHEN tag_value LIKE 'Institution:%' THEN SUBSTRING(tag_value FROM 13)
-          ELSE tag_value
-        END,
-        '_', ' '
+      REGEXP_REPLACE(
+        REPLACE(
+          CASE
+            WHEN tag_value LIKE 'School: %' THEN SUBSTRING(tag_value FROM 9)
+            WHEN tag_value LIKE 'School:%' THEN SUBSTRING(tag_value FROM 8)
+            WHEN tag_value LIKE 'Institution:%' THEN SUBSTRING(tag_value FROM 13)
+            ELSE tag_value
+          END,
+          '_', ' '
+        ),
+        '^[A-Z]{2} ',
+        ''
       )
     ORDER BY cnt DESC
     LIMIT 10
