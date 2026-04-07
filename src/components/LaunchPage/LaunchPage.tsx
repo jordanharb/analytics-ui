@@ -78,13 +78,13 @@ export const LaunchPage: React.FC = () => {
             </pre>
             <div style={{ marginTop: 28, fontSize: 16, lineHeight: 1.8, color: '#2a2a2a', maxWidth: 400 }}>
               &gt; their playbook,<br />
-              &gt; in your inbox.
+              &gt; at your fingertips.
               <span className="term-cursor" />
             </div>
           </div>
 
           <div style={{ fontSize: 12, color: '#9a9a9a', maxWidth: 400, lineHeight: 1.7 }}>
-            a quiet read on what the other side is up to. for organizers, by organizers. invite only.
+            a quiet read on what the other side is up to. for organizers, by organizers.
           </div>
         </div>
 
@@ -145,7 +145,7 @@ export const LaunchPage: React.FC = () => {
             onMouseOver={(e) => { e.currentTarget.style.borderColor = '#c2410c'; e.currentTarget.style.color = '#c2410c'; }}
             onMouseOut={(e) => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.15)'; e.currentTarget.style.color = '#1a1a1a'; }}
           >
-            {submitting ? '[ ... ]' : "[ pick up this week's notes ]"}
+            {submitting ? '[ ... ]' : '[ login ]'}
           </button>
 
           {error && (
