@@ -1,52 +1,42 @@
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { Suspense, lazy } from 'react';
 import { Header } from './components/Header/Header';
+import { AuthProvider, useAuth } from './auth/AuthProvider';
 
-// Lazy load components to reduce initial bundle size
 const MapView = lazy(() => import('./views/MapView/MapView').then(m => ({ default: m.MapView })));
 const DirectoryView = lazy(() => import('./views/DirectoryView/DirectoryView').then(m => ({ default: m.DirectoryView })));
 const EntityView = lazy(() => import('./views/EntityView/EntityView').then(m => ({ default: m.EntityView })));
-const ChatView = lazy(() => import('./views/ChatView/ChatView').then(m => ({ default: m.ChatView })));
 const ActorsDirectoryView = lazy(() => import('./views/ActorsDirectory/ActorsDirectoryView').then(m => ({ default: m.ActorsDirectoryView })));
-const ActorClassifierView = lazy(() => import('./views/ActorClassifier/ActorClassifierView').then(m => ({ default: m.ActorClassifierView })));
-const AutomationView = lazy(() => import('./views/Automation/AutomationView').then(m => ({ default: m.AutomationView })));
-const LaunchPage = lazy(() => import('./components/LaunchPage/LaunchPage').then(m => ({ default: m.LaunchPage })));
-const LegislatureApp = lazy(() => import('./legislature/LegislatureApp'));
-const ReportViewerPage = lazy(() => import('./views/ReportViewer/ReportViewerPage').then(m => ({ default: m.ReportViewerPage })));
-const EmailReportsView = lazy(() => import('./views/EmailReports/EmailReportsView').then(m => ({ default: m.EmailReportsView })));
+const LaunchPage = lazy(() => import('./components/LaunchPage/LaunchPage'));
+const SettingsView = lazy(() => import('./views/Settings/SettingsView').then(m => ({ default: m.SettingsView })));
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { session, loading } = useAuth();
+  if (loading) return <div className="flex items-center justify-center h-full text-sm text-[#6b6b6b]">loading…</div>;
+  if (!session) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
 
 function AppContent() {
   const location = useLocation();
-  const isLegislaturePage = location.pathname.startsWith('/legislature');
-  const isReportViewerPage = location.pathname.startsWith('/reports/view');
-  const isMapPage = location.pathname === '/' || location.pathname === '/map';
+  const isLanding = location.pathname === '/';
+  const isMapPage = location.pathname === '/map';
 
   return (
-    <div className="w-full h-screen overflow-x-hidden bg-slate-50">
+    <div className={`w-full h-screen overflow-x-hidden ${isLanding ? '' : 'bg-[#f6f1e6]'}`}>
       <div className="h-screen flex flex-col">
-        {/* Only show Header on Woke Palantir pages (not legislature or report viewer pages) */}
-        {!isLegislaturePage && !isReportViewerPage && <Header />}
-
-        {/* Main Content - overflow-hidden only for map view, overflow-auto for others */}
+        {!isLanding && <Header />}
         <main className={`flex-1 h-full ${isMapPage ? 'overflow-hidden' : 'overflow-auto'}`}>
-          <Suspense fallback={<div className="flex items-center justify-center h-full">Loading...</div>}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full text-sm text-[#6b6b6b]">loading…</div>}>
             <div className={isMapPage ? 'h-full' : ''}>
               <Routes>
-                <Route path="/" element={<MapView />} />
-                <Route path="/map" element={<MapView />} />
-                <Route path="/directory" element={<DirectoryView />} />
-                <Route path="/actors" element={<ActorsDirectoryView />} />
-                <Route path="/actor-classifier" element={<ActorClassifierView />} />
-                <Route path="/automation" element={<AutomationView />} />
-                <Route path="/email-reports" element={<EmailReportsView />} />
-                <Route path="/chat" element={<ChatView />} />
-                <Route path="/entity/:entityType/:entityId" element={<EntityView />} />
-
-                {/* Public Report Viewer (no auth required) */}
-                <Route path="/reports/view/:token" element={<ReportViewerPage />} />
-
-                {/* Legislature & Campaign Finance Routes */}
-                <Route path="/legislature/*" element={<LegislatureApp />} />
+                <Route path="/" element={<LaunchPage />} />
+                <Route path="/map" element={<ProtectedRoute><MapView /></ProtectedRoute>} />
+                <Route path="/directory" element={<ProtectedRoute><DirectoryView /></ProtectedRoute>} />
+                <Route path="/actors" element={<ProtectedRoute><ActorsDirectoryView /></ProtectedRoute>} />
+                <Route path="/entity/:entityType/:entityId" element={<ProtectedRoute><EntityView /></ProtectedRoute>} />
+                <Route path="/settings" element={<ProtectedRoute><SettingsView /></ProtectedRoute>} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>
           </Suspense>
@@ -59,7 +49,9 @@ function AppContent() {
 function App() {
   return (
     <Router>
-      <AppContent />
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </Router>
   );
 }

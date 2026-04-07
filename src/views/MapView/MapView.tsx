@@ -8,7 +8,7 @@ import {
   CLUSTER_PAINT,
   UNCLUSTERED_PAINT,
   getMapBounds,
-  pointsToGeoJSON
+  pointsToGeoJSON,
 } from '../../lib/mapboxConfig';
 import { analyticsClient } from '../../api/analyticsClient';
 import { useFiltersStore } from '../../state/filtersStore';
@@ -17,14 +17,15 @@ import { SidePanel } from '../../components/SidePanel/SidePanel';
 import { SearchBar } from '../../components/SearchBar/SearchBar';
 import type { MapPointsResponse } from '../../api/types';
 
+// fieldnotes palette: page #f6f1e6, surface #fdfaf2, ink #1a1a1a, muted #6b6b6b, accent #c2410c
+
 // Valid US state codes (50 states + DC)
 const VALID_STATE_CODES = new Set([
-  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
-  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
-  'DC' // Include DC as it's often treated as a state
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
 ]);
 
 export const MapView: React.FC = () => {
@@ -35,37 +36,23 @@ export const MapView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedCity, setSelectedCity] = useState<{ city: string; state: string } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<Array<{ city: string; state: string }> | null>(null);
-  const [showFilters, setShowFilters] = useState(true); // Start with filters visible
-  const [showVirtualEvents, setShowVirtualEvents] = useState(false);
-  const [virtualEventsCount, setVirtualEventsCount] = useState(0);
+  const [showFilters, setShowFilters] = useState(true);
+  const [showUnmapped, setShowUnmapped] = useState(false);
+  const [unmappedCount, setUnmappedCount] = useState(0);
   const [showStatsModal, setShowStatsModal] = useState(false);
 
   const { filters, networkExpanded, expandedActorIds, setExpandedActorIds } = useFiltersStore();
-  
-  // Trigger map resize when filter panel toggles
+
+  // Resize on filter panel toggle
   useEffect(() => {
-    if (map.current) {
-      // Wait for CSS transition to complete
-      setTimeout(() => {
-        map.current?.resize();
-      }, 350);
-    }
+    if (map.current) setTimeout(() => map.current?.resize(), 350);
   }, [showFilters]);
 
-  // Prevent concurrent loads
   const loadingRef = useRef(false);
 
-  // Load map data function (defined before useEffects)
   const loadMapData = async (retryCount = 0) => {
-    // Prevent concurrent loads
-    if (loadingRef.current) {
-      console.log('Load already in progress, skipping');
-      return;
-    }
-
-    // Prevent infinite retries
-    if (retryCount > 3) { // Reduced from 10 to 3
-      console.error('Max retries reached, stopping');
+    if (loadingRef.current) return;
+    if (retryCount > 3) {
       setLoading(false);
       loadingRef.current = false;
       return;
@@ -74,85 +61,61 @@ export const MapView: React.FC = () => {
     loadingRef.current = true;
     setLoading(true);
     setError(null);
-    
+
     try {
-      // Apply network expansion if enabled
       let effectiveFilters = { ...filters };
-      
+
       if (networkExpanded && filters.actor_ids && filters.actor_ids.length > 0) {
         try {
-          console.log('Expanding network for actors:', filters.actor_ids);
           const expanded = await analyticsClient.getNetworkActorIds(filters.actor_ids);
-          console.log('Expanded to include:', expanded);
           setExpandedActorIds(expanded);
-          // ✅ PRESERVE period/date_range during network expansion
-          effectiveFilters = { 
-            ...filters, 
-            actor_ids: expanded
-            // Keep period and date_range from original filters
-          };
+          effectiveFilters = { ...filters, actor_ids: expanded };
         } catch (err) {
           console.error('Failed to expand network:', err);
-          // Fall back to original filters
         }
       } else if (!networkExpanded && expandedActorIds) {
-        // Clear expanded IDs when network expansion is disabled
         setExpandedActorIds(null);
       }
-      
-      console.log('Loading map data with filters:', effectiveFilters);
+
       const data = await analyticsClient.getMapPoints(effectiveFilters);
-      console.log('Received map data:', data);
       setMapData(data);
-      
-      // Calculate virtual/non-geocoded events as total_events minus geocoded events
+
+      // Unmapped = total - geocoded
       const geocodedSum = data.map_points.reduce((sum, p) => sum + (p.count || 0), 0);
-      const virtualEventCount = Math.max(0, (data.total_events || 0) - geocodedSum);
-      setVirtualEventsCount(virtualEventCount);
-      
-      // Update map with new data
+      const unmapped = Math.max(0, (data.total_events || 0) - geocodedSum);
+      setUnmappedCount(unmapped);
+
       if (map.current && map.current.isStyleLoaded()) {
         const source = map.current.getSource('events') as mapboxgl.GeoJSONSource;
         if (source) {
           const geoJSON = pointsToGeoJSON(data.map_points);
-          console.log('Converting to GeoJSON:', geoJSON);
           source.setData(geoJSON);
-          
-          // Fit map to bounds if we have valid points
-          const validPoints = data.map_points.filter(p => p.lat !== null && p.lon !== null);
+
+          const validPoints = data.map_points.filter((p) => p.lat !== null && p.lon !== null);
           if (validPoints.length > 0) {
             const bounds = getMapBounds(validPoints);
-            console.log('Fitting to bounds:', bounds);
-            if (bounds) {
-              map.current.fitBounds(bounds, { padding: 50 });
-            }
-          } else {
-            console.log('No geocoded points returned from API');
+            if (bounds) map.current.fitBounds(bounds, { padding: 50 });
           }
         } else if (retryCount < 3) {
-          console.log(`Map source not ready yet, retry ${retryCount + 1}/3...`);
-          loadingRef.current = false; // Release lock before retry
-          // Retry after map loads (increased delay)
+          loadingRef.current = false;
           setTimeout(() => loadMapData(retryCount + 1), 1000);
-          return; // Don't release lock in finally block
+          return;
         }
       } else if (retryCount < 3) {
-        console.log(`Map not ready yet, retry ${retryCount + 1}/3...`);
-        loadingRef.current = false; // Release lock before retry
-        // Retry after map loads (increased delay)
+        loadingRef.current = false;
         setTimeout(() => loadMapData(retryCount + 1), 1000);
-        return; // Don't release lock in finally block
+        return;
       }
     } catch (err: any) {
       console.error('Failed to load map data:', err);
-      setError(err.message || 'Failed to load map data');
+      setError(err.message || 'failed to load map data');
     } finally {
       setLoading(false);
       loadingRef.current = false;
     }
   };
 
-  // Initialize map
+  // Init map once
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
@@ -161,112 +124,76 @@ export const MapView: React.FC = () => {
         container: mapContainer.current,
         style: MAPBOX_STYLE,
         center: DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM
+        zoom: DEFAULT_ZOOM,
       });
 
       map.current.on('load', () => {
-        console.log('Map loaded successfully');
-        
-        // Add navigation controls
         map.current!.addControl(new mapboxgl.NavigationControl(), 'top-right');
-        
-        // Add source for our data
+
         map.current!.addSource('events', {
           type: 'geojson',
-          data: {
-            type: 'FeatureCollection',
-            features: []
-          },
+          data: { type: 'FeatureCollection', features: [] },
           cluster: true,
           clusterMaxZoom: 14,
-          clusterRadius: 50
+          clusterRadius: 50,
         });
 
-        // Add cluster layer (no text labels - size and color indicate density)
         map.current!.addLayer({
           id: 'clusters',
           type: 'circle',
           source: 'events',
           filter: ['has', 'point_count'],
-          paint: CLUSTER_PAINT
+          paint: CLUSTER_PAINT,
         });
-        console.log('Added clusters layer');
 
-        // Add unclustered point layer
         map.current!.addLayer({
           id: 'unclustered-point',
           type: 'circle',
           source: 'events',
           filter: ['!', ['has', 'point_count']],
-          paint: UNCLUSTERED_PAINT
+          paint: UNCLUSTERED_PAINT,
         });
 
-        // Click handlers
+        // Cluster click → drill down to cities or zoom in
         map.current!.on('click', 'clusters', (e) => {
-          console.log('Cluster clicked!', e);
-          const features = map.current!.queryRenderedFeatures(e.point, {
-            layers: ['clusters']
-          });
-          console.log('Cluster features:', features);
-          
-          if (!features || features.length === 0) {
-            console.log('No cluster features found');
-            return;
-          }
-          
+          const features = map.current!.queryRenderedFeatures(e.point, { layers: ['clusters'] });
+          if (!features || features.length === 0) return;
+
           const clusterId = features[0].properties?.cluster_id;
-          console.log('Cluster ID:', clusterId);
           const source = map.current!.getSource('events') as mapboxgl.GeoJSONSource;
-          
-          // Recursively get all leaf cities from a cluster
-          const getAllCitiesFromCluster = (clusterId: number, callback: (cities: Array<{city: string, state: string}>) => void) => {
+
+          const getAllCitiesFromCluster = (
+            clusterId: number,
+            callback: (cities: Array<{ city: string; state: string }>) => void,
+          ) => {
             source.getClusterLeaves(clusterId, 100, 0, (err, leaves) => {
-              console.log('Getting cluster leaves, err:', err, 'leaves:', leaves);
-              
               if (err || !leaves) {
-                // Fallback: just zoom in
                 source.getClusterExpansionZoom(clusterId, (err, zoom) => {
                   if (err) return;
-                  
                   const coordinates = (features[0].geometry as any).coordinates;
-                  map.current!.easeTo({
-                    center: coordinates,
-                    zoom: zoom ?? 12
-                  });
+                  map.current!.easeTo({ center: coordinates, zoom: zoom ?? 12 });
                 });
                 return;
               }
-              
-              // The leaves are returned as an object with features array
+
               const leafFeatures = (leaves as any).features || leaves;
-              console.log('Leaf features:', leafFeatures);
-              
-              // Extract cities from leaves - these should all be actual points, not sub-clusters
-              const cities = (Array.isArray(leafFeatures) ? leafFeatures : []).map((f: any) => ({
-                city: f.properties?.city || '',
-                state: f.properties?.state
-              })).filter((c: any) => c.state);
-              
-              console.log('Extracted cities from cluster leaves:', cities);
+              const cities = (Array.isArray(leafFeatures) ? leafFeatures : [])
+                .map((f: any) => ({ city: f.properties?.city || '', state: f.properties?.state }))
+                .filter((c: any) => c.state);
+
               callback(cities);
             });
           };
-          
-          // Get all cities from the cluster
+
           getAllCitiesFromCluster(clusterId, (cities) => {
             if (cities.length > 0) {
               setSelectedCluster(cities);
               setSelectedCity(null);
             } else {
-              // If no cities extracted, zoom in
               source.getClusterExpansionZoom(clusterId, (err, zoom) => {
                 if (err) return;
-                
                 const coordinates = (features[0].geometry as any).coordinates;
-                map.current!.easeTo({
-                  center: coordinates,
-                  zoom: (zoom ?? 11) + 1
-                });
+                map.current!.easeTo({ center: coordinates, zoom: (zoom ?? 11) + 1 });
               });
             }
           });
@@ -274,25 +201,13 @@ export const MapView: React.FC = () => {
 
         map.current!.on('click', 'unclustered-point', (e) => {
           const properties = e.features![0].properties;
-          console.log('Unclustered point clicked!', properties);
-          
-          // Handle clicks on points, including statewide events (no city)
           if (properties?.state) {
-            // Keep the original city value (could be null/empty for statewide)
             const city = properties.city || '';
-            console.log(`Selected: ${city || 'Statewide'}, ${properties.state}`);
-            
-            setSelectedCity({
-              city: city,
-              state: properties.state
-            });
+            setSelectedCity({ city, state: properties.state });
             setSelectedCluster(null);
-          } else {
-            console.warn('Point clicked but missing state property:', properties);
           }
         });
 
-        // Change cursor on hover
         map.current!.on('mouseenter', 'clusters', () => {
           map.current!.getCanvas().style.cursor = 'pointer';
         });
@@ -305,14 +220,12 @@ export const MapView: React.FC = () => {
         map.current!.on('mouseleave', 'unclustered-point', () => {
           map.current!.getCanvas().style.cursor = '';
         });
-        
-        // Load initial data after map is ready
+
         loadMapData();
       });
-
     } catch (err) {
       console.error('Failed to initialize map:', err);
-      setError('Failed to initialize map');
+      setError('failed to initialize map');
     }
 
     return () => {
@@ -321,17 +234,18 @@ export const MapView: React.FC = () => {
     };
   }, []);
 
-  // Load map data when filters or network expansion change
+  // Reload on filter / network change
   useEffect(() => {
-    if (map.current) {
-      console.log('Filters/network changed, reloading map data');
-      loadMapData();
-    }
+    if (map.current) loadMapData();
   }, [filters, networkExpanded]);
 
+  const stateCount =
+    mapData &&
+    new Set(mapData.map_points.map((p) => p.state).filter((s) => VALID_STATE_CODES.has(s))).size;
+
   return (
-    <div className="h-full flex">
-      {/* Filter Panel - Desktop: side panel, Mobile: overlay */}
+    <div className="h-full flex bg-[#f6f1e6]">
+      {/* Filter panel (desktop side, mobile overlay) */}
       {showFilters && (
         <FilterPanel
           className="w-full md:w-80 h-full flex-shrink-0 md:relative fixed top-16 bottom-0 left-0 z-40 md:z-10 md:top-0 md:bottom-auto"
@@ -339,303 +253,236 @@ export const MapView: React.FC = () => {
         />
       )}
 
-      {/* Filter Panel Backdrop (Mobile) */}
       {showFilters && (
         <div
-          className="fixed inset-0 top-16 bg-black bg-opacity-50 z-30 md:hidden"
+          className="fixed inset-0 top-16 bg-black/40 z-30 md:hidden"
           onClick={() => setShowFilters(false)}
         />
       )}
 
-      {/* Map Container - Always takes remaining space */}
-      <div className="flex-1 relative">
-        
-        {/* Mobile: Compact Search + Filter Row */}
-        <div className="absolute top-4 left-4 right-4 z-10 md:hidden">
-          <div className="flex space-x-2">
-            {/* Filter Toggle Button */}
+      {/* Map column */}
+      <div className="flex-1 relative min-w-0 p-3 md:p-4">
+        <div className="absolute inset-3 md:inset-4 rounded-lg border border-black/[0.1] overflow-hidden bg-[#fdfaf2]">
+          {/* Top row — search only. Mapbox NavigationControl lives at top-right (~46px wide), so we leave room for it. */}
+          <div className="absolute top-3 left-3 z-10 flex items-center gap-2" style={{ right: 64 }}>
             {!showFilters && (
               <button
                 onClick={() => setShowFilters(true)}
-                className="bg-white rounded-lg shadow-lg p-2 hover:bg-gray-50 touch-manipulation flex-shrink-0"
-                style={{ minHeight: '40px', minWidth: '40px' }}
+                className="bg-[#fdfaf2] border border-black/[0.12] hover:bg-[#ede5d2] transition-colors flex items-center justify-center text-[#2a2a2a] flex-shrink-0"
+                style={{ width: 36, height: 36, borderRadius: 6 }}
+                title="show filters"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                 </svg>
               </button>
             )}
-            
-            {/* Compact Search Bar */}
-            <div className="flex-1">
-              <SearchBar 
-                placeholder="Search events..."
-                className="bg-white rounded-lg shadow-lg text-sm h-10"
+
+            <div className="flex-1 min-w-0">
+              <SearchBar
+                placeholder="search events by topic, description, or context…"
+                className="bg-[#fdfaf2] border border-black/[0.12] text-sm h-9"
               />
             </div>
           </div>
-        </div>
 
-        {/* Desktop: Original Layout */}
-        <div className="hidden md:block">
-          {/* Toggle Filters Button (when hidden) */}
-          {!showFilters && (
-            <button
-              onClick={() => setShowFilters(true)}
-              className="absolute top-4 left-4 z-10 bg-white rounded-lg shadow-lg p-3 hover:bg-gray-50 touch-manipulation"
-              style={{ minHeight: '44px', minWidth: '44px' }}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-              </svg>
-            </button>
+          {/* Bottom-left — combined stats + unmapped pill (desktop) */}
+          {mapData && (
+            <div className="absolute bottom-4 left-4 z-10 hidden md:flex items-stretch gap-2">
+              <div
+                className="bg-[#fdfaf2] border border-black/[0.15] flex items-center gap-4 px-4 py-2.5 text-[13px] text-[#1a1a1a]"
+                style={{
+                  borderRadius: 8,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                }}
+              >
+                <Stat label="events" value={mapData.total_events.toLocaleString()} />
+                <span className="w-px self-stretch bg-black/[0.1]" aria-hidden />
+                <Stat label="cities" value={mapData.map_points.length.toLocaleString()} />
+                <span className="w-px self-stretch bg-black/[0.1]" aria-hidden />
+                <Stat label="states" value={String(stateCount ?? 0)} />
+              </div>
+
+              {unmappedCount > 0 && (
+                <button
+                  onClick={() => {
+                    setShowUnmapped(true);
+                    setSelectedCity(null);
+                    setSelectedCluster(null);
+                  }}
+                  className="bg-[#fdf2ed] border border-[rgba(194,65,12,0.3)] hover:bg-[#fce5d8] transition-colors flex items-center gap-2 px-4 py-2.5"
+                  style={{
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  }}
+                  title="events without geocoded location"
+                >
+                  <span
+                    aria-hidden
+                    style={{ width: 8, height: 8, borderRadius: '50%', background: '#c2410c', display: 'inline-block' }}
+                  />
+                  <span className="text-[13px] font-medium text-[#9a330a] tabular-nums">
+                    {unmappedCount.toLocaleString()}
+                  </span>
+                  <span className="text-[13px] text-[#9a330a]">unmapped</span>
+                </button>
+              )}
+            </div>
           )}
-          
-          {/* Search Bar */}
-          <div className="absolute top-4 left-16 md:left-20 right-4 z-10 max-w-md">
-            <SearchBar 
-              placeholder="Search events by topic, description, or context..."
-              className="bg-white rounded-lg shadow-lg text-sm"
-            />
-          </div>
-        </div>
-        
-        {/* Stats Bar with Virtual Events - Mobile Expandable */}
-        {mapData && (
-          <div className="absolute top-16 md:top-20 left-4 md:left-20 right-4 md:right-auto z-10">
-            {/* Mobile: Compact Stats + Virtual Button */}
-            <div className="md:hidden bg-white rounded-lg shadow-lg px-3 py-2">
+
+          {/* Mobile compact stats button (bottom) */}
+          {mapData && (
+            <div className="absolute bottom-3 left-3 right-3 z-10 md:hidden">
               <button
                 onClick={() => setShowStatsModal(true)}
-                className="w-full flex items-center justify-between text-xs touch-manipulation"
-                style={{ minHeight: '32px' }}
+                className="w-full bg-[#fdfaf2] border border-black/[0.15] rounded-md px-3 py-2.5 text-[13px] text-[#1a1a1a] flex items-center justify-between"
+                style={{
+                  minHeight: 40,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                }}
               >
-                <div className="flex items-center space-x-3">
-                  <div className="flex items-center">
-                    <span className="text-blue-600">📊</span>
-                    <span className="ml-1 font-semibold">{mapData.total_events.toLocaleString()}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="text-green-600">🏙️</span>
-                    <span className="ml-1 font-semibold">{mapData.map_points.length}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="text-purple-600">📍</span>
-                    <span className="ml-1 font-semibold">
-                      {new Set(mapData.map_points
-                        .map(p => p.state)
-                        .filter(state => VALID_STATE_CODES.has(state))
-                      ).size}
-                    </span>
-                  </div>
+                <div className="flex items-center gap-3 tabular-nums">
+                  <span>
+                    <span className="text-[#6b6b6b]">events </span>
+                    <span className="font-medium">{mapData.total_events.toLocaleString()}</span>
+                  </span>
+                  <span className="text-[#9a9a9a]">·</span>
+                  <span>
+                    <span className="text-[#6b6b6b]">cities </span>
+                    <span className="font-medium">{mapData.map_points.length.toLocaleString()}</span>
+                  </span>
+                  <span className="text-[#9a9a9a]">·</span>
+                  <span>
+                    <span className="text-[#6b6b6b]">states </span>
+                    <span className="font-medium">{stateCount ?? 0}</span>
+                  </span>
                 </div>
-                
-                {/* Virtual Events Button + Expand Indicator */}
-                <div className="flex items-center space-x-2">
-                  {virtualEventsCount > 0 && (
-                    <div 
-                      className="flex items-center bg-amber-100 text-amber-700 px-2 py-1 rounded-full"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowVirtualEvents(true);
-                        setSelectedCity(null);
-                        setSelectedCluster(null);
-                      }}
-                    >
-                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-xs font-bold">{virtualEventsCount}</span>
-                    </div>
-                  )}
-                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
+                {unmappedCount > 0 && (
+                  <span
+                    className="ml-2 flex items-center gap-1 text-[12px] text-[#9a330a] flex-shrink-0"
+                    style={{
+                      background: '#fdf2ed',
+                      border: '0.5px solid rgba(194,65,12,0.3)',
+                      padding: '2px 8px',
+                      borderRadius: 10,
+                    }}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#c2410c', display: 'inline-block' }} />
+                    {unmappedCount.toLocaleString()}
+                  </span>
+                )}
               </button>
             </div>
-            
-            {/* Desktop: Full Stats */}
-            <div className="hidden md:block bg-white rounded-lg shadow-lg p-4">
-              <div className="flex space-x-6 text-base">
-                <div>
-                  <div className="text-sm text-gray-500">Total Events</div>
-                  <div className="text-2xl font-bold">{mapData.total_events.toLocaleString()}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-500">Cities</div>
-                  <div className="text-2xl font-bold">{mapData.map_points.length}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-500">States</div>
-                  <div className="text-2xl font-bold">
-                    {new Set(mapData.map_points
-                      .map(p => p.state)
-                      .filter(state => VALID_STATE_CODES.has(state))
-                    ).size}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* Full-Screen Stats Modal (Mobile Only) */}
-        {showStatsModal && (
-          <div className="fixed inset-0 z-50 md:hidden">
-            {/* Backdrop */}
-            <div 
-              className="absolute inset-0 bg-black bg-opacity-50"
-              onClick={() => setShowStatsModal(false)}
-            />
-            
-            {/* Modal Content */}
-            <div className="absolute inset-x-4 top-20 bottom-20 bg-white rounded-lg shadow-xl overflow-y-auto">
-              {/* Header */}
-              <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">Event Statistics</h2>
-                <button
-                  onClick={() => setShowStatsModal(false)}
-                  className="p-2 hover:bg-gray-100 rounded-lg touch-manipulation"
-                  style={{ minHeight: '44px', minWidth: '44px' }}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              
-              {/* Stats Content */}
-              <div className="p-6 space-y-6">
-                {/* Main Stats */}
-                <div className="grid grid-cols-1 gap-6">
-                  <div className="bg-blue-50 rounded-lg p-4">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-3">📊</span>
-                      <div>
-                        <div className="text-sm text-blue-600 font-medium">Total Events</div>
-                        <div className="text-3xl font-bold text-blue-800">{mapData?.total_events.toLocaleString()}</div>
-                      </div>
-                    </div>
+          {/* Mobile stats modal */}
+          {showStatsModal && (
+            <div className="fixed inset-0 z-50 md:hidden">
+              <div
+                className="absolute inset-0 bg-black/40"
+                onClick={() => setShowStatsModal(false)}
+              />
+              <div className="absolute inset-x-4 top-20 bottom-20 bg-[#fdfaf2] border border-black/[0.12] rounded-lg overflow-y-auto">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-black/[0.08]">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">map</div>
+                    <h2 className="text-base font-medium text-[#1a1a1a] mt-0.5">at a glance</h2>
                   </div>
-                  
-                  <div className="bg-green-50 rounded-lg p-4">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-3">🏙️</span>
-                      <div>
-                        <div className="text-sm text-green-600 font-medium">Cities</div>
-                        <div className="text-3xl font-bold text-green-800">{mapData?.map_points.length}</div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-purple-50 rounded-lg p-4">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-3">📍</span>
-                      <div>
-                        <div className="text-sm text-purple-600 font-medium">States</div>
-                        <div className="text-3xl font-bold text-purple-800">
-                          {mapData && new Set(mapData.map_points
-                            .map(p => p.state)
-                            .filter(state => VALID_STATE_CODES.has(state))
-                          ).size}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  <button
+                    onClick={() => setShowStatsModal(false)}
+                    className="p-2 hover:bg-[#ede5d2] rounded-md text-[#6b6b6b]"
+                    style={{ minHeight: 40, minWidth: 40 }}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
 
-                {/* Virtual Events Section */}
-                {virtualEventsCount > 0 && (
-                  <div className="pt-4 border-t border-gray-200">
-                    <h3 className="text-sm font-medium text-gray-700 mb-3">Additional Events</h3>
+                <div className="p-5 space-y-3">
+                  <StatRow label="events" value={mapData?.total_events.toLocaleString() ?? '—'} />
+                  <StatRow label="cities" value={mapData?.map_points.length.toLocaleString() ?? '—'} />
+                  <StatRow label="states" value={String(stateCount ?? 0)} />
+
+                  {unmappedCount > 0 && (
                     <button
                       onClick={() => {
-                        setShowVirtualEvents(true);
+                        setShowUnmapped(true);
                         setSelectedCity(null);
                         setSelectedCluster(null);
                         setShowStatsModal(false);
                       }}
-                      className="w-full bg-amber-50 border border-amber-300 text-amber-700 p-4 rounded-lg hover:bg-amber-100 transition-colors touch-manipulation"
+                      className="w-full mt-4 text-left bg-[#fdf2ed] border border-[rgba(194,65,12,0.25)] rounded-md p-4"
                     >
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center">
-                          <svg className="w-6 h-6 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
-                          <div className="text-left">
-                            <div className="font-medium">Virtual/Non-geocoded Events</div>
-                            <div className="text-sm text-amber-600">Events without location data</div>
-                          </div>
+                        <div>
+                          <div className="text-[10px] uppercase tracking-[0.4px] text-[#9a330a]">unmapped</div>
+                          <div className="text-sm text-[#9a330a] mt-0.5">events without geocoded location</div>
                         </div>
-                        <span className="bg-amber-200 text-amber-800 px-3 py-1 rounded-full text-sm font-bold">
-                          {virtualEventsCount}
+                        <span className="text-[22px] font-medium text-[#9a330a] tabular-nums">
+                          {unmappedCount.toLocaleString()}
                         </span>
                       </div>
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
-        
-        {/* Desktop Virtual/Non-geocoded Events Button */}
-        {virtualEventsCount > 0 && (
-          <div className="absolute top-4 right-4 z-10 hidden md:block">
-            <button
-              onClick={() => {
-                setShowVirtualEvents(true);
-                setSelectedCity(null);
-                setSelectedCluster(null);
-              }}
-              className="bg-amber-50 border border-amber-300 text-amber-700 rounded-lg shadow-lg hover:bg-amber-100 transition-colors flex items-center space-x-2 touch-manipulation px-4 py-2"
-              style={{ minHeight: '44px' }}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className="font-medium">Virtual/Non-geocoded</span>
-              <span className="bg-amber-200 text-amber-800 px-2 py-1 rounded-full text-xs font-bold">
-                {virtualEventsCount}
-              </span>
-            </button>
-          </div>
-        )}
-        
-        {/* Loading overlay */}
-        {loading && (
-          <div className="absolute inset-0 z-20 bg-white/75 flex items-center justify-center">
-            <div className="text-center">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <p className="mt-2 text-sm text-gray-600">Loading map data...</p>
+          )}
+
+          {/* Loading overlay */}
+          {loading && (
+            <div className="absolute inset-0 z-20 bg-[#fdfaf2]/70 flex items-center justify-center">
+              <div className="text-center">
+                <div className="inline-block animate-spin rounded-full h-6 w-6 border-2 border-[#c2410c] border-t-transparent"></div>
+                <p className="mt-2 text-xs text-[#6b6b6b]">loading map…</p>
+              </div>
             </div>
-          </div>
-        )}
-        
-        {/* Error message */}
-        {error && (
-          <div className="absolute top-4 right-4 z-10 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg max-w-sm">
-            <p className="text-sm">{error}</p>
-          </div>
-        )}
-        
-        {/* Map */}
-        <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
-        
-        {/* Side Panel */}
+          )}
+
+          {/* Error */}
+          {error && (
+            <div
+              className="absolute z-10 bg-[#fdf2ed] border border-[rgba(194,65,12,0.25)] text-[#9a330a] px-3 py-2 rounded-md max-w-xs text-xs"
+              style={{ top: 56, right: 12 }}
+            >
+              {error}
+            </div>
+          )}
+
+          {/* Map canvas */}
+          <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
+        </div>
+
+        {/* Side panel */}
         <SidePanel
           city={selectedCity}
           cluster={selectedCluster}
-          showVirtual={showVirtualEvents}
+          showVirtual={showUnmapped}
           filters={filters}
           onClose={() => {
             setSelectedCity(null);
             setSelectedCluster(null);
-            setShowVirtualEvents(false);
+            setShowUnmapped(false);
           }}
         />
       </div>
     </div>
   );
 };
+
+// Inline stat shown in the bottom-left desktop pill
+const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <span className="flex items-baseline gap-1.5">
+    <span className="text-[11px] uppercase tracking-[0.4px] text-[#6b6b6b]">{label}</span>
+    <span className="text-[14px] font-medium text-[#1a1a1a] tabular-nums">{value}</span>
+  </span>
+);
+
+// Used inside the mobile stats modal
+const StatRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="flex items-center justify-between bg-[#f6f1e6] border border-black/[0.08] rounded-md px-4 py-3">
+    <span className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">{label}</span>
+    <span className="text-[20px] font-medium text-[#1a1a1a] tabular-nums">{value}</span>
+  </div>
+);

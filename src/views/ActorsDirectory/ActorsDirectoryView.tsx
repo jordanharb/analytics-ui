@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { fetchActors, fetchDirectoryStats } from '../../api/actorsDirectoryService';
+import { supabaseClient } from '../../api/supabaseClient';
 import type {
   Actor,
   ActorDirectoryFilters,
@@ -12,10 +13,10 @@ const PAGE_SIZE = 100;
 type ViewMode = 'table' | 'cards';
 
 const TYPE_FILTERS: Array<{ id: string; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'person', label: 'People' },
-  { id: 'organization', label: 'Organizations' },
-  { id: 'chapter', label: 'Chapters' },
+  { id: 'all',          label: 'all' },
+  { id: 'person',       label: 'people' },
+  { id: 'organization', label: 'organizations' },
+  { id: 'chapter',      label: 'chapters' },
 ];
 
 const initialFilters: ActorDirectoryFilters = {
@@ -23,10 +24,14 @@ const initialFilters: ActorDirectoryFilters = {
   search: '',
 };
 
+// fieldnotes palette
+// page #f6f1e6   surface #fdfaf2   ink #1a1a1a   muted #6b6b6b
+// accent #c2410c   accent text #9a330a   tag fill #fdf2ed   neutral #ede5d2
+
 const LoadingOverlay: React.FC<{ message?: string }> = ({ message }) => (
-  <div className="flex items-center justify-center gap-3 rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
-    <span>{message ?? 'Loading…'}</span>
+  <div className="flex items-center justify-center gap-3 px-4 py-10 text-sm text-[#6b6b6b]">
+    <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#c2410c] border-t-transparent" />
+    <span>{message ?? 'loading…'}</span>
   </div>
 );
 
@@ -65,7 +70,7 @@ export const ActorsDirectoryView: React.FC = () => {
     setIsLoadingMore(true);
     try {
       const result = await fetchActors(filters, PAGE_SIZE, actors.length);
-      setActors(prev => [...prev, ...result.actors]);
+      setActors((prev) => [...prev, ...result.actors]);
       setTotal(result.total);
     } catch (error) {
       console.error('Failed to load more actors', error);
@@ -79,18 +84,20 @@ export const ActorsDirectoryView: React.FC = () => {
   }, [filters, loadActors]);
 
   useEffect(() => {
-    fetchDirectoryStats().then(setStats).catch(err => {
-      console.error('Failed to fetch directory stats', err);
-    });
+    fetchDirectoryStats()
+      .then(setStats)
+      .catch((err) => {
+        console.error('Failed to fetch directory stats', err);
+      });
   }, []);
 
   const onSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
-    setFilters(prev => ({ ...prev, search: value }));
+    setFilters((prev) => ({ ...prev, search: value }));
   }, []);
 
   const onTypeChange = useCallback((type: string) => {
-    setFilters(prev => ({ ...prev, type }));
+    setFilters((prev) => ({ ...prev, type }));
   }, []);
 
   const toggleView = useCallback((mode: ViewMode) => {
@@ -102,97 +109,102 @@ export const ActorsDirectoryView: React.FC = () => {
 
   const handleSelectActor = useCallback(
     (actorId: string) => {
-      navigate(`/entity/actor/${actorId}`, { state: { from: location.pathname + location.search } });
+      navigate(`/entity/actor/${actorId}`, {
+        state: { from: location.pathname + location.search },
+      });
     },
     [location.pathname, location.search, navigate],
   );
 
-  const statsDisplay = useMemo(() => {
-    if (!stats) return null;
-    return (
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Total Actors" value={stats.total} />
-        <StatCard label="People" value={stats.person} />
-        <StatCard label="Organizations" value={stats.organization} />
-        <StatCard label="Chapters" value={stats.chapter} />
-      </div>
-    );
-  }, [stats]);
-
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto w-full max-w-[1300px] px-6 py-10">
-        <header className="mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Actor Directory</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-600">
-            Explore the full actor dataset with filters, quick search, and detailed profiles.
+    <div className="min-h-screen bg-[#f6f1e6] text-[#1a1a1a]">
+      <div className="mx-auto w-full max-w-[1300px] px-4 md:px-6 py-8 md:py-10">
+        {/* Hero */}
+        <header className="mb-6">
+          <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">directory</div>
+          <h1
+            className="mt-1 text-[26px] md:text-[30px] font-semibold leading-tight text-[#1a1a1a] tracking-tight"
+          >
+            {stats ? `${stats.total.toLocaleString()} actors on file.` : 'actors on file.'}
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-[#6b6b6b]">
+            people, organizations, and chapters we're keeping tabs on. click any row for the full profile.
           </p>
         </header>
 
-        {statsDisplay && (
-          <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            {statsDisplay}
+        {/* Stat cards */}
+        {stats && (
+          <section className="mb-5 grid grid-cols-2 gap-2.5 md:grid-cols-4">
+            <StatCard label="total" value={stats.total} />
+            <StatCard label="people" value={stats.person} />
+            <StatCard label="organizations" value={stats.organization} />
+            <StatCard label="chapters" value={stats.chapter} />
           </section>
         )}
 
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center gap-2">
-              {TYPE_FILTERS.map(filter => (
+        {/* Pinned umbrella orgs */}
+        <PinnedOrgs onSelect={(id) => navigate(`/entity/actor/${id}`)} />
+
+        {/* Filter bar */}
+        <section className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {TYPE_FILTERS.map((filter) => {
+              const active = filters.type === filter.id;
+              return (
                 <button
                   key={filter.id}
                   onClick={() => onTypeChange(filter.id)}
-                  className={`rounded-full px-4 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
-                    filters.type === filter.id
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'border border-slate-200 bg-white text-slate-600 hover:border-blue-400 hover:text-blue-600'
-                  }`}
+                  className="text-xs px-3 py-1.5 transition-colors focus:outline-none"
+                  style={{
+                    borderRadius: 11,
+                    background: active ? '#c2410c' : '#fdfaf2',
+                    color: active ? '#fdfaf2' : '#2a2a2a',
+                    border: active ? '0.5px solid #c2410c' : '0.5px solid rgba(0,0,0,0.12)',
+                    fontWeight: active ? 500 : 400,
+                  }}
                 >
                   {filter.label}
                 </button>
-              ))}
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 md:flex-none">
+              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-[#9a9a9a]">
+                <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197M16.803 15.803A7.5 7.5 0 1 0 5.196 5.197a7.5 7.5 0 0 0 11.607 10.606Z" />
+                </svg>
+              </span>
+              <input
+                value={filters.search}
+                onChange={onSearchChange}
+                placeholder="search actors, cities, descriptions…"
+                type="search"
+                className="w-full md:w-72 bg-[#fdfaf2] border border-black/[0.12] py-2 pl-9 pr-3 text-xs text-[#1a1a1a] placeholder:text-[#9a9a9a] focus:border-[#c2410c]/40 focus:outline-none focus:ring-2 focus:ring-[#c2410c]/15"
+                style={{ borderRadius: 6 }}
+              />
             </div>
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-500">
-                  <svg
-                    className="h-4 w-4"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197M16.803 15.803A7.5 7.5 0 1 0 5.196 5.197a7.5 7.5 0 0 0 11.607 10.606Z" />
-                  </svg>
-                </span>
-                <input
-                  value={filters.search}
-                  onChange={onSearchChange}
-                  placeholder="Search actors, cities, states, descriptions"
-                  className="w-72 rounded-full border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  type="search"
-                />
-              </div>
-              <div className="inline-flex rounded-full border border-slate-200 bg-slate-100 p-1">
-                <ToggleButton label="Table" mode="table" activeMode={viewMode} onToggle={toggleView} />
-                <ToggleButton label="Cards" mode="cards" activeMode={viewMode} onToggle={toggleView} />
-              </div>
+            <div
+              className="inline-flex bg-[#ede5d2] p-[3px]"
+              style={{ borderRadius: 6 }}
+            >
+              <ToggleButton label="table" mode="table" activeMode={viewMode} onToggle={toggleView} />
+              <ToggleButton label="cards" mode="cards" activeMode={viewMode} onToggle={toggleView} />
             </div>
           </div>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="max-h-[70vh] overflow-auto">
+        {/* Results */}
+        <section className="bg-[#fdfaf2] border border-black/[0.1] rounded-lg overflow-hidden">
+          <div className="max-h-[70vh] overflow-auto scrollbar-thin">
             {isLoading ? (
-              <div className="flex h-full items-center justify-center">
-                <LoadingOverlay message="Fetching actors" />
-              </div>
+              <LoadingOverlay message="fetching actors" />
             ) : actors.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-slate-400">
-                <span className="text-lg font-semibold">No actors match the current filters.</span>
-                <p className="max-w-sm text-sm">
-                  Try clearing your search or switching type filters to explore the full dataset.
+              <div className="flex h-64 flex-col items-center justify-center gap-2 text-center text-[#9a9a9a]">
+                <span className="text-base font-medium text-[#6b6b6b]">no actors match the current filters.</span>
+                <p className="max-w-sm text-xs">
+                  try clearing search or switching the type filter to explore the full dataset.
                 </p>
               </div>
             ) : viewMode === 'table' ? (
@@ -202,13 +214,15 @@ export const ActorsDirectoryView: React.FC = () => {
             )}
           </div>
           {hasMore && (
-            <div className="border-t border-slate-200 bg-slate-100 p-4">
+            <div className="border-t border-black/[0.08] bg-[#f6f1e6] p-3 text-center">
               <button
                 onClick={handleLoadMore}
                 disabled={isLoadingMore}
-                className="w-full rounded-lg bg-blue-600 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-300"
+                className="text-xs font-medium text-[#c2410c] hover:text-[#9a330a] disabled:opacity-50"
               >
-                {isLoadingMore ? 'Loading…' : 'Load More'}
+                {isLoadingMore
+                  ? 'loading…'
+                  : `load more · showing ${actors.length.toLocaleString()} of ${total.toLocaleString()}`}
               </button>
             </div>
           )}
@@ -218,10 +232,91 @@ export const ActorsDirectoryView: React.FC = () => {
   );
 };
 
+// ---- subcomponents ---------------------------------------------------------
+
+const PINNED_ORG_IDS = [
+  '72ddb970-a5c4-4c4e-b157-bfbfc9673f30', // Turning Point Action
+  'eeb37cb1-eb4a-40d0-aa28-f6bd0ade63ac', // Turning Point USA
+  'de9ed050-b116-4ae4-8579-c4868fb0ec79', // TPUSA Students
+  'f9987bb1-c9ea-4d3d-8eff-e160fe9a0bc6', // Turning Point Action Coalitions
+  '1d0699a1-13e3-455f-951e-50392cac37e3', // TPUSA Faith
+  '5781a70f-2384-404e-8516-ad714f6c0b01', // Turning Point Academy
+];
+
+const PinnedOrgs: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) => {
+  const [orgs, setOrgs] = useState<(Actor & { network_event_count: number })[]>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabaseClient
+        .from('v2_actors_with_counts')
+        .select('id,name,actor_type,event_count')
+        .in('id', PINNED_ORG_IDS);
+
+      if (!data) return;
+
+      // Fetch network actor IDs for each org in parallel, then sum event counts
+      const enriched = await Promise.all(
+        data.map(async (org) => {
+          try {
+            const { data: netIds } = await supabaseClient.rpc('get_network_actor_ids', {
+              p_actor_ids: [org.id],
+              p_include_self: false,
+            });
+            const linked: string[] = netIds ?? [];
+            if (linked.length === 0) {
+              return { ...(org as Actor), network_event_count: org.event_count ?? 0 };
+            }
+            const { data: linkedActors } = await supabaseClient
+              .from('v2_actors_with_counts')
+              .select('event_count')
+              .in('id', linked);
+            const networkTotal = (linkedActors ?? []).reduce(
+              (sum: number, a: any) => sum + (a.event_count ?? 0),
+              org.event_count ?? 0,
+            );
+            return { ...(org as Actor), network_event_count: networkTotal };
+          } catch {
+            return { ...(org as Actor), network_event_count: org.event_count ?? 0 };
+          }
+        }),
+      );
+
+      enriched.sort((a, b) => b.network_event_count - a.network_event_count);
+      setOrgs(enriched);
+    };
+    load();
+  }, []);
+
+  if (orgs.length === 0) return null;
+
+  return (
+    <section className="mb-5">
+      <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">umbrella organizations</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
+        {orgs.map((org) => (
+          <button
+            key={org.id}
+            onClick={() => onSelect(org.id)}
+            className="bg-[#fdfaf2] border border-black/[0.08] rounded-md px-3 py-2.5 text-left hover:border-[#c2410c]/40 transition-colors cursor-pointer"
+          >
+            <div className="text-[12px] font-medium text-[#1a1a1a] truncate">{org.name}</div>
+            <div className="text-[11px] text-[#6b6b6b] mt-0.5 tabular-nums">
+              {org.network_event_count.toLocaleString()} events
+            </div>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+};
+
 const StatCard: React.FC<{ label: string; value: number }> = ({ label, value }) => (
-  <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-    <span className="text-xs font-semibold uppercase tracking-wide text-blue-600/80">{label}</span>
-    <div className="mt-2 text-2xl font-semibold text-slate-900">{value.toLocaleString()}</div>
+  <div className="bg-[#fdfaf2] border border-black/[0.08] rounded-md px-4 py-3">
+    <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">{label}</div>
+    <div className="mt-1 text-[22px] font-medium text-[#1a1a1a] tabular-nums">
+      {value.toLocaleString()}
+    </div>
   </div>
 );
 
@@ -230,54 +325,121 @@ const ToggleButton: React.FC<{
   mode: ViewMode;
   activeMode: ViewMode;
   onToggle: (mode: ViewMode) => void;
-}> = ({ label, mode, activeMode, onToggle }) => (
-  <button
-    onClick={() => onToggle(mode)}
-    className={`rounded-full px-4 py-1 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
-      activeMode === mode ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-blue-600'
-    }`}
-  >
-    {label}
-  </button>
-);
+}> = ({ label, mode, activeMode, onToggle }) => {
+  const active = activeMode === mode;
+  return (
+    <button
+      onClick={() => onToggle(mode)}
+      className="text-xs px-3 py-1 transition-colors focus:outline-none"
+      style={{
+        borderRadius: 4,
+        background: active ? '#fdfaf2' : 'transparent',
+        color: active ? '#1a1a1a' : '#6b6b6b',
+        fontWeight: active ? 500 : 400,
+      }}
+    >
+      {label}
+    </button>
+  );
+};
 
-const ActorsTable: React.FC<{ actors: Actor[]; onSelect: (actorId: string) => void }> = ({ actors, onSelect }) => (
-  <table className="min-w-full divide-y divide-slate-200">
-    <thead className="bg-slate-100">
+// type pill: person = burnt orange, org/chapter = neutral
+const TypePill: React.FC<{ type: string | null | undefined }> = ({ type }) => {
+  const isPerson = type === 'person';
+  return (
+    <span
+      style={{
+        background: isPerson ? '#fdf2ed' : '#ede5d2',
+        color: isPerson ? '#9a330a' : '#6b6b6b',
+        border: isPerson ? '0.5px solid rgba(194,65,12,0.2)' : '0.5px solid transparent',
+        padding: '2px 8px',
+        borderRadius: 11,
+        fontSize: 10,
+      }}
+    >
+      {type ?? 'unknown'}
+    </span>
+  );
+};
+
+const initialsFor = (name?: string | null) => {
+  if (!name) return '?';
+  return name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+};
+
+// avatar tone: actors with >= 50 events get the orange treatment, others stay neutral
+const Avatar: React.FC<{ actor: Actor; size?: number }> = ({ actor, size = 30 }) => {
+  const hot = (actor.event_count ?? 0) >= 50;
+  return (
+    <span
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        background: hot ? '#c2410c' : '#ede5d2',
+        color: hot ? '#fdfaf2' : '#6b6b6b',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: size >= 44 ? 14 : 11,
+        fontWeight: 500,
+        flexShrink: 0,
+      }}
+    >
+      {initialsFor(actor.name)}
+    </span>
+  );
+};
+
+const ActorsTable: React.FC<{ actors: Actor[]; onSelect: (actorId: string) => void }> = ({
+  actors,
+  onSelect,
+}) => (
+  <table className="min-w-full" style={{ tableLayout: 'fixed' }}>
+    <thead className="bg-[#f6f1e6]">
       <tr>
-        <Th>Actor</Th>
-        <Th>Type</Th>
-        <Th>Location</Th>
-        <Th>Events</Th>
-        <Th>States</Th>
+        <Th width="44%">actor</Th>
+        <Th width="14%">type</Th>
+        <Th width="26%">location</Th>
+        <Th width="16%" align="right">events</Th>
       </tr>
     </thead>
-    <tbody className="divide-y divide-slate-100">
-      {actors.map(actor => (
+    <tbody>
+      {actors.map((actor) => (
         <tr
           key={actor.id}
           onClick={() => onSelect(actor.id)}
-          className="cursor-pointer bg-white transition hover:bg-slate-50"
+          className="cursor-pointer transition-colors hover:bg-[#f6f1e6] border-t border-black/[0.06]"
         >
           <Td>
-            <div className="flex flex-col">
-              <span className="font-semibold text-slate-900">{actor.name ?? 'Unnamed Actor'}</span>
-              <span className="text-xs text-slate-500">{actor.about ? truncate(actor.about, 80) : '—'}</span>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Avatar actor={actor} />
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium text-[#1a1a1a] truncate">
+                  {actor.name ?? 'unnamed actor'}
+                </div>
+                <div className="text-[11px] text-[#6b6b6b] truncate">
+                  {actor.about ? truncate(actor.about, 70) : '—'}
+                </div>
+              </div>
             </div>
           </Td>
+          <Td><TypePill type={actor.actor_type} /></Td>
           <Td>
-            <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium uppercase tracking-wide text-blue-700">
-              {actor.actor_type ?? 'Unknown'}
+            <span className="text-xs text-[#2a2a2a]">
+              {[actor.city, actor.state].filter(Boolean).join(', ') || '—'}
             </span>
           </Td>
-          <Td>
-            <span className="text-sm text-slate-600">{[actor.city, actor.state].filter(Boolean).join(', ') || '—'}</span>
-          </Td>
-          <Td>
-            <span className="text-sm font-semibold text-slate-700">{actor.event_count ?? 0}</span>
-          </Td>
-          <Td>
-            <span className="text-sm font-semibold text-slate-700">{actor.state_count ?? 0}</span>
+          <Td align="right">
+            <span className="text-xs font-medium text-[#1a1a1a] tabular-nums">
+              {(actor.event_count ?? 0).toLocaleString()}
+            </span>
           </Td>
         </tr>
       ))}
@@ -285,41 +447,58 @@ const ActorsTable: React.FC<{ actors: Actor[]; onSelect: (actorId: string) => vo
   </table>
 );
 
-const ActorsCardGrid: React.FC<{ actors: Actor[]; onSelect: (actorId: string) => void }> = ({ actors, onSelect }) => (
-  <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3">
-    {actors.map(actor => (
+const ActorsCardGrid: React.FC<{ actors: Actor[]; onSelect: (actorId: string) => void }> = ({
+  actors,
+  onSelect,
+}) => (
+  <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+    {actors.map((actor) => (
       <button
         key={actor.id}
         onClick={() => onSelect(actor.id)}
-        className="h-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-400 hover:shadow-md"
+        className="h-full rounded-md border border-black/[0.1] bg-[#fdfaf2] p-4 text-left transition-colors hover:border-[#c2410c]/40 hover:bg-[#f6f1e6]"
       >
-        <div className="flex items-center justify-between">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 text-xl font-semibold text-blue-700">
-            {actor.name?.[0]?.toUpperCase() ?? '?'}
-          </div>
-          <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
-            {actor.actor_type ?? 'Unknown'}
-          </span>
+        <div className="flex items-start justify-between gap-3">
+          <Avatar actor={actor} size={44} />
+          <TypePill type={actor.actor_type} />
         </div>
-        <div className="mt-4 text-lg font-semibold text-slate-900">{actor.name ?? 'Unnamed Actor'}</div>
-        <p className="mt-2 line-clamp-3 text-sm text-slate-600">{actor.about ?? 'No description available.'}</p>
-        <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-          <span>{[actor.city, actor.state].filter(Boolean).join(', ') || 'No location'}</span>
-          <span>{(actor.event_count ?? 0).toLocaleString()} events</span>
+        <div className="mt-3 text-[15px] font-medium text-[#1a1a1a] leading-snug">
+          {actor.name ?? 'unnamed actor'}
+        </div>
+        <p className="mt-1.5 line-clamp-2 text-[12px] text-[#6b6b6b] leading-relaxed">
+          {actor.about ?? 'no description on file.'}
+        </p>
+        <div className="mt-3 flex items-center justify-between text-[11px] text-[#6b6b6b]">
+          <span>{[actor.city, actor.state].filter(Boolean).join(', ') || 'no location'}</span>
+          <span className="tabular-nums">
+            {(actor.event_count ?? 0).toLocaleString()} events
+          </span>
         </div>
       </button>
     ))}
   </div>
 );
 
-const Th: React.FC<React.PropsWithChildren> = ({ children }) => (
-  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+const Th: React.FC<React.PropsWithChildren<{ width?: string; align?: 'left' | 'right' }>> = ({
+  children,
+  width,
+  align = 'left',
+}) => (
+  <th
+    className="px-4 py-2.5 text-[10px] uppercase tracking-[0.4px] font-medium text-[#6b6b6b]"
+    style={{ width, textAlign: align }}
+  >
     {children}
   </th>
 );
 
-const Td: React.FC<React.PropsWithChildren> = ({ children }) => (
-  <td className="px-4 py-4 text-sm text-slate-700">{children}</td>
+const Td: React.FC<React.PropsWithChildren<{ align?: 'left' | 'right' }>> = ({
+  children,
+  align = 'left',
+}) => (
+  <td className="px-4 py-3 text-sm text-[#2a2a2a]" style={{ textAlign: align, verticalAlign: 'middle' }}>
+    {children}
+  </td>
 );
 
 function truncate(value: string, length: number) {

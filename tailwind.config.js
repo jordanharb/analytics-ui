@@ -9,10 +9,10 @@ export default {
       colors: {
         // Palantir Light Theme Colors - matching palantir-light-theme.css
         'snow': {
-          '50': '#FFFFFF',
-          '100': '#FAFBFC',
-          '150': '#F5F7FA',
-          '200': '#EDF0F5',
+          '50': '#fdfaf2',
+          '100': '#f6f1e6',
+          '150': '#ede5d2',
+          '200': '#dccdb0',
         },
         'gray': {
           '50': '#f9fafb',
@@ -26,26 +26,29 @@ export default {
           '800': '#1F2937',
           '900': '#111827',
         },
-        // Azure Blue - Primary Accent
+        // Fieldnotes accent — burnt orange
         'azure': {
-          'primary': '#0066CC',
-          'light': '#3384E0',
-          'lighter': '#66A3E8',
-          'lightest': '#E6F2FF',
-          'dark': '#004499',
+          'primary': '#c2410c',
+          'light': '#e8623b',
+          'lighter': '#f0a080',
+          'lightest': '#fdf2ed',
+          'dark': '#9a330a',
         },
-        // Simplified blue scale for Mapbox clusters
-        'blue': {
-          '50': '#F0F7FF',
-          '100': '#E5F2FF',
-          '200': '#DBEAFE',
-          '300': '#BFDBFE',
-          '400': '#93C5FD',
-          '500': '#2563EB',
-          '600': '#1D4ED8',
-          '700': '#1E40AF',
-          '800': '#1E3A8A',
-          '900': '#1E3A8A',
+        'accent': {
+          'DEFAULT': '#c2410c',
+          'soft': '#e8623b',
+          'dark': '#9a330a',
+        },
+        'ink': {
+          'DEFAULT': '#1a1a1a',
+          'soft': '#2a2a2a',
+          'muted': '#6b6b6b',
+          'faint': '#9a9a9a',
+        },
+        'cream': {
+          'DEFAULT': '#f6f1e6',
+          '50': '#fdfaf2',
+          '200': '#ede5d2',
         },
         // Semantic Colors
         'success': {

@@ -1,0 +1,130 @@
+/* fieldnotes design tokens — entity view overrides */
+
+.fn-page {
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.fn-h1 {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1a1a1a;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.fn-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #6b6b6b;
+}
+
+.fn-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 0.5px solid rgba(0,0,0,0.12);
+  background: #fdfaf2;
+  color: #2a2a2a;
+}
+
+.fn-badge-accent {
+  background: #fdf2ed;
+  border-color: rgba(194,65,12,0.25);
+  color: #9a330a;
+}
+
+.fn-card {
+  background: #fdfaf2;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.fn-tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid rgba(0,0,0,0.1);
+  margin-bottom: 24px;
+}
+
+.fn-tab {
+  font-size: 13px;
+  color: #6b6b6b;
+  padding: 8px 0;
+  border-bottom: 1.5px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  transition: color 0.15s;
+}
+
+.fn-tab:hover {
+  color: #1a1a1a;
+}
+
+.fn-tab-active {
+  color: #1a1a1a;
+  border-bottom-color: #c2410c;
+}
+
+.fn-stat {
+  text-align: center;
+}
+
+.fn-stat-value {
+  font-size: 22px;
+  font-weight: 500;
+  color: #1a1a1a;
+  font-variant-numeric: tabular-nums;
+}
+
+.fn-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #6b6b6b;
+  margin-top: 2px;
+}
+
+.fn-btn {
+  font-size: 12px;
+  padding: 8px 16px;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 6px;
+  background: transparent;
+  color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+}
+
+.fn-btn:hover {
+  border-color: #c2410c;
+  color: #c2410c;
+}
+
+.fn-btn-primary {
+  background: #c2410c;
+  color: #fdfaf2;
+  border-color: #c2410c;
+}
+
+.fn-btn-primary:hover {
+  background: #9a330a;
+  border-color: #9a330a;
+  color: #fdfaf2;
+}
+
+/* Override Palantir .card with fieldnotes cream palette */
+.card {
+  background-color: #fdfaf2 !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+

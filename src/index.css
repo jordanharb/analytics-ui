@@ -1,6 +1,7 @@
 @import 'mapbox-gl/dist/mapbox-gl.css';
 @import './styles/palantir-theme.css';
 @import './styles/components.css';
+@import './styles/fieldnotes.css';
 
 @tailwind base;
 @tailwind components;
@@ -16,75 +17,84 @@ html, body {
 body {
   min-height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #FAFBFC;
-  color: #111827;
+  background-color: #f6f1e6;
+  color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Custom scrollbar - Palantir style */
+/* fieldnotes scrollbar — quiet, warm, blends in */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #9CA3AF #F5F7FA;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-track {
-  background: #F5F7FA;
-  border-radius: 9999px;
+  background: transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #9CA3AF;
+  background-color: rgba(0, 0, 0, 0.15);
   border-radius: 9999px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #6B7280;
+  background-color: rgba(194, 65, 12, 0.4);
 }
 
-/* Mapbox custom styles - Palantir themed */
+/* Hide scrollbar entirely (for inner panes that have their own visual containment) */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mapbox custom styles - fieldnotes themed */
 .mapboxgl-popup-content {
-  border-radius: 0.5rem;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   padding: 0;
   overflow: hidden;
-  background: white;
-  border: 1px solid #E5E7EB;
+  background: #fdfaf2;
+  border: 0.5px solid rgba(0, 0, 0, 0.15);
 }
 
 .mapboxgl-popup-close-button {
-  color: #9CA3AF;
+  color: #9a9a9a;
   font-size: 20px;
   padding: 8px;
   transition: color 0.2s;
 }
 
 .mapboxgl-popup-close-button:hover {
-  color: #4B5563;
+  color: #1a1a1a;
 }
 
 .mapboxgl-ctrl-group {
-  background: white;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  border-radius: 0.5rem;
-  border: 1px solid #E5E7EB;
+  background: #fdfaf2;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border-radius: 6px;
+  border: 0.5px solid rgba(0, 0, 0, 0.15);
 }
 
 .mapboxgl-ctrl-group button {
-  border-color: #E5E7EB;
+  border-color: rgba(0, 0, 0, 0.08);
 }
 
 .mapboxgl-ctrl-group button:hover {
-  background-color: #F5F7FA;
+  background-color: #ede5d2;
 }
 
-/* Map marker clusters */
+/* Map marker clusters — fieldnotes burnt orange */
 .marker-cluster-small {
-  background: linear-gradient(135deg, #F0F7FF 0%, #E5F2FF 100%);
-  border: 2px solid #2563EB;
+  background: linear-gradient(135deg, #fdf2ed 0%, #fde8db 100%);
+  border: 2px solid #c2410c;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -92,21 +102,21 @@ body {
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  color: #1E40AF;
+  color: #9a330a;
   font-size: 14px;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+  box-shadow: 0 2px 8px rgba(194, 65, 12, 0.15);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .marker-cluster-small:hover {
   transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 4px 12px rgba(194, 65, 12, 0.25);
 }
 
 .marker-cluster-medium {
-  background: linear-gradient(135deg, #E5F2FF 0%, #DBEAFE 100%);
-  border: 2.5px solid #1D4ED8;
+  background: linear-gradient(135deg, #fde8db 0%, #f9d4be 100%);
+  border: 2.5px solid #c2410c;
   width: 50px;
   height: 50px;
   border-radius: 50%;
@@ -114,21 +124,21 @@ body {
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  color: #1E3A8A;
+  color: #9a330a;
   font-size: 16px;
-  box-shadow: 0 4px 12px rgba(29, 78, 216, 0.2);
+  box-shadow: 0 4px 12px rgba(194, 65, 12, 0.2);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .marker-cluster-medium:hover {
   transform: scale(1.1);
-  box-shadow: 0 6px 16px rgba(29, 78, 216, 0.3);
+  box-shadow: 0 6px 16px rgba(194, 65, 12, 0.3);
 }
 
 .marker-cluster-large {
-  background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
-  border: 3px solid #1E40AF;
+  background: linear-gradient(135deg, #f9d4be 0%, #f0a080 100%);
+  border: 3px solid #9a330a;
   width: 60px;
   height: 60px;
   border-radius: 50%;
@@ -136,14 +146,14 @@ body {
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  color: #1E3A8A;
+  color: #9a330a;
   font-size: 18px;
-  box-shadow: 0 6px 16px rgba(30, 64, 175, 0.25);
+  box-shadow: 0 6px 16px rgba(154, 51, 10, 0.25);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .marker-cluster-large:hover {
   transform: scale(1.1);
-  box-shadow: 0 8px 20px rgba(30, 64, 175, 0.35);
+  box-shadow: 0 8px 20px rgba(154, 51, 10, 0.35);
 }

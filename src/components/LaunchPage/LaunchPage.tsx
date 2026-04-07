@@ -1,118 +1,176 @@
-import React, { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import './LaunchPage.css';
+import { supabaseClient } from '../../api/supabaseClient';
+
+const ASCII_LOGO = `  ┌─────────────────┐
+  │  f i e l d      │
+  │     n o t e s   │
+  └─────────────────┘`;
 
 export const LaunchPage: React.FC = () => {
   const navigate = useNavigate();
-
-  const launchApp = (appName: string) => {
-    if (appName === 'woke-palantir') {
-      navigate('/map');
-    } else if (appName === 'legislature') {
-      navigate('/legislature');
-    }
-  };
+  const [handle, setHandle] = useState('');
+  const [passcode, setPasscode] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    // Create dynamic tumbleweeds periodically
-    const interval = setInterval(() => {
-      if (Math.random() > 0.7) {
-        const tumbleweed = document.createElement('div');
-        tumbleweed.className = 'tumbleweed';
-        tumbleweed.style.animationDuration = `${15 + Math.random() * 10}s`;
-        tumbleweed.style.width = tumbleweed.style.height = `${25 + Math.random() * 20}px`;
-        tumbleweed.style.bottom = `${10 + Math.random() * 30}px`;
-        document.body.appendChild(tumbleweed);
-        
-        // Remove after animation completes
-        setTimeout(() => tumbleweed.remove(), 25000);
-      }
-    }, 8000);
-
-    return () => clearInterval(interval);
+    document.body.style.backgroundColor = '#f6f1e6';
+    return () => { document.body.style.backgroundColor = ''; };
   }, []);
 
+  async function handleSubmit() {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const { error } = await supabaseClient.auth.signInWithPassword({
+        email: handle,
+        password: passcode,
+      });
+      if (error) {
+        setError('nope. try again.');
+        setSubmitting(false);
+        return;
+      }
+      navigate('/map');
+    } catch {
+      setError('connection error. try again.');
+      setSubmitting(false);
+    }
+  }
+
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') handleSubmit();
+  }
+
   return (
-    <div className="launch-page-wrapper">
-      {/* Desert Sun */}
-      <div className="sun"></div>
+    <main style={{
+      minHeight: '100vh',
+      background: '#f6f1e6',
+      color: '#1a1a1a',
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: 880,
+        border: '1px solid rgba(0,0,0,0.12)',
+        borderRadius: 12,
+        padding: 56,
+        display: 'grid',
+        gridTemplateColumns: '1.3fr 1fr',
+        gap: 56,
+        background: '#fdfaf2',
+      }}>
+        {/* Left */}
+        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 320 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#6b6b6b' }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#c2410c', display: 'inline-block' }} />
+            <span>fieldnotes / online</span>
+          </div>
 
-      {/* Desert Mountains */}
-      <div className="mountains"></div>
+          <div>
+            <pre style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: '#1a1a1a', whiteSpace: 'pre' }}>
+{ASCII_LOGO}
+            </pre>
+            <div style={{ marginTop: 28, fontSize: 16, lineHeight: 1.8, color: '#2a2a2a', maxWidth: 400 }}>
+              &gt; their playbook,<br />
+              &gt; in your inbox.
+              <span className="term-cursor" />
+            </div>
+          </div>
 
-      {/* Flying Birds */}
-      <div className="bird bird-1">🦅</div>
-      <div className="bird bird-2">🦅</div>
-
-      {/* Tumbleweeds */}
-      <div className="tumbleweed" style={{ animationDelay: '0s' }}></div>
-      <div className="tumbleweed" style={{ animationDelay: '7s', width: '30px', height: '30px' }}></div>
-      <div className="tumbleweed" style={{ animationDelay: '14s', width: '35px', height: '35px' }}></div>
-
-      {/* Main Container */}
-      <div className="container">
-        {/* Logo Section */}
-        <div className="logo-section">
-          <div className="logo-text">
-            <div className="logo-main">RESILIENT</div>
-            <div className="logo-sub">STRATEGIES</div>
+          <div style={{ fontSize: 12, color: '#9a9a9a', maxWidth: 400, lineHeight: 1.7 }}>
+            a quiet read on what the other side is up to. for organizers, by organizers. invite only.
           </div>
         </div>
 
-        {/* App Grid */}
-        <div className="app-grid">
-          {/* Woke Palantir Widget */}
-          <div className="app-widget" onClick={() => launchApp('woke-palantir')}>
-            <div className="app-header">
-              <div className="live-indicator"></div>
-              <span className="app-title">WOKE PALANTIR</span>
-            </div>
-            <div className="app-description">
-              Real-time event monitoring and intelligence gathering system. Track, analyze, and visualize social movements and political activities across multiple data sources.
-            </div>
-            <div className="app-status">
-              <span className="status-badge">ACTIVE</span>
-              <button 
-                className="desert-btn" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  launchApp('woke-palantir');
-                }}
-              >
-                Launch App →
-              </button>
-            </div>
-          </div>
+        {/* Right */}
+        <div style={{
+          borderLeft: '1px solid rgba(0,0,0,0.1)',
+          paddingLeft: 40,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          gap: 20,
+        }}>
+          <div style={{ fontSize: 12, color: '#6b6b6b' }}>// access</div>
 
-          {/* Legislature & Campaign Finance Widget */}
-          <div className="app-widget" onClick={() => launchApp('legislature')} style={{ animationDelay: '0.2s' }}>
-            <div className="app-header">
-              <div className="live-indicator"></div>
-              <span className="app-title">LEGISLATURE & CAMPAIGN</span>
-            </div>
-            <div className="app-description">
-              Comprehensive tracking of legislative activities and campaign finance data. Monitor bill progress, voting records, and financial contributions across Arizona politics.
-            </div>
-            <div className="app-status">
-              <span className="status-badge">ACTIVE</span>
-              <button 
-                className="desert-btn" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  launchApp('legislature');
-                }}
-              >
-                Launch App →
-              </button>
-            </div>
-          </div>
-        </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 11, color: '#9a9a9a' }}>handle</span>
+            <input
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              onKeyDown={onKey}
+              autoComplete="username"
+              style={{
+                background: 'transparent', border: 'none', borderBottom: '1px solid rgba(0,0,0,0.15)',
+                color: '#1a1a1a', fontSize: 15, padding: '6px 0', outline: 'none',
+                fontFamily: 'inherit',
+              }}
+            />
+          </label>
 
-        {/* Footer */}
-        <div className="footer">
-          <p>© 2025 Resilient Strategies • <a href="https://resilientstrategiesaz.com">ResilientStrategiesAZ.com</a></p>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 11, color: '#9a9a9a' }}>passcode</span>
+            <input
+              type="password"
+              value={passcode}
+              onChange={(e) => setPasscode(e.target.value)}
+              onKeyDown={onKey}
+              autoComplete="current-password"
+              style={{
+                background: 'transparent', border: 'none', borderBottom: '1px solid rgba(0,0,0,0.15)',
+                color: '#1a1a1a', fontSize: 15, padding: '6px 0', outline: 'none',
+                fontFamily: 'inherit',
+              }}
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={submitting}
+            style={{
+              marginTop: 12, fontSize: 13, padding: '10px 16px',
+              border: '1px solid rgba(0,0,0,0.15)', borderRadius: 4,
+              background: 'transparent',
+              color: '#1a1a1a', cursor: 'pointer', textAlign: 'center',
+              fontFamily: 'inherit', opacity: submitting ? 0.5 : 1,
+              transition: 'border-color 0.15s, background 0.15s',
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.borderColor = '#c2410c'; e.currentTarget.style.color = '#c2410c'; }}
+            onMouseOut={(e) => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.15)'; e.currentTarget.style.color = '#1a1a1a'; }}
+          >
+            {submitting ? '[ ... ]' : "[ pick up this week's notes ]"}
+          </button>
+
+          {error && (
+            <div style={{ fontSize: 11, color: '#DC2626' }}>{error}</div>
+          )}
         </div>
       </div>
-    </div>
+
+      <style>{`
+        @keyframes blink {
+          0%, 49% { opacity: 1; }
+          50%, 100% { opacity: 0; }
+        }
+        .term-cursor {
+          display: inline-block;
+          width: 0.55em;
+          height: 1em;
+          background: #c2410c;
+          vertical-align: -2px;
+          margin-left: 2px;
+          animation: blink 1.1s steps(1) infinite;
+        }
+      `}</style>
+    </main>
   );
 };
+
+export default LaunchPage;

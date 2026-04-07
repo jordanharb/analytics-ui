@@ -7,10 +7,19 @@ import { DateRangeFilter } from './DateRangeFilter';
 interface FilterPanelProps {
   className?: string;
   onClose?: () => void;
-  hideDateFilter?: boolean; // Hide date filter when dates are controlled elsewhere (e.g., email reports)
+  hideDateFilter?: boolean;
 }
 
-export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClose, hideDateFilter = false }) => {
+// fieldnotes palette (mirrors EventCard.tsx)
+// surface  #fdfaf2   page bg #f6f1e6   ink #1a1a1a   muted #6b6b6b
+// accent   #c2410c (burnt orange)      accent text #9a330a
+// neutral  #ede5d2
+
+export const FilterPanel: React.FC<FilterPanelProps> = ({
+  className = '',
+  onClose,
+  hideDateFilter = false,
+}) => {
   const {
     pendingFilters,
     filterOptions,
@@ -19,13 +28,12 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
     resetFilters,
     setFilterOptions,
     networkExpanded,
-    setNetworkExpanded
+    setNetworkExpanded,
   } = useFiltersStore();
-  
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load filter options on mount
   useEffect(() => {
     loadFilterOptions();
   }, []);
@@ -34,8 +42,6 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
     try {
       setLoading(true);
       const options = await analyticsClient.getFilterOptions();
-      console.log('Loaded filter options:', options);
-      console.log('actors_by_type:', options.actors_by_type);
       setFilterOptions(options);
       setError(null);
     } catch (err: any) {
@@ -46,71 +52,52 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
     }
   };
 
-  const handleApply = () => {
-    applyFilters();
-    // Don't close the panel on apply
-  };
-
-  const handleReset = () => {
-    resetFilters();
-    // Don't close the panel on reset
-  };
-
+  const handleApply = () => applyFilters();
+  const handleReset = () => resetFilters();
   const hasActiveFilters = filterHelpers.hasActiveFilters(pendingFilters);
 
-  // Process filter options with the new optimized structure
   const { dynamicSlugsByParent, actorsByType } = React.useMemo(() => {
     if (!filterOptions) return { dynamicSlugsByParent: {}, actorsByType: {} };
-    
+
     const slugsByParent: Record<string, Array<{ value: string; label: string; count: number }>> = {};
     const actorsByTypeMap: Record<string, Array<{ value: string; label: string }>> = {};
-    
-    // Process slugs_by_parent which now includes "Category" as a parent
+
     if (filterOptions.slugs_by_parent) {
       Object.entries(filterOptions.slugs_by_parent).forEach(([parent, slugs]) => {
-        // Sort by count_global descending, then by label
         const sortedSlugs = [...slugs].sort((a, b) => {
           const countDiff = (b.count_global || 0) - (a.count_global || 0);
           if (countDiff !== 0) return countDiff;
           return a.label.localeCompare(b.label);
         });
-        
-        slugsByParent[parent] = sortedSlugs.map(slug => ({
+
+        slugsByParent[parent] = sortedSlugs.map((slug) => ({
           value: slug.slug,
           label: slug.label,
-          count: slug.count_global || 0
+          count: slug.count_global || 0,
         }));
       });
     }
-    
-    // Process actors by type
+
     if (filterOptions.actors_by_type) {
       Object.entries(filterOptions.actors_by_type).forEach(([type, actors]) => {
-        // Sort actors alphabetically
-        const sortedActors = [...actors].sort((a, b) => 
-          a.name.localeCompare(b.name)
-        );
-        
-        actorsByTypeMap[type] = sortedActors.map(actor => ({
+        const sortedActors = [...actors].sort((a, b) => a.name.localeCompare(b.name));
+        actorsByTypeMap[type] = sortedActors.map((actor) => ({
           value: actor.id,
-          label: actor.name
+          label: actor.name,
         }));
       });
     }
-    
-    return {
-      dynamicSlugsByParent: slugsByParent,
-      actorsByType: actorsByTypeMap
-    };
+
+    return { dynamicSlugsByParent: slugsByParent, actorsByType: actorsByTypeMap };
   }, [filterOptions]);
 
   if (loading) {
     return (
-      <div className={`bg-white p-6 ${className}`}>
+      <div className={`bg-[#fdfaf2] p-6 ${className}`}>
         <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-gray-200 rounded"></div>
-          <div className="h-32 bg-gray-200 rounded"></div>
-          <div className="h-32 bg-gray-200 rounded"></div>
+          <div className="h-6 bg-[#ede5d2] rounded"></div>
+          <div className="h-32 bg-[#ede5d2] rounded"></div>
+          <div className="h-32 bg-[#ede5d2] rounded"></div>
         </div>
       </div>
     );
@@ -118,68 +105,79 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
 
   if (error) {
     return (
-      <div className={`bg-white p-6 ${className}`}>
-        <div className="text-red-600 text-sm">{error}</div>
-        <button onClick={loadFilterOptions} className="mt-2 text-sm text-blue-600 hover:text-blue-800">
-          Retry
+      <div className={`bg-[#fdfaf2] p-6 ${className}`}>
+        <div className="text-[#9a330a] text-sm">{error}</div>
+        <button
+          onClick={loadFilterOptions}
+          className="mt-2 text-sm text-[#c2410c] hover:text-[#9a330a] underline"
+        >
+          retry
         </button>
       </div>
     );
   }
 
   return (
-    <div className={`bg-white border-r border-gray-200 overflow-hidden flex flex-col ${className}`}>
+    <div
+      className={`bg-[#fdfaf2] border-r border-black/[0.1] overflow-hidden flex flex-col ${className}`}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between p-6 pb-4 border-b border-gray-200">
-        <h2 className="text-xl font-semibold text-gray-900">Filters</h2>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-black/[0.08]">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">filters</div>
+          <h2 className="text-[15px] font-medium text-[#1a1a1a] mt-0.5">narrow it down</h2>
+        </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-            title="Collapse filters"
+            className="text-[#9a9a9a] hover:text-[#1a1a1a] transition-colors"
+            title="collapse filters"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
             </svg>
           </button>
         )}
       </div>
-      
-      {/* Mobile Apply Button - Only visible on mobile devices */}
-      <div className="md:hidden flex p-4 border-b border-gray-200 bg-gray-50">
+
+      {/* Mobile Apply Button */}
+      <div className="md:hidden flex p-4 border-b border-black/[0.08] bg-[#f6f1e6]">
         <button
           onClick={handleApply}
-          className="btn-primary flex-1 font-semibold"
+          className="flex-1 font-medium text-sm text-[#fdfaf2] bg-[#c2410c] hover:bg-[#9a330a] transition-colors rounded-md py-2.5"
         >
-          Apply Filters
+          apply filters
         </button>
       </div>
-      
-      {/* Scrollable Content */}
-      <div className="flex-1 min-h-0 p-6 space-y-6 overflow-y-auto scrollbar-thin">
 
-        {/* Date Range - Hide when dates are controlled externally (e.g., email reports) */}
+      {/* Scrollable content */}
+      <div className="flex-1 min-h-0 px-5 py-5 space-y-5 overflow-y-auto scrollbar-thin">
         {!hideDateFilter && (
-          <DateRangeFilter
-            value={pendingFilters.period || pendingFilters.date_range}
-            onChange={(value) => {
-              if (typeof value === 'string') {
-                setFilter('period', value as any);
-                setFilter('date_range', undefined);
-              } else {
-                setFilter('date_range', value);
-                setFilter('period', undefined);
-              }
-            }}
-          />
+          <div className="filter-group">
+            <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+              when
+            </label>
+            <DateRangeFilter
+              value={pendingFilters.period || pendingFilters.date_range}
+              onChange={(value) => {
+                if (typeof value === 'string') {
+                  setFilter('period', value as any);
+                  setFilter('date_range', undefined);
+                } else {
+                  setFilter('date_range', value);
+                  setFilter('period', undefined);
+                }
+              }}
+            />
+          </div>
         )}
 
         {/* Confidence Score */}
         <div className="filter-group">
-          <label className="filter-title block mb-3">
-            Confidence Score
+          <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+            confidence
           </label>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-3">
             <input
               type="range"
               min="0"
@@ -187,153 +185,171 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
               step="0.1"
               value={pendingFilters.confidence || 0.5}
               onChange={(e) => setFilter('confidence', parseFloat(e.target.value))}
-              className="flex-1"
+              className="flex-1 accent-[#c2410c]"
             />
-            <span className="text-sm text-gray-600 font-medium w-12 text-center">
-              {((pendingFilters.confidence || 0.5) * 100).toFixed(0)}%
+            <span className="text-xs text-[#2a2a2a] font-medium w-12 text-right tabular-nums">
+              ≥ {((pendingFilters.confidence || 0.5) * 100).toFixed(0)}%
             </span>
           </div>
         </div>
 
         {/* States */}
-        <MultiSelect
-          label="States"
-          options={[
-            'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
-            'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-            'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-            'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-            'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
-          ].map(state => ({ value: state, label: state }))}
-          value={pendingFilters.states || []}
-          onChange={(states) => setFilter('states', states)}
-          placeholder="Select states..."
-        />
-
+        <div className="filter-group">
+          <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+            states
+          </label>
+          <MultiSelect
+            label=""
+            options={[
+              'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+              'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+              'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+              'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+              'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+            ].map((s) => ({ value: s, label: s }))}
+            value={pendingFilters.states || []}
+            onChange={(states) => setFilter('states', states)}
+            placeholder="select states…"
+          />
+        </div>
 
         {/* Actor Types */}
-        <MultiSelect
-          label="Actor Types"
-          options={[
-            { value: 'person', label: 'People' },
-            { value: 'organization', label: 'Organizations' },
-            { value: 'chapter', label: 'Chapters' }
-          ]}
-          value={pendingFilters.actor_types || []}
-          onChange={(types) => setFilter('actor_types', types as any)}
-          placeholder="Select actor types..."
-        />
+        <div className="filter-group">
+          <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+            actor types
+          </label>
+          <MultiSelect
+            label=""
+            options={[
+              { value: 'person', label: 'people' },
+              { value: 'organization', label: 'organizations' },
+              { value: 'chapter', label: 'chapters' },
+            ]}
+            value={pendingFilters.actor_types || []}
+            onChange={(types) => setFilter('actor_types', types as any)}
+            placeholder="select actor types…"
+          />
+        </div>
 
-        {/* All filter menus from slugs_by_parent (includes Category and dynamic parents) */}
+        {/* Slugs by parent */}
         {Object.entries(dynamicSlugsByParent).map(([parent, slugs]) => {
-          // Determine if this is a category or dynamic parent
           const isCategory = parent === 'Category';
-          
+          const friendlyLabel =
+            parent === 'Category' ? 'tags' : parent.replace(/([A-Z])/g, ' $1').trim().toLowerCase();
+
           return (
-            <MultiSelect
-              key={parent}
-              label={parent === 'Category' ? 'Tags' : parent.replace(/([A-Z])/g, ' $1').trim()}
-              options={slugs.map(s => ({
-                value: s.value,
-                label: s.count > 0 ? `${s.label} (${s.count.toLocaleString()})` : s.label
-              }))}
-              value={pendingFilters.tags?.filter(tag => {
-                if (isCategory) {
-                  // For Category, match tags that don't have colons or match this parent
-                  return !tag.includes(':') || slugs.some(s => s.value === tag);
-                } else {
-                  // For dynamic parents, match tags starting with parent:
-                  return tag.startsWith(parent + ':');
+            <div key={parent} className="filter-group">
+              <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+                {friendlyLabel}
+              </label>
+              <MultiSelect
+                label=""
+                options={slugs.map((s) => ({
+                  value: s.value,
+                  label: s.count > 0 ? `${s.label} (${s.count.toLocaleString()})` : s.label,
+                }))}
+                value={
+                  pendingFilters.tags?.filter((tag) => {
+                    if (isCategory) {
+                      return !tag.includes(':') || slugs.some((s) => s.value === tag);
+                    }
+                    return tag.startsWith(parent + ':');
+                  }) || []
                 }
-              }) || []}
-              onChange={(selectedTags) => {
-                if (isCategory) {
-                  // Keep all dynamic slug tags
-                  const dynamicTags = pendingFilters.tags?.filter(tag => 
-                    tag.includes(':') && !slugs.some(s => s.value === tag)
-                  ) || [];
-                  setFilter('tags', [...dynamicTags, ...selectedTags]);
-                } else {
-                  // Keep tags from other parents
-                  const otherTags = pendingFilters.tags?.filter(tag => 
-                    !tag.startsWith(parent + ':')
-                  ) || [];
-                  setFilter('tags', [...otherTags, ...selectedTags]);
-                }
-              }}
-              placeholder={`Select ${parent.toLowerCase()}...`}
-              searchable={slugs.length > 10}
-            />
+                onChange={(selectedTags) => {
+                  if (isCategory) {
+                    const dynamicTags =
+                      pendingFilters.tags?.filter(
+                        (tag) => tag.includes(':') && !slugs.some((s) => s.value === tag),
+                      ) || [];
+                    setFilter('tags', [...dynamicTags, ...selectedTags]);
+                  } else {
+                    const otherTags =
+                      pendingFilters.tags?.filter((tag) => !tag.startsWith(parent + ':')) || [];
+                    setFilter('tags', [...otherTags, ...selectedTags]);
+                  }
+                }}
+                placeholder={`select ${friendlyLabel}…`}
+                searchable={slugs.length > 10}
+              />
+            </div>
           );
         })}
 
-
-        {/* Actors - by type (new structure) */}
-        {actorsByType && Object.keys(actorsByType).length > 0 && 
+        {/* Actors by type */}
+        {actorsByType &&
+          Object.keys(actorsByType).length > 0 &&
           Object.entries(actorsByType).map(([type, actors]) => (
+            <div key={`actors-${type}`} className="filter-group">
+              <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+                {type}s
+              </label>
+              <MultiSelect
+                label=""
+                options={actors}
+                value={
+                  pendingFilters.actor_ids?.filter((id) => actors.some((a) => a.value === id)) || []
+                }
+                onChange={(selectedIds) => {
+                  const otherActorIds =
+                    pendingFilters.actor_ids?.filter((id) => !actors.some((a) => a.value === id)) ||
+                    [];
+                  setFilter('actor_ids', [...otherActorIds, ...selectedIds]);
+                }}
+                placeholder={`select ${type}s…`}
+                searchable
+              />
+            </div>
+          ))}
+
+        {/* Legacy actors */}
+        {!actorsByType && filterOptions?.actors && filterOptions.actors.length > 0 && (
+          <div className="filter-group">
+            <label className="block text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2">
+              specific actors
+            </label>
             <MultiSelect
-              key={`actors-${type}`}
-              label={`${type.charAt(0).toUpperCase() + type.slice(1)}s`}
-              options={actors}
-              value={pendingFilters.actor_ids?.filter(id => 
-                actors.some(a => a.value === id)
-              ) || []}
-              onChange={(selectedIds) => {
-                const otherActorIds = pendingFilters.actor_ids?.filter(id => 
-                  !actors.some(a => a.value === id)
-                ) || [];
-                setFilter('actor_ids', [...otherActorIds, ...selectedIds]);
-              }}
-              placeholder={`Select ${type}s...`}
+              label=""
+              options={filterOptions.actors.map((actor) => ({
+                value: actor.id,
+                label: `${actor.name} (${actor.count_global})`,
+              }))}
+              value={pendingFilters.actor_ids || []}
+              onChange={(ids) => setFilter('actor_ids', ids)}
+              placeholder="select actors…"
               searchable
             />
-          ))
-        }
-
-        {/* Actors - legacy structure */}
-        {!actorsByType && filterOptions?.actors && filterOptions.actors.length > 0 && (
-          <MultiSelect
-            label="Specific Actors"
-            options={filterOptions.actors.map(actor => ({
-              value: actor.id,
-              label: `${actor.name} (${actor.count_global})`
-            }))}
-            value={pendingFilters.actor_ids || []}
-            onChange={(ids) => setFilter('actor_ids', ids)}
-            placeholder="Select actors..."
-            searchable
-          />
+          </div>
         )}
 
-        {/* Network Search - Expand to include actor networks */}
-        {((pendingFilters.actor_ids && pendingFilters.actor_ids.length > 0) || 
+        {/* Network expansion */}
+        {((pendingFilters.actor_ids && pendingFilters.actor_ids.length > 0) ||
           (pendingFilters.actor_types && pendingFilters.actor_types.length > 0)) && (
-          <div className="filter-group" style={{ 
-            padding: '0.75rem', 
-            backgroundColor: '#E6F2FF', 
-            border: '1px solid #0066CC', 
-            borderRadius: '0.5rem' 
-          }}>
-            <label className="flex items-center cursor-pointer" style={{ gap: '0.5rem' }}>
+          <div
+            className="filter-group"
+            style={{
+              padding: '12px 14px',
+              backgroundColor: '#fdf2ed',
+              border: '0.5px solid rgba(194,65,12,0.25)',
+              borderRadius: 8,
+            }}
+          >
+            <label className="flex items-start cursor-pointer" style={{ gap: 10 }}>
               <input
                 type="checkbox"
-                style={{ 
-                  borderRadius: '0.25rem',
-                  borderColor: '#0066CC',
-                  marginRight: '0.5rem'
-                }}
                 checked={networkExpanded}
                 onChange={(e) => setNetworkExpanded(e.target.checked)}
+                style={{ marginTop: 2, accentColor: '#c2410c' }}
               />
               <div className="flex-1">
-                <span className="filter-title" style={{ color: '#0066CC' }}>
-                  <svg className="inline w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <span className="text-[12px] font-medium text-[#9a330a] flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                   </svg>
-                  Include Linked (+1)
+                  expand to linked actors
                 </span>
-                <div className="text-xs" style={{ color: '#4B5563', marginTop: '0.25rem' }}>
-                  Expand to include primary connections of selected actors
+                <div className="text-[11px] text-[#6b6b6b] mt-0.5 leading-relaxed">
+                  pulls in primary connections one hop out from the actors you've selected.
                 </div>
               </div>
             </label>
@@ -341,31 +357,37 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({ className = '', onClos
         )}
       </div>
 
-      {/* Action Buttons - Fixed at bottom (Hidden on mobile) */}
-      <div className="hidden md:flex p-6 pt-4 border-t border-gray-200" style={{ gap: '0.75rem' }}>
+      {/* Desktop action buttons */}
+      <div
+        className="hidden md:flex px-5 py-4 border-t border-black/[0.08] bg-[#f6f1e6]"
+        style={{ gap: 10 }}
+      >
         <button
           onClick={handleApply}
-          className="btn-primary flex-1"
+          className="flex-1 text-sm font-medium text-[#fdfaf2] bg-[#c2410c] hover:bg-[#9a330a] transition-colors rounded-md py-2"
         >
-          Apply Filters
+          apply
         </button>
         <button
           onClick={handleReset}
           disabled={!hasActiveFilters}
-          className="btn-secondary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 text-sm font-medium text-[#2a2a2a] bg-[#fdfaf2] border border-black/[0.12] hover:bg-[#ede5d2] transition-colors rounded-md py-2 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          Reset
+          reset
         </button>
       </div>
-      
-      {/* Mobile Action Buttons - At bottom but simplified */}
-      <div className="md:hidden flex p-4 border-t border-gray-200 bg-gray-50" style={{ gap: '0.5rem' }}>
+
+      {/* Mobile action buttons */}
+      <div
+        className="md:hidden flex p-4 border-t border-black/[0.08] bg-[#f6f1e6]"
+        style={{ gap: 8 }}
+      >
         <button
           onClick={handleReset}
           disabled={!hasActiveFilters}
-          className="btn-secondary flex-1 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          className="flex-1 text-sm font-medium text-[#2a2a2a] bg-[#fdfaf2] border border-black/[0.12] hover:bg-[#ede5d2] transition-colors rounded-md py-2 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          Reset
+          reset
         </button>
       </div>
     </div>

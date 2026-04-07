@@ -38,3 +38,5 @@ exports/
 # Python cache
 __pycache__/
 *.pyc
+test-results/
+tests/

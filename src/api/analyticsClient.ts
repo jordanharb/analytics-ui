@@ -196,15 +196,31 @@ class AnalyticsClient {
     });
     
     // Use list_directory_events which now supports vector search
-    return this.rpc<T.EventsListResponse>(
+    const rawResponse = await this.rpc<{ items: any[]; next_cursor?: T.Cursor }>(
       'list_directory_events',
-      { 
-        filters: convertedFilters, 
-        page_size: pageSize, 
-        cursor 
+      {
+        filters: convertedFilters,
+        page_size: pageSize,
+        cursor
       },
       'directory-events'
     );
+
+    // Transform response to match expected EventsListResponse format
+    return {
+      events: (rawResponse.items || []).map((item: any) => ({
+        id: item.id,
+        name: item.event_name ?? item.name,
+        date: item.event_date ?? item.date,
+        city: item.city,
+        state: item.state,
+        tags: item.tags || [],
+        confidence_score: item.confidence ?? item.confidence_score,
+      })),
+      total_count: rawResponse.items?.length || 0,
+      has_more: !!rawResponse.next_cursor,
+      next_cursor: rawResponse.next_cursor,
+    };
   }
   
   async getEventDetails(eventId: string): Promise<T.EventDetails> {

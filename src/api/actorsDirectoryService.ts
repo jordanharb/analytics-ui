@@ -22,9 +22,9 @@ export async function fetchActors(
   offset: number,
 ): Promise<FetchActorsResult> {
   const base = supabaseClient
-    .from('v2_actors')
+    .from('v2_actors_with_counts')
     .select(
-      `id,name,actor_type,city,state,region,about,created_at,updated_at`,
+      `id,name,actor_type,city,state,region,about,created_at,updated_at,event_count`,
       { count: 'exact' },
     )
     .order('name', { ascending: true })
@@ -143,7 +143,7 @@ export async function fetchActorInboundRelationships(actorId: string): Promise<A
 export async function fetchActorEvents(actorId: string, limit: number = 200): Promise<ActorEvent[]> {
   const { data, error } = await supabaseClient
     .from('v2_event_actor_links')
-    .select('event_id,actor_id,actor_handle,platform,v2_events!v2_event_actor_links_event_id_fkey(*)')
+    .select('event_id,actor_id,actor_handle,platform,v2_events(id,event_name,event_date,city,state,category_tags,confidence_score)')
     .eq('actor_id', actorId)
     .limit(limit);
 

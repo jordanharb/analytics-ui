@@ -15,16 +15,16 @@ export const DEFAULT_ZOOM = 4;
 
 // Cluster configuration - Size and color scale proportionally with event count
 export const CLUSTER_PAINT: CirclePaint = {
-  // Blue gradient that darkens with more events
+  // Burnt orange gradient
   'circle-color': [
     'interpolate',
     ['linear'],
     ['get', 'point_count'],
-    1,    '#DBEAFE',  // Very light blue for minimal clusters
-    50,   '#93C5FD',  // Light blue
-    200,  '#3B82F6',  // Medium blue
-    500,  '#1D4ED8',  // Dark blue
-    1000, '#1E40AF'   // Very dark blue for massive clusters
+    1,    '#fde8db',
+    50,   '#f0a080',
+    200,  '#e8623b',
+    500,  '#c2410c',
+    1000, '#9a330a'
   ],
   // Exponential size scaling with min/max limits
   'circle-radius': [
@@ -46,16 +46,16 @@ export const CLUSTER_PAINT: CirclePaint = {
 
 // Unclustered point configuration - Matches cluster styling for visual consistency
 export const UNCLUSTERED_PAINT: CirclePaint = {
-  // Blue gradient that darkens with more events
+  // Burnt orange gradient
   'circle-color': [
     'interpolate',
     ['linear'],
     ['get', 'count'],
-    1,   '#DBEAFE',  // Very light blue for single events
-    5,   '#93C5FD',  // Light blue
-    20,  '#3B82F6',  // Medium blue
-    50,  '#1D4ED8',  // Dark blue
-    100, '#1E40AF'   // Very dark blue for many events
+    1,   '#fde8db',
+    5,   '#f0a080',
+    20,  '#e8623b',
+    50,  '#c2410c',
+    100, '#9a330a'
   ],
   'circle-radius': [
     'interpolate',

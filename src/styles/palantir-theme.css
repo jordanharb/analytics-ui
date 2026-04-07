@@ -5,20 +5,20 @@
 
 /* Root Variables */
 :root {
-  /* Surface Colors */
-  --snow-50: #FFFFFF;
-  --snow-100: #FAFBFC;
-  --snow-150: #F5F7FA;
-  --snow-200: #EDF0F5;
-  
-  /* Azure Blue Primary */
-  --azure-primary: #0066CC;
-  --azure-light: #3384E0;
-  --azure-lighter: #66A3E8;
-  --azure-lightest: #E6F2FF;
-  --azure-dark: #004499;
-  --azure-glow: rgba(0, 102, 204, 0.2);
-  
+  /* Surface Colors — fieldnotes cream palette */
+  --snow-50: #fdfaf2;
+  --snow-100: #f6f1e6;
+  --snow-150: #ede5d2;
+  --snow-200: #dccdb0;
+
+  /* Accent — burnt orange */
+  --azure-primary: #c2410c;
+  --azure-light: #e8623b;
+  --azure-lighter: #f0a080;
+  --azure-lightest: #fdf2ed;
+  --azure-dark: #9a330a;
+  --azure-glow: rgba(194, 65, 12, 0.15);
+
   /* Semantic Colors */
   --success-500: #059669;
   --success-100: #D1FAE5;
@@ -28,17 +28,17 @@
   --danger-100: #FEE2E2;
   --info-500: #0891B2;
   --info-100: #E0F2FE;
-  
-  /* Text Colors */
-  --text-primary: #111827;
-  --text-secondary: #4B5563;
-  --text-muted: #9CA3AF;
-  --text-inverse: #FFFFFF;
-  
+
+  /* Text Colors — fieldnotes ink palette */
+  --text-primary: #1a1a1a;
+  --text-secondary: #2a2a2a;
+  --text-muted: #6b6b6b;
+  --text-inverse: #fdfaf2;
+
   /* Borders */
-  --border-default: #E5E7EB;
-  --border-light: #F3F4F6;
-  --border-strong: #D1D5DB;
+  --border-default: rgba(0, 0, 0, 0.1);
+  --border-light: rgba(0, 0, 0, 0.06);
+  --border-strong: rgba(0, 0, 0, 0.15);
   
   /* Layout */
   --sidebar-width: 320px;
@@ -55,6 +55,10 @@ body {
   color: var(--text-primary);
   background: var(--snow-100);
 }
+
+/* Override white backgrounds to cream */
+.bg-white { background-color: var(--snow-50) !important; }
+.bg-slate-50, .bg-gray-50 { background-color: var(--snow-100) !important; }
 
 /* Focus Ring */
 *:focus {

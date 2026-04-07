@@ -49,12 +49,17 @@ import {
 } from '../../api/actorsDirectoryService';
 import type { Actor, ActorMember, ActorRelationship, ActorUsername } from '../../types/actorsDirectory';
 
+// fieldnotes palette
+// page #f6f1e6   surface #fdfaf2   ink #1a1a1a   muted #6b6b6b   faint #9a9a9a
+// accent #c2410c (burnt orange)    accent text #9a330a   coral fill #fdf2ed
+// neutral fill #ede5d2
+
 export const EntityView: React.FC = () => {
   const { entityType, entityId } = useParams<{ entityType: string; entityId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { filters } = useFiltersStore();
-  
+
   const [details, setDetails] = useState<EntityDetails | null>(null);
   const [stats, setStats] = useState<EntityStats | null>(null);
   const [events, setEvents] = useState<EventSummary[]>([]);
@@ -68,18 +73,30 @@ export const EntityView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'network' | 'activity'>('overview');
   const [exporting, setExporting] = useState(false);
   const [timeseries, setTimeseries] = useState<TimeseriesResponse | null>(null);
-  const [timeseriesPeriod, setTimeseriesPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
+  // Default to "all time" so the page lands on the most useful view for actors
+  // with deep history but no recent activity (the previous default of 'month' caused
+  // the empty-stat / empty-chart problem on actors like TPUSA Students).
+  const [timeseriesPeriod, setTimeseriesPeriod] = useState<'week' | 'month' | 'year' | 'all'>('all');
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
+  const [networkActorIds, setNetworkActorIds] = useState<string[]>([]);
+  const [networkMode, setNetworkMode] = useState(true); // default: include network
+  const [networkEvents, setNetworkEvents] = useState<EventSummary[]>([]);
+  const [networkEventsLoading, setNetworkEventsLoading] = useState(false);
+  const [statsScope, setStatsScope] = useState<'direct' | 'network'>('network');
+  const [networkStats, setNetworkStats] = useState<EntityStats | null>(null);
+  const [networkStatsLoading, setNetworkStatsLoading] = useState(false);
 
-  // Calculate valid state count, handling duplicates and invalid entries
-  // Must be called before any conditional returns to follow React hooks rules
+  // Active stats: network stats when scope=network and available, otherwise direct
+  const activeStats = useMemo(() => {
+    if (statsScope === 'network' && networkStats) return networkStats;
+    return stats;
+  }, [statsScope, networkStats, stats]);
+
   const validStateStats = useMemo(() => {
-    if (!stats?.by_state) return { validCount: 0, statesByCode: new Map() };
-    return getUniqueValidStates(stats.by_state);
-  }, [stats]);
-  
-  // Get ordered metadata fields for display
-  // Must be called before any conditional returns to follow React hooks rules
+    if (!activeStats?.by_state) return { validCount: 0, statesByCode: new Map() };
+    return getUniqueValidStates(activeStats.by_state);
+  }, [activeStats]);
+
   const metadataFields = useMemo(() => {
     if (!details?.metadata) return [];
     return getOrderedMetadataFields(details.metadata);
@@ -89,30 +106,96 @@ export const EntityView: React.FC = () => {
     return metadataFields.filter(field => !['About', 'Type', 'City', 'State'].includes(field.label));
   }, [metadataFields]);
 
+  // Helpers to pull common metadata fields cleanly
+  const aboutText = useMemo(() => metadataFields.find(f => f.label === 'About')?.value as string | undefined, [metadataFields]);
+  const actorTypeLabel = useMemo(() => {
+    const f = metadataFields.find(f => ['actor_type', 'Type'].includes(f.label));
+    return (f?.value as string | undefined)?.toLowerCase();
+  }, [metadataFields]);
+  const cityLabel = useMemo(() => metadataFields.find(f => f.label === 'City')?.value as string | undefined, [metadataFields]);
+  const stateLabel = useMemo(() => metadataFields.find(f => f.label === 'State')?.value as string | undefined, [metadataFields]);
+  const regionLabel = useMemo(() => metadataFields.find(f => f.label === 'Region')?.value as string | undefined, [metadataFields]);
+  const categoryLabel = useMemo(() => {
+    const f = metadataFields.find(f => f.label === 'Category' || f.label === 'category');
+    return (f?.value as string | undefined)?.toLowerCase();
+  }, [metadataFields]);
+
   // Load entity details
   useEffect(() => {
     if (!entityType || !entityId) return;
-    
+
     const loadDetails = async () => {
       setLoading(true);
       setError(null);
-      
+
       try {
-        // For entity details, just get base entity info (no filtering)
-        // For stats and timeseries, only apply the selected time period
-        const entityOnlyFilters = { 
-          period: timeseriesPeriod 
-        };
-        
+        const entityOnlyFilters = { period: timeseriesPeriod };
+
         const [detailsData, statsData, timeseriesData] = await Promise.all([
           analyticsClient.getEntityDetails(entityType as any, entityId),
           analyticsClient.getEntityStats(entityType as any, entityId, entityOnlyFilters),
-          analyticsClient.getEntityTimeseries(entityType as any, entityId, entityOnlyFilters, timeseriesPeriod)
+          analyticsClient.getEntityTimeseries(entityType as any, entityId, entityOnlyFilters, timeseriesPeriod),
         ]);
-        
+
         setDetails(detailsData);
         setStats(statsData);
         setTimeseries(timeseriesData);
+        setLoading(false);
+
+        if (entityType === 'actor') {
+          void (async () => {
+            try {
+              // Query both directions to catch chapters pointing TO this org and orgs this actor belongs to
+              const [outbound, inbound] = await Promise.all([
+                fetchActorRelationships(entityId),
+                fetchActorInboundRelationships(entityId),
+              ]);
+              const linked = [...new Set([
+                ...outbound.map(r => r.to_actor_id),
+                ...inbound.map(r => r.from_actor_id),
+              ].filter((id): id is string => !!id && id !== entityId))];
+              setNetworkActorIds(linked);
+
+              if (linked.length === 0) return;
+
+              setNetworkStatsLoading(true);
+              try {
+                const networkResults = await Promise.all(
+                  linked.slice(0, 20).map(id =>
+                    analyticsClient.getEntityStats('actor', id, { period: timeseriesPeriod }),
+                  ),
+                );
+                const mergeGeo = (arrays: any[][]): any[] => {
+                  const map = new Map<string, any>();
+                  arrays.flat().forEach(item => {
+                    const key = `${item.city ?? ''}|${item.state ?? ''}`;
+                    if (map.has(key)) map.get(key).count += item.count;
+                    else map.set(key, { ...item });
+                  });
+                  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+                };
+                const mergeState = (arrays: any[][]): any[] => {
+                  const map = new Map<string, any>();
+                  arrays.flat().forEach(item => {
+                    const key = item.state ?? item.code ?? '';
+                    if (map.has(key)) map.get(key).count += item.count;
+                    else map.set(key, { ...item });
+                  });
+                  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+                };
+                setNetworkStats({
+                  total_count: networkResults.reduce((s: number, r: any) => s + (r.total_count ?? 0), statsData.total_count),
+                  by_city: mergeGeo([statsData.by_city ?? [], ...networkResults.map((r: any) => r.by_city ?? [])]),
+                  by_state: mergeState([statsData.by_state ?? [], ...networkResults.map((r: any) => r.by_state ?? [])]),
+                } as any);
+              } finally {
+                setNetworkStatsLoading(false);
+              }
+            } catch {
+              // non-fatal — page already showing direct stats
+            }
+          })();
+        }
       } catch (err: any) {
         setError(err.message || 'Failed to load entity details');
         console.error('Error loading entity:', err);
@@ -120,42 +203,34 @@ export const EntityView: React.FC = () => {
         setLoading(false);
       }
     };
-    
+
     loadDetails();
-  }, [entityType, entityId, timeseriesPeriod]); // Only reload when entity or timeframe change
+  }, [entityType, entityId, timeseriesPeriod]);
 
   // Load events
   const loadEvents = useCallback(async (isInitial = false) => {
     if (!entityType || !entityId || eventsLoading) return;
-    
+
     setEventsLoading(true);
-    
+
     try {
-      // Use global filters but with all-time period for entity events
-      const entityFilters = { 
-        ...filters,
-        period: 'all' as const 
-      };
-      
+      const entityFilters = { ...filters, period: 'all' as const };
+
       const response = await analyticsClient.getEntityEvents(
         entityType as any,
         entityId,
         entityFilters,
         50,
-        isInitial ? undefined : cursor
+        isInitial ? undefined : cursor,
       );
-      
-      // Dedupe and sort events chronologically (newest first)
+
       const newEvents = isInitial ? response.events : [...events, ...response.events];
-      const uniqueEvents = Array.from(
-        new Map(newEvents.map(e => [e.id, e])).values()
-      ).sort((a, b) => {
-        // Sort by date descending (newest first)
+      const uniqueEvents = Array.from(new Map(newEvents.map(e => [e.id, e])).values()).sort((a, b) => {
         const dateA = new Date(a.date).getTime();
         const dateB = new Date(b.date).getTime();
         return dateB - dateA;
       });
-      
+
       setEvents(uniqueEvents);
       setTotalEvents(response.total_count);
       setCursor(response.next_cursor);
@@ -165,21 +240,43 @@ export const EntityView: React.FC = () => {
     } finally {
       setEventsLoading(false);
     }
-  }, [entityType, entityId, cursor, events, eventsLoading, filters]); // Include filters in dependencies
+  }, [entityType, entityId, cursor, events, eventsLoading, filters]);
 
-  // Initial events load and reload when filters change
   useEffect(() => {
     loadEvents(true);
-  }, [entityType, entityId, filters]); // Reload when filters change
+  }, [entityType, entityId, filters]);
+
+  const loadNetworkEvents = useCallback(async () => {
+    if (networkActorIds.length === 0 || networkEventsLoading) return;
+    setNetworkEventsLoading(true);
+    try {
+      const entityFilters = { ...filters, period: 'all' as const };
+      const results = await Promise.all(
+        networkActorIds.slice(0, 20).map(id => analyticsClient.getEntityEvents('actor', id, entityFilters, 50)),
+      );
+      const all = results.flatMap(r => r.events);
+      const deduped = Array.from(new Map(all.map(e => [e.id, e])).values()).sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+      );
+      setNetworkEvents(deduped);
+    } catch (err) {
+      console.error('Error loading network events:', err);
+    } finally {
+      setNetworkEventsLoading(false);
+    }
+  }, [networkActorIds, filters, networkEventsLoading]);
+
+  useEffect(() => {
+    if (networkMode && networkEvents.length === 0) {
+      loadNetworkEvents();
+    }
+  }, [networkMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleToggleExpand = (eventId: string) => {
     setExpandedEvents(prev => {
       const next = new Set(prev);
-      if (next.has(eventId)) {
-        next.delete(eventId);
-      } else {
-        next.add(eventId);
-      }
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
       return next;
     });
   };
@@ -189,119 +286,115 @@ export const EntityView: React.FC = () => {
   };
 
   // Load timeseries data for different periods
-  const loadTimeseries = useCallback(async (period: 'week' | 'month' | 'year' | 'all') => {
-    if (!entityType || !entityId || timeseriesLoading) return;
-    
-    setTimeseriesLoading(true);
-    setTimeseriesPeriod(period);
-    
-    // Determine granularity based on period
-    let granularity: 'day' | 'week' | 'month' | 'year' | 'auto';
-    switch(period) {
-      case 'week':
-        granularity = 'day';  // 7 days → daily points
-        break;
-      case 'month':
-        granularity = 'day';  // 30 days → daily points
-        break;
-      case 'year':
-        granularity = 'week';  // 1 year → weekly points
-        break;
-      case 'all':
-        granularity = 'week';  // all time → bi-weekly (weekly points)
-        break;
-      default:
-        granularity = 'auto';
-    }
-    
-    try {
-      // Use independent filters for timeseries based on selected period
-      const timeseriesFilters = { period };
-      
-      const data = await analyticsClient.getEntityTimeseries(
-        entityType as any,
-        entityId,
-        timeseriesFilters,
-        period,
-        granularity
-      );
-      console.log('Loaded timeseries data:', data);
-      setTimeseries(data);
-    } catch (err: any) {
-      console.error('Error loading timeseries:', err);
-      // Set empty data on error to show "No activity data"
-      setTimeseries(null);
-    } finally {
-      setTimeseriesLoading(false);
-    }
-  }, [entityType, entityId, filters, timeseriesLoading]);
+  const loadTimeseries = useCallback(
+    async (period: 'week' | 'month' | 'year' | 'all') => {
+      if (!entityType || !entityId || timeseriesLoading) return;
 
-  const renderNetworkSection = (links: ActorLink[], title: string, direction: 'in' | 'out') => {
-    if (!links || links.length === 0) return null;
-    
-    return (
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-3 flex items-center">
-          {title}
-          <span className="ml-2 text-sm text-gray-500 font-normal">({links.length})</span>
-        </h3>
-        <div className="space-y-2">
-          {links.map((link, idx) => (
-            <div
-              key={`${direction}-${link.other_actor_id}-${idx}`}
-              className="card p-4 hover:shadow-md transition-shadow cursor-pointer"
-              onClick={() => navigateToActor(link.other_actor_id)}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center">
-                    <h4 className="font-medium text-gray-900">{link.other_actor_name}</h4>
-                    {link.is_primary && (
-                      <span className="ml-2 px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">
-                        Primary
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-1 text-sm text-gray-600">
-                    <span className="capitalize">{link.other_actor_type}</span>
-                    {(link.relationship || link.role) && (
-                      <>
-                        <span className="mx-2">•</span>
-                        <span>{link.relationship || link.role}</span>
-                      </>
-                    )}
-                    {link.role_category && (
-                      <>
-                        <span className="mx-2">•</span>
-                        <span>{link.role_category}</span>
-                      </>
-                    )}
-                  </div>
-                  {(link.start_date || link.end_date) && (
-                    <div className="mt-1 text-xs text-gray-500">
-                      {link.start_date && `From ${link.start_date}`}
-                      {link.start_date && link.end_date && ' - '}
-                      {link.end_date && `To ${link.end_date}`}
-                    </div>
-                  )}
-                </div>
-                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
+      setTimeseriesLoading(true);
+      setTimeseriesPeriod(period);
 
+      let granularity: 'day' | 'week' | 'month' | 'year' | 'auto';
+      switch (period) {
+        case 'week':
+          granularity = 'day';
+          break;
+        case 'month':
+          granularity = 'day';
+          break;
+        case 'year':
+          granularity = 'week';
+          break;
+        case 'all':
+          granularity = 'week';
+          break;
+        default:
+          granularity = 'auto';
+      }
+
+      try {
+        const timeseriesFilters = { period };
+        const data = await analyticsClient.getEntityTimeseries(entityType as any, entityId, timeseriesFilters, period, granularity);
+        setTimeseries(data);
+      } catch (err: any) {
+        console.error('Error loading timeseries:', err);
+        setTimeseries(null);
+      } finally {
+        setTimeseriesLoading(false);
+      }
+    },
+    [entityType, entityId, filters, timeseriesLoading],
+  );
+
+  // ---- header sentence ----
+  // Builds: "college & HS activist network; start-a-chapter hub. 2,017 events on file across 47 states."
+  const headerSentence = useMemo(() => {
+    const parts: string[] = [];
+    if (aboutText && aboutText.trim()) {
+      const cleaned = aboutText.trim().replace(/\s+/g, ' ');
+      parts.push(cleaned.endsWith('.') ? cleaned : cleaned + '.');
+    }
+
+    const total = details?.global_count;
+    const stateCount = validStateStats.validCount;
+    const totalLine: string[] = [];
+    if (total !== undefined && total !== null) {
+      totalLine.push(`${total.toLocaleString()} events on file`);
+    }
+    if (stateCount > 0) {
+      totalLine.push(`across ${stateCount} ${stateCount === 1 ? 'state' : 'states'}`);
+    }
+    if (totalLine.length > 0) parts.push(totalLine.join(' ') + '.');
+
+    return parts.join(' ');
+  }, [aboutText, details?.global_count, validStateStats.validCount]);
+
+  const isActor = details?.type === 'actor';
+  const hasNetwork =
+    isActor &&
+    details &&
+    ((details.links_primary && details.links_primary.length > 0) ||
+      (details.links_out && details.links_out.length > 0) ||
+      (details.links_in && details.links_in.length > 0));
+
+  // Closest connections preview — pull from links_primary if present,
+  // otherwise fall back to links_out, then links_in
+  const closestConnections = useMemo(() => {
+    if (!details) return [] as ActorLink[];
+    const seen = new Set<string>();
+    const out: ActorLink[] = [];
+    const sources: ActorLink[][] = [
+      details.links_primary ?? [],
+      details.links_out ?? [],
+      details.links_in ?? [],
+    ];
+    for (const src of sources) {
+      for (const link of src) {
+        if (!link.other_actor_id || seen.has(link.other_actor_id)) continue;
+        seen.add(link.other_actor_id);
+        out.push(link);
+        if (out.length >= 5) return out;
+      }
+    }
+    return out;
+  }, [details]);
+
+  const networkCount = useMemo(() => {
+    if (networkActorIds.length > 0) return networkActorIds.length;
+    if (!details) return 0;
+    const seen = new Set<string>();
+    [...(details.links_primary ?? []), ...(details.links_out ?? []), ...(details.links_in ?? [])].forEach(l => {
+      if (l.other_actor_id) seen.add(l.other_actor_id);
+    });
+    return seen.size;
+  }, [networkActorIds.length, details]);
+
+  // ---- early returns ----
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="h-full flex items-center justify-center bg-[#f6f1e6]">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <p className="mt-2 text-sm text-gray-600">Loading entity details...</p>
+          <div className="inline-block animate-spin rounded-full h-6 w-6 border-2 border-[#c2410c] border-t-transparent"></div>
+          <p className="mt-2 text-sm text-[#6b6b6b]">loading…</p>
         </div>
       </div>
     );
@@ -309,572 +402,687 @@ export const EntityView: React.FC = () => {
 
   if (error || !details) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="h-full flex items-center justify-center bg-[#f6f1e6]">
         <div className="text-center">
-          <p className="text-red-600">{error || 'Entity not found'}</p>
+          <p className="text-[#9a330a] text-sm">{error || 'Entity not found'}</p>
           <button
             onClick={() => {
-              // If we have a 'from' location in state, go there, otherwise go back
               const fromLocation = (location.state as any)?.from;
-              if (fromLocation) {
-                navigate(fromLocation);
-              } else {
-                navigate(-1);
-              }
+              if (fromLocation) navigate(fromLocation);
+              else navigate(-1);
             }}
-            className="mt-4 text-blue-600 hover:underline"
+            className="mt-4 text-[#c2410c] hover:text-[#9a330a] text-sm underline"
           >
-            Go back
+            go back
           </button>
         </div>
       </div>
     );
   }
 
-  const isActor = details.type === 'actor';
-  const hasNetwork = isActor && (
-    (details.links_primary && details.links_primary.length > 0) ||
-    (details.links_out && details.links_out.length > 0) ||
-    (details.links_in && details.links_in.length > 0)
-  );
-
   return (
-    <div className="h-full overflow-y-auto -webkit-overflow-scrolling-touch">
-      {/* Header */}
-      <div className="bg-white border-b">
-        <div className="px-4 md:px-6 py-3 md:py-4">
-            <div className="flex items-start justify-between">
-              <div className="flex-1 min-w-0">
-                <h1 className="text-xl md:text-2xl font-bold text-gray-900 pr-2">{details.name}</h1>
-                {/* Header metadata line */}
-                {metadataFields.length > 0 && (
-                  <div className="mt-2 flex flex-col sm:flex-row sm:items-center text-xs md:text-sm text-gray-600 space-y-1 sm:space-y-0 sm:space-x-3">
-                    {/* Show key header fields */}
-                    <div className="flex items-center space-x-3">
-                      {metadataFields
-                        .filter(field => ['actor_type', 'Type'].includes(field.label))
-                        .map(field => (
-                          <span key={field.key} className="capitalize">{field.value}</span>
-                        ))}
-                      {metadataFields
-                        .filter(field => ['City', 'State'].includes(field.label))
-                        .length > 0 && (
-                        <>
-                          <span className="hidden sm:inline">•</span>
-                          <span>
-                            {metadataFields.find(f => f.label === 'City')?.value}
-                            {metadataFields.find(f => f.label === 'City') && 
-                             metadataFields.find(f => f.label === 'State') && ', '}
-                            {metadataFields.find(f => f.label === 'State')?.value}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {details.global_count !== undefined && (
-                      <div className="flex items-center">
-                        <span className="hidden sm:inline">•</span>
-                        <span>{details.global_count.toLocaleString()} total events</span>
-                      </div>
-                    )}
-                  </div>
+    <div className="h-full overflow-y-auto bg-[#f6f1e6]" style={{ WebkitOverflowScrolling: 'touch' }}>
+      {/* ----- HEADER ----- */}
+      <div className="bg-[#fdfaf2] border-b border-black/[0.08]">
+        <div className="px-4 md:px-8 pt-5 md:pt-6 pb-3 max-w-[1300px] mx-auto">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">
+                <a onClick={() => navigate('/actors')} className="hover:text-[#c2410c] cursor-pointer">directory</a>
+                <span className="mx-1.5">·</span>
+                <span>{details.type}</span>
+              </div>
+
+              <div className="mt-1 flex items-baseline gap-2.5 flex-wrap">
+                <h1
+                  className="text-[20px] md:text-[22px] font-medium text-[#1a1a1a] leading-tight tracking-tight"
+                  style={{ fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", serif' }}
+                >
+                  {details.name}
+                </h1>
+                {actorTypeLabel && (
+                  <span
+                    className="text-[10px]"
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 11,
+                      background: '#fdf2ed',
+                      color: '#9a330a',
+                      border: '0.5px solid rgba(194,65,12,0.2)',
+                    }}
+                  >
+                    {actorTypeLabel}
+                  </span>
                 )}
-                {/* About section if present */}
-                {metadataFields.find(f => f.label === 'About') && (
-                  <p className="mt-3 text-gray-700">
-                    {metadataFields.find(f => f.label === 'About')?.value}
-                  </p>
+                {categoryLabel && (
+                  <span
+                    className="text-[10px]"
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 11,
+                      background: '#ede5d2',
+                      color: '#6b6b6b',
+                    }}
+                  >
+                    {categoryLabel}
+                  </span>
+                )}
+                {regionLabel && (
+                  <span
+                    className="text-[10px]"
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 11,
+                      background: '#ede5d2',
+                      color: '#6b6b6b',
+                    }}
+                  >
+                    {regionLabel.toLowerCase()}
+                  </span>
+                )}
+                {(cityLabel || stateLabel) && (
+                  <span
+                    className="text-[10px]"
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 11,
+                      background: '#ede5d2',
+                      color: '#6b6b6b',
+                    }}
+                  >
+                    {[cityLabel, stateLabel].filter(Boolean).join(', ')}
+                  </span>
                 )}
               </div>
-              <button
-                onClick={() => {
-                  // If we have a 'from' location in state, go there, otherwise go back
-                  const fromLocation = (location.state as any)?.from;
-                  if (fromLocation) {
-                    navigate(fromLocation);
-                  } else {
-                    navigate(-1);
-                  }
-                }}
-                className="ml-2 md:ml-4 text-gray-400 hover:text-gray-600 flex-shrink-0 p-2 hover:bg-gray-100 rounded-lg touch-manipulation"
-                style={{ minHeight: '44px', minWidth: '44px' }}
-              >
-                <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+
+              {headerSentence && (
+                <p className="mt-2 text-[12px] md:text-[13px] text-[#6b6b6b] leading-relaxed max-w-2xl">
+                  {headerSentence}
+                </p>
+              )}
+
+              {/* Username pills */}
+              {details.usernames && details.usernames.length > 0 && (
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {details.usernames
+                    .filter(u => u.handle && u.handle.trim())
+                    .map((username, idx) => (
+                      <a
+                        key={idx}
+                        href={username.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-[11px] text-[#1a1a1a] hover:bg-[#ede5d2] transition-colors"
+                        style={{
+                          padding: '3px 9px',
+                          borderRadius: 13,
+                          background: '#fdfaf2',
+                          border: '0.5px solid rgba(0,0,0,0.12)',
+                        }}
+                      >
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 14,
+                            height: 14,
+                            borderRadius: '50%',
+                            background: username.is_primary ? '#c2410c' : '#ede5d2',
+                            color: username.is_primary ? '#fdfaf2' : '#6b6b6b',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: 8,
+                            fontWeight: 500,
+                          }}
+                        >
+                          {username.platform?.[0]?.toLowerCase() ?? '·'}
+                        </span>
+                        <span className="text-[#6b6b6b]">{username.platform.toLowerCase()}</span>
+                        <span>{username.handle.startsWith('@') ? username.handle : `@${username.handle}`}</span>
+                      </a>
+                    ))}
+                </div>
+              )}
             </div>
 
-            {/* Usernames for actors */}
-            {details.usernames && details.usernames.length > 0 && (
-              <div className="mt-3 md:mt-4 flex flex-wrap gap-1.5 md:gap-2">
-                {details.usernames.filter(u => u.handle && u.handle.trim()).map((username, idx) => (
-                  <a
-                    key={idx}
-                    href={username.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center px-2 md:px-3 py-1.5 md:py-1 rounded-full text-xs md:text-sm bg-gray-100 hover:bg-gray-200 transition-colors touch-manipulation"
-                    style={{ minHeight: '32px' }}
-                  >
-                    <span className="font-medium">{username.platform}</span>
-                    <span className="mx-1">:</span>
-                    <span className="truncate max-w-32 md:max-w-none">{username.handle.startsWith('@') ? username.handle : `@${username.handle}`}</span>
-                    {username.is_primary && (
-                      <span className="ml-1 text-xs text-amber-600">•</span>
-                    )}
-                  </a>
-                ))}
-              </div>
-            )}
+            <button
+              onClick={() => {
+                const fromLocation = (location.state as any)?.from;
+                if (fromLocation) navigate(fromLocation);
+                else navigate(-1);
+              }}
+              className="flex-shrink-0 p-1.5 hover:bg-[#ede5d2] rounded-md text-[#9a9a9a] hover:text-[#1a1a1a] touch-manipulation"
+              style={{ minHeight: 32, minWidth: 32 }}
+              title="close"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
 
-          {/* Tabs */}
-          <div className="px-4 md:px-6">
-            <div className="flex space-x-4 md:space-x-6 border-b overflow-x-auto">
+          {/* Tabs row + scope toggle */}
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <div className="flex gap-5 border-b border-black/[0.08] flex-1" style={{ marginBottom: '-1px' }}>
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`pb-3 px-1 md:px-2 border-b-2 transition-colors whitespace-nowrap touch-manipulation text-sm md:text-base ${
-                  activeTab === 'overview'
-                    ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                className={`pb-2 text-[13px] border-b-[1.5px] transition-colors whitespace-nowrap ${
+                  activeTab === 'overview' ? 'border-[#c2410c] text-[#1a1a1a]' : 'border-transparent text-[#6b6b6b] hover:text-[#1a1a1a]'
                 }`}
-                style={{ minHeight: '44px' }}
+                style={{ minHeight: 36, marginBottom: '-1px' }}
               >
-                Overview
+                overview
               </button>
               {hasNetwork && (
                 <button
                   onClick={() => setActiveTab('network')}
-                  className={`pb-3 px-1 md:px-2 border-b-2 transition-colors whitespace-nowrap touch-manipulation text-sm md:text-base ${
-                    activeTab === 'network'
-                      ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  className={`pb-2 text-[13px] border-b-[1.5px] transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                    activeTab === 'network' ? 'border-[#c2410c] text-[#1a1a1a]' : 'border-transparent text-[#6b6b6b] hover:text-[#1a1a1a]'
                   }`}
-                  style={{ minHeight: '44px' }}
+                  style={{ minHeight: 36, marginBottom: '-1px' }}
                 >
-                  Network
+                  network
+                  {networkCount > 0 && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-[#ede5d2] text-[#6b6b6b] rounded-full tabular-nums">
+                      {networkCount.toLocaleString()}
+                    </span>
+                  )}
                 </button>
               )}
               <button
                 onClick={() => setActiveTab('activity')}
-                className={`pb-3 px-1 md:px-2 border-b-2 transition-colors flex items-center whitespace-nowrap touch-manipulation text-sm md:text-base ${
-                  activeTab === 'activity'
-                    ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                className={`pb-2 text-[13px] border-b-[1.5px] transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                  activeTab === 'activity' ? 'border-[#c2410c] text-[#1a1a1a]' : 'border-transparent text-[#6b6b6b] hover:text-[#1a1a1a]'
                 }`}
-                style={{ minHeight: '44px' }}
+                style={{ minHeight: 36, marginBottom: '-1px' }}
               >
-                Activity
+                activity
                 {totalEvents > 0 && (
-                  <span className="ml-2 px-1.5 md:px-2 py-0.5 text-xs bg-gray-100 rounded-full">
+                  <span className="text-[10px] px-1.5 py-0.5 bg-[#ede5d2] text-[#6b6b6b] rounded-full tabular-nums">
                     {totalEvents.toLocaleString()}
                   </span>
                 )}
               </button>
             </div>
-          </div>
 
-        </div>
-
-        {/* Tab Content */}
-        <div className="p-4 md:p-6">
-          {activeTab === 'overview' && (
-            <div className="space-y-6">
-              {isActor && entityId && <ActorProfileSection actorId={entityId} />}
-
-              {stats && (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                    {/* Top Row - Key Stats - Mobile: 2x2, Desktop: 1x4 */}
-                    <div className="md:col-span-3">
-                      <div className="card p-3 md:p-4 h-full">
-                        <div className="text-xs md:text-sm text-gray-500">Total Events</div>
-                        <div className="text-xl md:text-3xl font-bold mt-1">{stats.total_count.toLocaleString()}</div>
-                        <div className="text-xs text-gray-400 mt-1 md:mt-2">
-                          {timeseriesPeriod === 'week'
-                            ? 'Past week'
-                            : timeseriesPeriod === 'month'
-                            ? 'Past month'
-                            : timeseriesPeriod === 'year'
-                            ? 'Past year'
-                            : 'All time'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-3">
-                      <div className="card p-3 md:p-4 h-full">
-                        <div className="text-xs md:text-sm text-gray-500">Geographic Reach</div>
-                        <div className="flex items-baseline mt-1">
-                          <div className="text-xl md:text-3xl font-bold">{validStateStats.validCount}</div>
-                          <span className="ml-1 md:ml-2 text-sm md:text-lg text-gray-600">states</span>
-                        </div>
-                        <div className="text-xs text-gray-400 mt-1 md:mt-2">{stats.by_city.length} cities</div>
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-3">
-                      <div className="card p-3 md:p-4 h-full">
-                        <div className="text-xs md:text-sm text-gray-500">Average Activity</div>
-                        <div className="text-xl md:text-3xl font-bold mt-1">
-                          {timeseries ? timeseries.summary.average.toFixed(0) : '-'}
-                        </div>
-                        <div className="text-xs text-gray-400 mt-1 md:mt-2">Events per {timeseries?.granularity || 'period'}</div>
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-3">
-                      <div className="card p-3 md:p-4 h-full">
-                        <div className="text-xs md:text-sm text-gray-500">Activity Trend</div>
-                        <div
-                          className={`flex items-center mt-1 ${
-                            timeseries?.summary.trend === 'increasing'
-                              ? 'text-green-600'
-                              : timeseries?.summary.trend === 'decreasing'
-                              ? 'text-red-600'
-                              : 'text-gray-600'
-                          }`}
-                        >
-                          {timeseries?.summary.trend === 'increasing' && (
-                            <svg className="w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                            </svg>
-                          )}
-                          {timeseries?.summary.trend === 'decreasing' && (
-                            <svg className="w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
-                            </svg>
-                          )}
-                          {timeseries?.summary.trend === 'stable' && (
-                            <svg className="w-4 h-4 md:w-6 md:h-6 mr-1 md:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
-                            </svg>
-                          )}
-                          <span className="text-xl md:text-2xl font-bold">
-                            {timeseries
-                              ? timeseries.summary.trend.charAt(0).toUpperCase() + timeseries.summary.trend.slice(1)
-                              : '-'}
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-400 mt-1 md:mt-2">
-                          {timeseries &&
-                            `Peak: ${timeseries.summary.peak_count} on ${new Date(
-                              timeseries.summary.peak_date,
-                            ).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Activity Chart - Full Width */}
-                    <div className="md:col-span-12">
-                      <div className="card p-4 md:p-6">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
-                          <h3 className="text-base md:text-lg font-semibold">Activity Timeline</h3>
-                          <div className="flex overflow-x-auto space-x-1">
-                            <button
-                              onClick={() => loadTimeseries('week')}
-                              disabled={timeseriesLoading}
-                              className={`px-2 md:px-3 py-1.5 text-xs md:text-sm rounded-l transition-colors whitespace-nowrap touch-manipulation ${
-                                timeseriesPeriod === 'week'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                              style={{ minHeight: '32px' }}
-                            >
-                              7 Days
-                            </button>
-                            <button
-                              onClick={() => loadTimeseries('month')}
-                              disabled={timeseriesLoading}
-                              className={`px-2 md:px-3 py-1.5 text-xs md:text-sm transition-colors whitespace-nowrap touch-manipulation ${
-                                timeseriesPeriod === 'month'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                              style={{ minHeight: '32px' }}
-                            >
-                              30 Days
-                            </button>
-                            <button
-                              onClick={() => loadTimeseries('year')}
-                              disabled={timeseriesLoading}
-                              className={`px-2 md:px-3 py-1.5 text-xs md:text-sm transition-colors whitespace-nowrap touch-manipulation ${
-                                timeseriesPeriod === 'year'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                              style={{ minHeight: '32px' }}
-                            >
-                              1 Year
-                            </button>
-                            <button
-                              onClick={() => loadTimeseries('all' as any)}
-                              disabled={timeseriesLoading}
-                              className={`px-2 md:px-3 py-1.5 text-xs md:text-sm transition-colors border-l whitespace-nowrap touch-manipulation ${
-                                timeseriesPeriod === 'all'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                              style={{ minHeight: '32px' }}
-                            >
-                              All Time
-                            </button>
-                            <button
-                              onClick={() => {/* TODO: Add custom date range modal */}}
-                              disabled={timeseriesLoading}
-                              className={`px-2 md:px-3 py-1.5 text-xs md:text-sm rounded-r transition-colors whitespace-nowrap touch-manipulation ${
-                                false
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                              style={{ minHeight: '32px' }}
-                            >
-                              Custom
-                            </button>
-                          </div>
-                        </div>
-
-                        {timeseriesLoading ? (
-                          <div className="h-48 md:h-64 flex items-center justify-center">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                          </div>
-                        ) : timeseries ? (
-                          <ActivityChart data={timeseries} height={window.innerWidth < 768 ? 180 : 240} />
-                        ) : (
-                          <div className="h-48 md:h-64 flex items-center justify-center text-gray-500">
-                            No activity data available
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Geographic Distribution */}
-                    <div className="md:col-span-6">
-                      <div className="card p-4 md:p-6 h-full">
-                        <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Top States</h3>
-                        {validStateStats.validCount > 0 ? (
-                          <div className="space-y-2">
-                            {Array.from(validStateStats.statesByCode.entries())
-                              .sort((a, b) => b[1] - a[1])
-                              .slice(0, 8)
-                              .map(([stateCode, count], idx) => {
-                                const percentage = (count / stats.total_count) * 100;
-                                return (
-                                  <div key={stateCode}>
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span className="font-medium">
-                                        {idx + 1}. {stateCode}
-                                      </span>
-                                      <span className="text-gray-600">{count.toLocaleString()}</span>
-                                    </div>
-                                    <div className="mt-1 w-full bg-gray-200 rounded-full h-1.5">
-                                      <div
-                                        className="bg-blue-500 h-1.5 rounded-full"
-                                        style={{ width: `${Math.min(percentage * 2, 100)}%` }}
-                                      />
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                          </div>
-                        ) : (
-                          <div className="text-gray-500 text-center py-8">No state data available</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-6">
-                      <div className="card p-4 md:p-6 h-full">
-                        <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Top Cities</h3>
-                        {stats.by_city.length > 0 ? (
-                          <div className="space-y-2">
-                            {stats.by_city.slice(0, 8).map((city, idx) => {
-                              const percentage = (city.count / stats.total_count) * 100;
-                              return (
-                                <div key={`${city.city}-${city.state}`}>
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="font-medium truncate mr-2">
-                                      {idx + 1}. {city.city}, {city.state}
-                                    </span>
-                                    <span className="text-gray-600 flex-shrink-0">{city.count.toLocaleString()}</span>
-                                  </div>
-                                  <div className="mt-1 w-full bg-gray-200 rounded-full h-1.5">
-                                    <div
-                                      className="bg-green-500 h-1.5 rounded-full"
-                                      style={{ width: `${Math.min(percentage * 4, 100)}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="text-gray-500 text-center py-8">No city data available</div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Metadata Details Section */}
-                    {extraMetadataFields.length > 0 && (
-                      <div className="md:col-span-12 mt-4">
-                        <div className="card p-4 md:p-6">
-                          <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Details</h3>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-                            {extraMetadataFields.map(field => (
-                              <div key={field.key} className="border-l-2 border-gray-200 pl-3">
-                                <div className="text-xs text-gray-500 uppercase tracking-wider">
-                                  {field.label}
-                                </div>
-                                <div className="text-sm font-medium text-gray-900 mt-1">
-                                  {field.value}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {details?.social_profiles && details.social_profiles.length > 0 && (
-                      <div className="md:col-span-12 mt-4">
-                        <div className="card p-4 md:p-6">
-                          <h3 className="text-base md:text-lg font-semibold mb-3 md:mb-4">Social Media Profiles</h3>
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
-                            {details.social_profiles.map((profile, index) => (
-                              <SocialProfile
-                                key={`${profile.platform}-${profile.username}-${index}`}
-                                platform={profile.platform}
-                                username={profile.username}
-                                url={profile.url}
-                                bio={profile.bio}
-                                followers={profile.followers}
-                                verified={profile.verified}
-                                profile_image={profile.profile_image}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'network' && isActor && (
-            <NetworkTab
-              actorId={entityId!}
-              detailsRefresh={async () => {
-                try {
-                  const [detailsData] = await Promise.all([
-                    analyticsClient.getEntityDetails(entityType as any, entityId!)
-                  ]);
-                  setDetails(detailsData);
-                } catch (e) {
-                  console.warn('Failed to refresh entity details after network edit');
-                }
-              }}
-              renderReadOnly={() => (
-                <>
-                  {renderNetworkSection(details.links_out || [], 'Outgoing Connections', 'out')}
-                  {renderNetworkSection(details.links_in || [], 'Incoming Connections', 'in')}
-                  {!hasNetwork && (
-                    <div className="text-center py-8 text-gray-500">No network relationships found</div>
-                  )}
-                </>
-              )}
-            />
-          )}
-
-          {activeTab === 'activity' && (
-            <div>
-              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between space-y-2 sm:space-y-0">
-                <h3 className="text-base md:text-lg font-semibold">
-                  Activity ({totalEvents.toLocaleString()})
-                </h3>
+            {/* Scope toggle — only when network actors exist */}
+            {networkActorIds.length > 0 && (
+              <div className="inline-flex bg-[#ede5d2] p-[3px] flex-shrink-0" style={{ borderRadius: 6 }}>
                 <button
-                  onClick={async () => {
-                    setExporting(true);
-                    try {
-                      const data: any = await analyticsClient.exportEvents({
-                        filters,
-                        scope: 'entity',
-                        scope_params: { entity_type: entityType, entity_id: entityId }
-                      });
-
-                      // Normalize rows, expand post_urls into separate columns, and add header
-                      let header: string[] = [];
-                      let dataRows: any[][] = [];
-                      if (Array.isArray(data) && data.length > 0) {
-                        if (typeof data[0] === 'object' && !Array.isArray(data[0])) {
-                          const objRows = data as any[];
-                          const maxPosts = objRows.reduce((m, r) => Math.max(m, Array.isArray(r.post_urls) ? r.post_urls.length : 0), 0);
-                          header = ['event_id','event_date','event_name','city','state','tags','actor_names', ...Array.from({length: maxPosts}, (_, i) => `post_url_${i+1}`)];
-                          dataRows = objRows.map(r => {
-                            const base = [
-                              r.event_id ?? '',
-                              r.event_date ?? '',
-                              r.event_name ?? '',
-                              r.city ?? '',
-                              r.state ?? '',
-                              Array.isArray(r.tags) ? r.tags.join('|') : '',
-                              Array.isArray(r.actor_names) ? r.actor_names.join('|') : ''
-                            ];
-                            const posts: string[] = Array.isArray(r.post_urls) ? r.post_urls : [];
-                            const postCols = Array.from({length: maxPosts}, (_, i) => posts[i] ?? '');
-                            return [...base, ...postCols];
-                          });
-                        } else if (Array.isArray(data[0])) {
-                          header = ['event_id','event_date','event_name','city','state','tags','actor_names','post_urls'];
-                          dataRows = data as any[][];
-                        }
-                      } else {
-                        header = ['event_id','event_date','event_name','city','state','tags','actor_names'];
-                      }
-
-                      const escapeCell = (cell: any) => {
-                        const s = String(cell ?? '');
-                        return s.includes(',') || s.includes('"') || s.includes('\n')
-                          ? '"' + s.replace(/"/g, '""') + '"'
-                          : s;
-                      };
-                      const csvLines = [header, ...dataRows].map((row) => {
-                        if (Array.isArray(row)) return row.map(escapeCell).join(',');
-                        if (row && typeof row === 'object') return Object.values(row).map(escapeCell).join(',');
-                        return escapeCell(row);
-                      });
-                      const csv = csvLines.join('\n');
-                      
-                      // Download
-                      const blob = new Blob([csv], { type: 'text/csv' });
-                      const url = window.URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `${details.name.replace(/[^a-z0-9]/gi, '_')}_events.csv`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      setTimeout(() => window.URL.revokeObjectURL(url), 0);
-                    } catch (err) {
-                      console.error('Export failed:', err);
-                    } finally {
-                      setExporting(false);
-                    }
+                  onClick={() => setStatsScope('direct')}
+                  className="text-[11px] px-2.5 py-1 transition-colors focus:outline-none"
+                  style={{
+                    background: statsScope === 'direct' ? '#fdfaf2' : 'transparent',
+                    color: statsScope === 'direct' ? '#1a1a1a' : '#6b6b6b',
+                    fontWeight: statsScope === 'direct' ? 500 : 400,
+                    borderRadius: 4,
                   }}
-                  disabled={exporting}
-                  className="btn btn-outline btn-sm touch-manipulation text-xs md:text-sm"
-                  style={{ minHeight: '36px' }}
                 >
-                  {exporting ? 'Exporting...' : 'Export CSV'}
+                  direct
+                </button>
+                <button
+                  onClick={() => setStatsScope('network')}
+                  className="text-[11px] px-2.5 py-1 transition-colors focus:outline-none"
+                  style={{
+                    background: statsScope === 'network' ? '#fdfaf2' : 'transparent',
+                    color: statsScope === 'network' ? '#1a1a1a' : '#6b6b6b',
+                    fontWeight: statsScope === 'network' ? 500 : 400,
+                    borderRadius: 4,
+                  }}
+                >
+                  {networkStatsLoading ? 'loading…' : `+ network (${networkActorIds.length})`}
                 </button>
               </div>
-              
-              {events.length === 0 && !eventsLoading ? (
-                <div className="text-center py-8 text-gray-500">No events found</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ----- TAB CONTENT ----- */}
+      <div className="px-4 md:px-8 py-5 md:py-6 max-w-[1300px] mx-auto">
+        {activeTab === 'overview' && activeStats && (
+          <div className="space-y-4">
+            {/* ---- Stat strip (single card, hairline dividers) ---- */}
+            <div
+              className="bg-[#fdfaf2] border border-black/[0.08] overflow-hidden"
+              style={{ borderRadius: 8 }}
+            >
+              <div className="grid grid-cols-2 md:grid-cols-4">
+                <StatCell
+                  label="total events"
+                  value={activeStats.total_count.toLocaleString()}
+                  hint={
+                    timeseriesPeriod === 'week'
+                      ? 'past week'
+                      : timeseriesPeriod === 'month'
+                      ? 'past month'
+                      : timeseriesPeriod === 'year'
+                      ? 'past year'
+                      : 'all time'
+                  }
+                  borderRight
+                  borderBottomMobile
+                />
+                <StatCell
+                  label="states reached"
+                  value={String(validStateStats.validCount)}
+                  inlineSecondary={`${(activeStats.by_city ?? []).length} cities`}
+                  hint="geographic reach"
+                  borderRight
+                  borderBottomMobile
+                />
+                <StatCell
+                  label="cadence"
+                  value={timeseries ? Math.round(timeseries.summary.average).toLocaleString() : '—'}
+                  inlineSecondary={timeseries ? `/ ${timeseries.granularity || 'period'}` : undefined}
+                  hint="avg over selected window"
+                  borderRight
+                />
+                <StatCell
+                  label="trend"
+                  trendValue={timeseries?.summary.trend}
+                  hint={
+                    timeseries
+                      ? `peak: ${timeseries.summary.peak_count} on ${new Date(
+                          timeseries.summary.peak_date,
+                        ).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toLowerCase()}`
+                      : undefined
+                  }
+                />
+              </div>
+            </div>
+
+            {/* ---- Activity chart ---- */}
+            <div className="bg-[#fdfaf2] border border-black/[0.08]" style={{ borderRadius: 8 }}>
+              <div className="px-4 md:px-5 pt-4 pb-3 flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">activity timeline</div>
+                <div className="inline-flex bg-[#ede5d2] p-[3px]" style={{ borderRadius: 6 }}>
+                  {(['week', 'month', 'year', 'all'] as const).map(p => (
+                    <button
+                      key={p}
+                      onClick={() => loadTimeseries(p)}
+                      disabled={timeseriesLoading}
+                      className="text-[11px] px-2.5 py-1 transition-colors focus:outline-none"
+                      style={{
+                        background: timeseriesPeriod === p ? '#fdfaf2' : 'transparent',
+                        color: timeseriesPeriod === p ? '#1a1a1a' : '#6b6b6b',
+                        fontWeight: timeseriesPeriod === p ? 500 : 400,
+                        borderRadius: 4,
+                      }}
+                    >
+                      {p === 'week' ? '7d' : p === 'month' ? '30d' : p === 'year' ? '1y' : 'all time'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="px-4 md:px-5 pb-4">
+                {timeseriesLoading ? (
+                  <div className="h-48 md:h-56 flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-[#c2410c] border-t-transparent"></div>
+                  </div>
+                ) : timeseries ? (
+                  <ActivityChart data={timeseries} height={typeof window !== 'undefined' && window.innerWidth < 768 ? 180 : 220} />
+                ) : (
+                  <div className="h-48 md:h-56 flex items-center justify-center text-[#9a9a9a] text-sm">
+                    no activity data available
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ---- 3-column row: top states · top cities · closest connections ---- */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Top states */}
+              <div className="bg-[#fdfaf2] border border-black/[0.08] p-4" style={{ borderRadius: 8 }}>
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-3">top states</div>
+                {validStateStats.validCount > 0 ? (
+                  <div className="space-y-2">
+                    {Array.from(validStateStats.statesByCode.entries())
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 6)
+                      .map(([stateCode, count], idx) => {
+                        const max = Math.max(...Array.from(validStateStats.statesByCode.values()));
+                        const pct = (count / (max || 1)) * 100;
+                        return (
+                          <div key={stateCode}>
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-[#2a2a2a]">
+                                {idx + 1}. {stateCode}
+                              </span>
+                              <span className="text-[#6b6b6b] tabular-nums">{count.toLocaleString()}</span>
+                            </div>
+                            <div className="mt-1 w-full h-[3px] rounded-full" style={{ background: '#ede5d2' }}>
+                              <div className="h-[3px] rounded-full bg-[#c2410c]" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <div className="text-[#9a9a9a] text-center py-6 text-xs">no state data</div>
+                )}
+              </div>
+
+              {/* Top cities */}
+              <div className="bg-[#fdfaf2] border border-black/[0.08] p-4" style={{ borderRadius: 8 }}>
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-3">top cities</div>
+                {(activeStats.by_city ?? []).length > 0 ? (
+                  <div className="space-y-2">
+                    {(() => {
+                      const cities = (activeStats.by_city ?? []).slice(0, 6);
+                      const max = Math.max(...cities.map((c: any) => c.count || 0), 1);
+                      return cities.map((city: any, idx: number) => {
+                        const pct = (city.count / max) * 100;
+                        return (
+                          <div key={`${city.city}-${city.state}`}>
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-[#2a2a2a] truncate mr-2">
+                                {idx + 1}. {(city.city || '—').toLowerCase()}, {city.state}
+                              </span>
+                              <span className="text-[#6b6b6b] flex-shrink-0 tabular-nums">{city.count.toLocaleString()}</span>
+                            </div>
+                            <div className="mt-1 w-full h-[3px] rounded-full" style={{ background: '#ede5d2' }}>
+                              <div className="h-[3px] rounded-full bg-[#c2410c]" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  <div className="text-[#9a9a9a] text-center py-6 text-xs">no city data</div>
+                )}
+              </div>
+
+              {/* Closest connections */}
+              <div className="bg-[#fdfaf2] border border-black/[0.08] p-4" style={{ borderRadius: 8 }}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">closest connections</div>
+                  {hasNetwork && networkCount > closestConnections.length && (
+                    <button
+                      onClick={() => setActiveTab('network')}
+                      className="text-[10px] text-[#c2410c] hover:text-[#9a330a]"
+                    >
+                      view all {networkCount} →
+                    </button>
+                  )}
+                </div>
+                {closestConnections.length > 0 ? (
+                  <div className="space-y-2">
+                    {closestConnections.map(link => {
+                      const initials = (link.other_actor_name ?? '?')
+                        .split(/\s+/)
+                        .map(p => p[0])
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .join('')
+                        .toUpperCase();
+                      return (
+                        <button
+                          key={link.other_actor_id}
+                          onClick={() => navigateToActor(link.other_actor_id)}
+                          className="w-full text-left flex items-center gap-2 hover:bg-[#f6f1e6] -mx-1 px-1 py-1 rounded transition-colors"
+                        >
+                          <span
+                            aria-hidden
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: '50%',
+                              background: link.is_primary ? '#c2410c' : '#ede5d2',
+                              color: link.is_primary ? '#fdfaf2' : '#6b6b6b',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 9,
+                              fontWeight: 500,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {initials}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[11px] text-[#1a1a1a] truncate">{link.other_actor_name}</div>
+                            <div className="text-[10px] text-[#9a9a9a] truncate">
+                              {link.other_actor_type?.toLowerCase() ?? '—'}
+                              {link.relationship && ` · ${link.relationship.toLowerCase()}`}
+                              {!link.relationship && link.role && ` · ${link.role.toLowerCase()}`}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-[#9a9a9a] text-center py-6 text-xs">no connections on file</div>
+                )}
+              </div>
+            </div>
+
+            {/* ---- Recent activity preview ---- */}
+            <div className="bg-[#fdfaf2] border border-black/[0.08] p-4 md:p-5" style={{ borderRadius: 8 }}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">recent activity</div>
+                {totalEvents > events.slice(0, 5).length && (
+                  <button
+                    onClick={() => setActiveTab('activity')}
+                    className="text-[10px] text-[#c2410c] hover:text-[#9a330a]"
+                  >
+                    view all {totalEvents.toLocaleString()} →
+                  </button>
+                )}
+              </div>
+              {eventsLoading && events.length === 0 ? (
+                <div className="py-6 text-center text-xs text-[#6b6b6b]">
+                  <div className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-[#c2410c] border-t-transparent"></div>
+                </div>
+              ) : events.length === 0 ? (
+                <div className="text-[#9a9a9a] text-center py-6 text-xs">no events on file</div>
               ) : (
-                <div className="space-y-2 md:space-y-3">
-                  {events.map(event => (
+                <div className="space-y-2">
+                  {events.slice(0, 5).map(ev => (
+                    <RecentEventRow key={ev.id} event={ev} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ---- Details (extra metadata) ---- */}
+            {extraMetadataFields.length > 0 && (
+              <div className="bg-[#fdfaf2] border border-black/[0.08] p-4 md:p-5" style={{ borderRadius: 8 }}>
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-3">details</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
+                  {extraMetadataFields.map(field => (
+                    <div key={field.key} className="border-l-2 border-black/10 pl-3">
+                      <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">{field.label.toLowerCase()}</div>
+                      <div className="text-[12px] text-[#1a1a1a] mt-0.5">{field.value as any}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ---- Social profiles (kept) ---- */}
+            {details?.social_profiles && details.social_profiles.length > 0 && (
+              <div className="bg-[#fdfaf2] border border-black/[0.08] p-4 md:p-5" style={{ borderRadius: 8 }}>
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-3">social media profiles</div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
+                  {details.social_profiles.map((profile, index) => (
+                    <SocialProfile
+                      key={`${profile.platform}-${profile.username}-${index}`}
+                      platform={profile.platform}
+                      username={profile.username}
+                      url={profile.url}
+                      bio={profile.bio}
+                      followers={profile.followers}
+                      verified={profile.verified}
+                      profile_image={profile.profile_image}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'network' && isActor && (
+          <NetworkTab
+            actorId={entityId!}
+            detailsRefresh={async () => {
+              try {
+                const [detailsData] = await Promise.all([analyticsClient.getEntityDetails(entityType as any, entityId!)]);
+                setDetails(detailsData);
+              } catch (e) {
+                console.warn('Failed to refresh entity details after network edit');
+              }
+            }}
+            renderReadOnly={() => (
+              <>
+                {renderNetworkSection(details.links_out || [], 'outgoing connections', 'out', navigateToActor)}
+                {renderNetworkSection(details.links_in || [], 'incoming connections', 'in', navigateToActor)}
+                {!hasNetwork && (
+                  <div className="text-center py-8 text-[#9a9a9a] text-sm">no network relationships found</div>
+                )}
+              </>
+            )}
+          />
+        )}
+
+        {activeTab === 'activity' && (
+          <div>
+            <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b]">
+                  activity · {(networkMode ? networkEvents.length : totalEvents).toLocaleString()} events
+                </div>
+                {networkActorIds.length > 0 && (
+                  <div className="inline-flex bg-[#ede5d2] p-[3px]" style={{ borderRadius: 6 }}>
+                    <button
+                      onClick={() => setNetworkMode(false)}
+                      className="text-[11px] px-2.5 py-1 transition-colors focus:outline-none"
+                      style={{
+                        background: !networkMode ? '#fdfaf2' : 'transparent',
+                        color: !networkMode ? '#1a1a1a' : '#6b6b6b',
+                        fontWeight: !networkMode ? 500 : 400,
+                        borderRadius: 4,
+                      }}
+                    >
+                      direct
+                    </button>
+                    <button
+                      onClick={() => setNetworkMode(true)}
+                      className="text-[11px] px-2.5 py-1 transition-colors focus:outline-none"
+                      style={{
+                        background: networkMode ? '#fdfaf2' : 'transparent',
+                        color: networkMode ? '#1a1a1a' : '#6b6b6b',
+                        fontWeight: networkMode ? 500 : 400,
+                        borderRadius: 4,
+                      }}
+                    >
+                      + network ({networkActorIds.length})
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  setExporting(true);
+                  try {
+                    const data: any = await analyticsClient.exportEvents({
+                      filters,
+                      scope: 'entity',
+                      scope_params: { entity_type: entityType, entity_id: entityId },
+                    });
+
+                    let header: string[] = [];
+                    let dataRows: any[][] = [];
+                    if (Array.isArray(data) && data.length > 0) {
+                      if (typeof data[0] === 'object' && !Array.isArray(data[0])) {
+                        const objRows = data as any[];
+                        const maxPosts = objRows.reduce(
+                          (m, r) => Math.max(m, Array.isArray(r.post_urls) ? r.post_urls.length : 0),
+                          0,
+                        );
+                        header = [
+                          'event_id',
+                          'event_date',
+                          'event_name',
+                          'city',
+                          'state',
+                          'tags',
+                          'actor_names',
+                          ...Array.from({ length: maxPosts }, (_, i) => `post_url_${i + 1}`),
+                        ];
+                        dataRows = objRows.map(r => {
+                          const base = [
+                            r.event_id ?? '',
+                            r.event_date ?? '',
+                            r.event_name ?? '',
+                            r.city ?? '',
+                            r.state ?? '',
+                            Array.isArray(r.tags) ? r.tags.join('|') : '',
+                            Array.isArray(r.actor_names) ? r.actor_names.join('|') : '',
+                          ];
+                          const posts: string[] = Array.isArray(r.post_urls) ? r.post_urls : [];
+                          const postCols = Array.from({ length: maxPosts }, (_, i) => posts[i] ?? '');
+                          return [...base, ...postCols];
+                        });
+                      } else if (Array.isArray(data[0])) {
+                        header = ['event_id', 'event_date', 'event_name', 'city', 'state', 'tags', 'actor_names', 'post_urls'];
+                        dataRows = data as any[][];
+                      }
+                    } else {
+                      header = ['event_id', 'event_date', 'event_name', 'city', 'state', 'tags', 'actor_names'];
+                    }
+
+                    const escapeCell = (cell: any) => {
+                      const s = String(cell ?? '');
+                      return s.includes(',') || s.includes('"') || s.includes('\n')
+                        ? '"' + s.replace(/"/g, '""') + '"'
+                        : s;
+                    };
+                    const csvLines = [header, ...dataRows].map(row => {
+                      if (Array.isArray(row)) return row.map(escapeCell).join(',');
+                      if (row && typeof row === 'object') return Object.values(row).map(escapeCell).join(',');
+                      return escapeCell(row);
+                    });
+                    const csv = csvLines.join('\n');
+
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${details.name.replace(/[^a-z0-9]/gi, '_')}_events.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => window.URL.revokeObjectURL(url), 0);
+                  } catch (err) {
+                    console.error('Export failed:', err);
+                  } finally {
+                    setExporting(false);
+                  }
+                }}
+                disabled={exporting}
+                className="px-2.5 py-1.5 text-[11px] font-medium text-[#2a2a2a] bg-[#fdfaf2] border border-black/[0.12] hover:bg-[#ede5d2] transition-colors flex items-center gap-1 disabled:opacity-50"
+                style={{ minHeight: 30, borderRadius: 6 }}
+              >
+                <span>{exporting ? 'exporting…' : 'csv'}</span>
+                {!exporting && <span aria-hidden>↓</span>}
+              </button>
+            </div>
+
+            {networkMode ? (
+              networkEventsLoading ? (
+                <div className="flex items-center justify-center gap-3 py-10 text-sm text-[#6b6b6b]">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#c2410c] border-t-transparent" />
+                  loading network events…
+                </div>
+              ) : networkEvents.length === 0 ? (
+                <div className="text-center py-8 text-[#9a9a9a] text-sm">no network events found</div>
+              ) : (
+                <div className="space-y-2 md:space-y-2.5">
+                  {networkEvents.map(event => (
                     <EventCard
                       key={event.id}
                       event={event}
@@ -882,29 +1090,209 @@ export const EntityView: React.FC = () => {
                       onToggleExpand={() => handleToggleExpand(event.id)}
                     />
                   ))}
-                  
-                  {hasMore && (
-                    <div className="text-center pt-4">
-                      <button
-                        onClick={() => loadEvents()}
-                        disabled={eventsLoading}
-                        className="btn btn-outline touch-manipulation text-sm md:text-base"
-                        style={{ minHeight: '44px' }}
-                      >
-                        {eventsLoading ? 'Loading...' : 'Load More'}
-                      </button>
-                    </div>
-                  )}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+              )
+            ) : events.length === 0 && !eventsLoading ? (
+              <div className="text-center py-8 text-[#9a9a9a] text-sm">no events found</div>
+            ) : (
+              <div className="space-y-2 md:space-y-2.5">
+                {events.map(event => (
+                  <EventCard
+                    key={event.id}
+                    event={event}
+                    isExpanded={expandedEvents.has(event.id)}
+                    onToggleExpand={() => handleToggleExpand(event.id)}
+                  />
+                ))}
+
+                {hasMore && (
+                  <div className="text-center pt-4">
+                    <button
+                      onClick={() => loadEvents()}
+                      disabled={eventsLoading}
+                      className="text-xs font-medium text-[#c2410c] hover:text-[#9a330a]"
+                    >
+                      {eventsLoading ? 'loading…' : 'load more events'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+    </div>
   );
 };
 
-const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
+// ---- helper subcomponents ----
+
+const StatCell: React.FC<{
+  label: string;
+  value?: string;
+  inlineSecondary?: string;
+  hint?: string;
+  trendValue?: 'increasing' | 'decreasing' | 'stable' | string | undefined;
+  borderRight?: boolean;
+  borderBottomMobile?: boolean;
+}> = ({ label, value, inlineSecondary, hint, trendValue, borderRight, borderBottomMobile }) => {
+  return (
+    <div
+      className={`px-4 py-3 ${borderRight ? 'md:border-r border-black/[0.08]' : ''} ${
+        borderBottomMobile ? 'border-b md:border-b-0 border-black/[0.08]' : ''
+      }`}
+    >
+      <div className="text-[9px] uppercase tracking-[0.4px] text-[#6b6b6b]">{label}</div>
+      {trendValue !== undefined ? (
+        <div
+          className="mt-1 flex items-center gap-1"
+          style={{
+            color: trendValue === 'increasing' ? '#c2410c' : trendValue === 'decreasing' ? '#9a9a9a' : '#6b6b6b',
+          }}
+        >
+          {trendValue === 'increasing' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          )}
+          {trendValue === 'decreasing' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+            </svg>
+          )}
+          {trendValue === 'stable' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
+            </svg>
+          )}
+          <span className="text-[16px] font-medium">{trendValue ?? '—'}</span>
+        </div>
+      ) : (
+        <div className="mt-1 flex items-baseline gap-1.5">
+          <span className="text-[22px] font-medium text-[#1a1a1a] tabular-nums leading-none">{value ?? '—'}</span>
+          {inlineSecondary && <span className="text-[11px] text-[#6b6b6b]">{inlineSecondary}</span>}
+        </div>
+      )}
+      {hint && <div className="text-[10px] text-[#9a9a9a] mt-1">{hint}</div>}
+    </div>
+  );
+};
+
+const RecentEventRow: React.FC<{ event: EventSummary }> = ({ event }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const formatDate = (d: string) =>
+    new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toLowerCase();
+
+  const confidenceColor =
+    event.confidence_score === undefined
+      ? '#9a9a9a'
+      : event.confidence_score >= 0.8
+      ? '#c2410c'
+      : event.confidence_score >= 0.6
+      ? '#6b6b6b'
+      : '#9a9a9a';
+
+  return (
+    <button
+      onClick={() => navigate(`/entity/event/${event.id}`, { state: { from: location.pathname + location.search } })}
+      className="w-full text-left bg-[#f6f1e6] border border-black/[0.06] hover:border-black/[0.15] transition-colors"
+      style={{ borderRadius: 6, padding: '9px 12px' }}
+    >
+      <div className="text-[12px] text-[#1a1a1a] font-medium leading-snug truncate">{event.name}</div>
+      <div className="text-[10px] text-[#6b6b6b] mt-0.5 flex items-center gap-2 flex-wrap">
+        <span>{formatDate(event.date)}</span>
+        <span className="text-[#9a9a9a]">·</span>
+        <span>{event.city ? `${event.city}, ${event.state}` : `${event.state} · statewide`}</span>
+        {event.confidence_score !== undefined && (
+          <>
+            <span className="text-[#9a9a9a]">·</span>
+            <span style={{ color: confidenceColor }}>● {Math.round(event.confidence_score * 100)}%</span>
+          </>
+        )}
+      </div>
+    </button>
+  );
+};
+
+// Free-standing helper (was a method on EntityView before — pulled out so it can be passed
+// into NetworkTab.renderReadOnly without losing access to navigate)
+const renderNetworkSection = (
+  links: ActorLink[],
+  title: string,
+  direction: 'in' | 'out',
+  navigateToActor: (id: string) => void,
+) => {
+  if (!links || links.length === 0) return null;
+
+  return (
+    <div className="mb-5">
+      <h3 className="text-[10px] uppercase tracking-[0.4px] text-[#6b6b6b] mb-2 flex items-center gap-1.5">
+        {title}
+        <span className="text-[#9a9a9a] normal-case tracking-normal">({links.length})</span>
+      </h3>
+      <div className="space-y-1.5">
+        {links.map((link, idx) => (
+          <button
+            key={`${direction}-${link.other_actor_id}-${idx}`}
+            onClick={() => navigateToActor(link.other_actor_id)}
+            className="w-full text-left bg-[#fdfaf2] border border-black/[0.08] hover:border-black/[0.2] transition-colors p-3"
+            style={{ borderRadius: 6 }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[13px] font-medium text-[#1a1a1a]">{link.other_actor_name}</span>
+                  {link.is_primary && (
+                    <span
+                      className="text-[10px]"
+                      style={{
+                        padding: '1px 7px',
+                        borderRadius: 10,
+                        background: '#fdf2ed',
+                        color: '#9a330a',
+                        border: '0.5px solid rgba(194,65,12,0.2)',
+                      }}
+                    >
+                      primary
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11px] text-[#6b6b6b]">
+                  <span>{link.other_actor_type?.toLowerCase()}</span>
+                  {(link.relationship || link.role) && (
+                    <>
+                      <span className="mx-1.5">·</span>
+                      <span>{(link.relationship || link.role)?.toLowerCase()}</span>
+                    </>
+                  )}
+                  {link.role_category && (
+                    <>
+                      <span className="mx-1.5">·</span>
+                      <span>{link.role_category.toLowerCase()}</span>
+                    </>
+                  )}
+                </div>
+                {(link.start_date || link.end_date) && (
+                  <div className="mt-0.5 text-[10px] text-[#9a9a9a]">
+                    {link.start_date && `from ${link.start_date}`}
+                    {link.start_date && link.end_date && ' · '}
+                    {link.end_date && `to ${link.end_date}`}
+                  </div>
+                )}
+              </div>
+              <svg className="w-4 h-4 text-[#9a9a9a] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ActorProfileSection: React.FC<{ actorId: string; onDone?: () => void }> = ({ actorId, onDone }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actor, setActor] = useState<Actor | null>(null);
@@ -1279,15 +1667,15 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
   const profileMessage = profileStatus?.text ?? '';
 
   return (
-    <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+    <section className="rounded-2xl border border-black/10 bg-[#fdfaf2] p-5 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Actor Profile</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-[#9a9a9a]">Actor Profile</h2>
           {actor && (
-            <p className="mt-1 text-lg font-semibold text-gray-900">{actor.name ?? 'Unnamed Actor'}</p>
+            <p className="mt-1 text-lg font-semibold text-[#1a1a1a]">{actor.name ?? 'Unnamed Actor'}</p>
           )}
           {actor && (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-[#9a9a9a]">
               <span className="uppercase">{actor.actor_type ?? 'Unknown type'}</span>
               {(actor.city || actor.state) && (
                 <>
@@ -1303,8 +1691,8 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
             <button
               type="button"
               onClick={toggleEditing}
-              className={`inline-flex items-center rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-medium transition ${
-                isEditing ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+              className={`inline-flex items-center rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium transition ${
+                isEditing ? 'bg-[#c2410c] text-white border-[#c2410c]' : 'bg-[#f6f1e6] text-[#6b6b6b] hover:bg-[#ede5d2]'
               }`}
             >
               <svg className="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1318,18 +1706,18 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
 
       <div className="mt-4">
         {loading ? (
-          <div className="flex items-center justify-center py-8 text-sm text-gray-500">
-            <span className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+          <div className="flex items-center justify-center py-8 text-sm text-[#9a9a9a]">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-[#c2410c] border-t-transparent" />
             <span className="ml-3">Loading profile…</span>
           </div>
         ) : error ? (
-          <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="rounded-md border border-[#DC2626]/20 bg-[#FEE2E2]/30 px-4 py-3 text-sm text-[#DC2626]">
             <div className="flex items-center justify-between">
               <span>{error}</span>
               <button
                 type="button"
                 onClick={loadActorData}
-                className="ml-4 rounded border border-rose-300 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-100"
+                className="ml-4 rounded border border-[#DC2626]/30 px-2 py-1 text-xs font-semibold text-[#DC2626] hover:bg-[#FEE2E2]/40"
               >
                 Retry
               </button>
@@ -1340,21 +1728,21 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
             {isEditing ? (
               <form className="space-y-6" onSubmit={handleProfileSubmit}>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <label className="space-y-1 text-sm text-gray-600">
-                    <span className="font-medium text-gray-700">Name</span>
+                  <label className="space-y-1 text-sm text-[#6b6b6b]">
+                    <span className="font-medium text-[#2a2a2a]">Name</span>
                     <input
                       value={profileForm.name}
                       onChange={event => handleProfileChange('name', event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                       placeholder="Actor name"
                     />
                   </label>
-                  <label className="space-y-1 text-sm text-gray-600">
-                    <span className="font-medium text-gray-700">Type</span>
+                  <label className="space-y-1 text-sm text-[#6b6b6b]">
+                    <span className="font-medium text-[#2a2a2a]">Type</span>
                     <select
                       value={profileForm.actor_type}
                       onChange={event => handleProfileChange('actor_type', event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                     >
                       <option value="">Select type</option>
                       {ACTOR_TYPE_OPTIONS.map(option => (
@@ -1364,279 +1752,107 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
                       ))}
                     </select>
                   </label>
-                  <label className="space-y-1 text-sm text-gray-600">
-                    <span className="font-medium text-gray-700">City</span>
+                  <label className="space-y-1 text-sm text-[#6b6b6b]">
+                    <span className="font-medium text-[#2a2a2a]">City</span>
                     <input
                       value={profileForm.city}
                       onChange={event => handleProfileChange('city', event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                       placeholder="Phoenix"
                     />
                   </label>
-                  <label className="space-y-1 text-sm text-gray-600">
-                    <span className="font-medium text-gray-700">State</span>
+                  <label className="space-y-1 text-sm text-[#6b6b6b]">
+                    <span className="font-medium text-[#2a2a2a]">State</span>
                     <input
                       value={profileForm.state}
                       onChange={event => handleProfileChange('state', event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                       placeholder="AZ"
                     />
                   </label>
-                  <label className="space-y-1 text-sm text-gray-600">
-                    <span className="font-medium text-gray-700">Region</span>
+                  <label className="space-y-1 text-sm text-[#6b6b6b]">
+                    <span className="font-medium text-[#2a2a2a]">Region</span>
                     <input
                       value={profileForm.region}
                       onChange={event => handleProfileChange('region', event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                       placeholder="Maricopa County"
                     />
                   </label>
-                  <label className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                  <label className="flex items-center gap-3 rounded-lg border border-black/10 bg-[#f6f1e6] px-3 py-2 text-sm text-[#6b6b6b]">
                     <input
                       type="checkbox"
-                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 rounded border-black/15 text-[#c2410c] focus:ring-[#c2410c]/10"
                       checked={profileForm.should_scrape}
                       onChange={event => handleProfileChange('should_scrape', event.target.checked)}
                     />
-                    <span className="font-medium text-gray-700">Eligible for scraping</span>
+                    <span className="font-medium text-[#2a2a2a]">Eligible for scraping</span>
                   </label>
                 </div>
-                <label className="space-y-1 text-sm text-gray-600">
-                  <span className="font-medium text-gray-700">About</span>
+                <label className="space-y-1 text-sm text-[#6b6b6b]">
+                  <span className="font-medium text-[#2a2a2a]">About</span>
                   <textarea
                     value={profileForm.about}
                     onChange={event => handleProfileChange('about', event.target.value)}
                     rows={5}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                     placeholder="Summary, biography, notes"
                   />
                 </label>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-xs font-medium">
-                    {profileStatus?.type === 'error' && <span className="text-rose-600">{profileMessage}</span>}
+                    {profileStatus?.type === 'error' && <span className="text-[#DC2626]">{profileMessage}</span>}
                     {profileStatus?.type === 'success' && <span className="text-emerald-600">{profileMessage}</span>}
                   </div>
                   <div className="flex gap-3">
                     <button
                       type="button"
                       onClick={toggleEditing}
-                      className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:border-gray-300"
+                      className="rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#6b6b6b] hover:border-black/15"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={!profileDirty || profileSaving}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-300"
+                      className="rounded-lg bg-[#c2410c] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#9a330a] disabled:cursor-not-allowed disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {profileSaving ? 'Saving…' : 'Save changes'}
                     </button>
                   </div>
                 </div>
-
-                {/* Relationship management moved to Network tab */}
-                {/*
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Add Relationship</h3>
-                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,2fr),minmax(0,1fr)]">
-                      <div>
-                        <label className="space-y-1 text-sm text-gray-600">
-                          <span className="font-medium text-gray-700">Search actors</span>
-                          <input
-                            value={newLinkSearch}
-                            onChange={event => {
-                              setNewLinkSearch(event.target.value);
-                              setSelectedNewLink(null);
-                            }}
-                            placeholder="Search by name, city, or state"
-                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                          />
-                        </label>
-                        <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white">
-                          {isSearchingLinks ? (
-                            <div className="flex items-center justify-center py-6 text-sm text-gray-500">Searching…</div>
-                          ) : newLinkResults.length === 0 ? (
-                            <div className="py-5 text-center text-xs text-gray-400">
-                              {newLinkSearch.trim().length < 2 ? 'Type at least two characters to search' : 'No actors found'}
-                            </div>
-                          ) : (
-                            <ul className="divide-y divide-gray-100 text-sm">
-                              {newLinkResults.map(option => {
-                                const selected = selectedNewLink?.id === option.id;
-                                return (
-                                  <li key={option.id}>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setSelectedNewLink(option);
-                                        setNewLinkSearch(option.name ?? '');
-                                      }}
-                                      className={`flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left transition ${
-                                        selected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'
-                                      }`}
-                                    >
-                                      <span className="font-medium">{option.name ?? 'Unnamed actor'}</span>
-                                      <span className="text-xs text-gray-500">
-                                        {option.actor_type?.toUpperCase() ?? '—'}
-                                        {(option.city || option.state) && ` • ${[option.city, option.state].filter(Boolean).join(', ')}`}
-                                      </span>
-                                    </button>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          )}
-                        </div>
-                      </div>
-                      <div className="space-y-3">
-                        <label className="space-y-1 text-sm text-gray-600">
-                          <span className="font-medium text-gray-700">Relationship Type</span>
-                          <input
-                            value={newLinkRelationship}
-                            onChange={event => setNewLinkRelationship(event.target.value)}
-                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                            placeholder="member, staff, etc."
-                          />
-                        </label>
-                        <label className="space-y-1 text-sm text-gray-600">
-                          <span className="font-medium text-gray-700">Role</span>
-                          <input
-                            value={newLinkRole}
-                            onChange={event => setNewLinkRole(event.target.value)}
-                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                            placeholder="Field Representative"
-                          />
-                        </label>
-                        {newLinkError && <p className="text-xs font-medium text-rose-600">{newLinkError}</p>}
-                        <button
-                          type="button"
-                          onClick={handleCreateRelationship}
-                          disabled={isCreatingLink || !selectedNewLink}
-                          className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-300"
-                        >
-                          {isCreatingLink ? 'Linking…' : selectedNewLink ? `Link ${selectedNewLink.name ?? 'Actor'}` : 'Select an actor to link'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <header className="flex items-center justify-between">
-                      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Existing Connections</h3>
-                      <span className="text-xs text-gray-500">{connectionsCombined.length} linked</span>
-                    </header>
-                    {relationshipGlobalError && (
-                      <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600">
-                        {relationshipGlobalError}
-                      </div>
-                    )}
-                    {connectionsCombined.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
-                        No relationships recorded yet.
-                      </div>
-                    ) : (
-                      <ul className="space-y-3">
-                        {connectionsCombined.map(rel => {
-                          const key = relationshipKey(rel);
-                          const draft = relationshipDrafts[key] ?? { relationship: rel.relationship ?? '', role: rel.role ?? '' };
-                          const isSaving = relationshipSavingKey === key;
-                          const isDeleting = relationshipDeletingKey === key;
-                          const rowError = relationshipErrors[key];
-                          const saved = relationshipSuccessKey === key;
-
-                          return (
-                            <li key={key} className="rounded-lg border border-gray-200 bg-white p-4">
-                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                  <div className="text-base font-semibold text-gray-900">{rel.to_actor?.name ?? rel.to_actor_id}</div>
-                                  <div className="text-xs text-gray-500">
-                                    {rel.to_actor?.actor_type?.toUpperCase() ?? '—'}
-                                    {(rel.to_actor?.city || rel.to_actor?.state) &&
-                                      ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteRelationship(rel)}
-                                  disabled={isDeleting || isSaving}
-                                  className="self-start rounded-lg border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:border-rose-300 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {isDeleting ? 'Removing…' : 'Remove'}
-                                </button>
-                              </div>
-                              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                                <label className="space-y-1 text-sm text-gray-600">
-                                  <span className="font-medium text-gray-700">Relationship</span>
-                                  <input
-                                    value={draft.relationship}
-                                    onChange={event => updateRelationshipDraft(key, 'relationship', event.target.value)}
-                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                                    placeholder="member"
-                                  />
-                                </label>
-                                <label className="space-y-1 text-sm text-gray-600">
-                                  <span className="font-medium text-gray-700">Role</span>
-                                  <input
-                                    value={draft.role}
-                                    onChange={event => updateRelationshipDraft(key, 'role', event.target.value)}
-                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                                    placeholder="Organizer"
-                                  />
-                                </label>
-                              </div>
-                              <div className="mt-3 flex flex-col gap-2 text-xs md:flex-row md:items-center md:justify-between">
-                                <div className="flex items-center gap-3 font-medium">
-                                  {rowError && <span className="text-rose-600">{rowError}</span>}
-                                  {saved && !rowError && <span className="text-emerald-600">Saved</span>}
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSaveRelationship(rel)}
-                                  disabled={isSaving || isDeleting}
-                                  className="self-start rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-300"
-                                >
-                                  {isSaving ? 'Saving…' : 'Save changes'}
-                                </button>
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </div>
-                */}
               </form>
             ) : (
               <div className="space-y-6">
                 <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-3 text-sm text-gray-600">
+                  <div className="space-y-3 text-sm text-[#6b6b6b]">
                     <div>
-                      <span className="text-xs uppercase text-gray-400">Type</span>
-                      <div className="font-medium text-gray-900">{actor.actor_type ?? '—'}</div>
+                      <span className="text-xs uppercase text-[#9a9a9a]">Type</span>
+                      <div className="font-medium text-[#1a1a1a]">{actor.actor_type ?? '—'}</div>
                     </div>
                     <div>
-                      <span className="text-xs uppercase text-gray-400">Location</span>
-                      <div className="font-medium text-gray-900">{[actor.city, actor.state].filter(Boolean).join(', ') || '—'}</div>
+                      <span className="text-xs uppercase text-[#9a9a9a]">Location</span>
+                      <div className="font-medium text-[#1a1a1a]">{[actor.city, actor.state].filter(Boolean).join(', ') || '—'}</div>
                     </div>
                     <div>
-                      <span className="text-xs uppercase text-gray-400">Region</span>
-                      <div className="font-medium text-gray-900">{actor.region ?? '—'}</div>
+                      <span className="text-xs uppercase text-[#9a9a9a]">Region</span>
+                      <div className="font-medium text-[#1a1a1a]">{actor.region ?? '—'}</div>
                     </div>
                     <div>
-                      <span className="text-xs uppercase text-gray-400">About</span>
-                      <p className="mt-1 text-gray-700">{actor.about?.trim() || 'No description available.'}</p>
+                      <span className="text-xs uppercase text-[#9a9a9a]">About</span>
+                      <p className="mt-1 text-[#2a2a2a]">{actor.about?.trim() || 'No description available.'}</p>
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Social Handles</h3>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[#9a9a9a]">Social Handles</h3>
                     {usernames.length === 0 ? (
-                      <p className="mt-2 text-sm text-gray-500">No handles linked.</p>
+                      <p className="mt-2 text-sm text-[#9a9a9a]">No handles linked.</p>
                     ) : (
                       <ul className="mt-3 space-y-2 text-sm">
                         {usernames.map(handle => (
-                          <li key={handle.id} className="flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-                            <span className="font-medium text-gray-800">@{handle.username}</span>
-                            <span className="text-xs uppercase tracking-wide text-gray-500">{handle.platform}</span>
+                          <li key={handle.id} className="flex items-center justify-between rounded-md border border-black/10 bg-[#f6f1e6] px-3 py-2">
+                            <span className="font-medium text-[#1a1a1a]">@{handle.username}</span>
+                            <span className="text-xs uppercase tracking-wide text-[#9a9a9a]">{handle.platform}</span>
                           </li>
                         ))}
                       </ul>
@@ -1644,18 +1860,14 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
                   </div>
                 </div>
 
-                {/* Connected actors moved to Network tab */}
-
-                {/* Incoming connections are included above in Connected Actors */}
-
                 {membersPreview.length > 0 && (
                   <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Members</h3>
-                    <ul className="mt-3 space-y-2 text-sm text-gray-600">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[#9a9a9a]">Members</h3>
+                    <ul className="mt-3 space-y-2 text-sm text-[#6b6b6b]">
                       {membersPreview.map(member => (
-                        <li key={member.id} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-                          <div className="text-gray-800">{member.member_actor?.name ?? member.member_actor_id}</div>
-                          <div className="text-xs text-gray-500">{member.role ?? 'Member'}</div>
+                        <li key={member.id} className="rounded-md border border-black/10 bg-[#f6f1e6] px-3 py-2">
+                          <div className="text-[#1a1a1a]">{member.member_actor?.name ?? member.member_actor_id}</div>
+                          <div className="text-xs text-[#9a9a9a]">{member.role ?? 'Member'}</div>
                         </li>
                       ))}
                     </ul>
@@ -1665,7 +1877,7 @@ const ActorProfileSection: React.FC<{ actorId: string }> = ({ actorId }) => {
             )}
           </>
         ) : (
-          <div className="text-sm text-gray-500">Actor not found.</div>
+          <div className="text-sm text-[#9a9a9a]">Actor not found.</div>
         )}
       </div>
     </section>
@@ -1751,9 +1963,10 @@ const NetworkTab: React.FC<{
     searchRef.current = window.setTimeout(async () => {
       try {
         const r = await searchActorsForLinking(q, 12, actorId);
-        // exclude already linked ids from both inbound and outbound depending on direction
         const existing = new Set(
-          (direction === 'outbound' ? outbound : inbound).map(x => (direction === 'outbound' ? x.to_actor_id : x.from_actor_id)),
+          (direction === 'outbound' ? outbound : inbound).map(x =>
+            direction === 'outbound' ? x.to_actor_id : x.from_actor_id,
+          ),
         );
         setResults(r.filter(a => !existing.has(a.id)));
       } catch (e) {
@@ -1876,7 +2089,7 @@ const NetworkTab: React.FC<{
           type="button"
           onClick={() => setEditing(v => !v)}
           className={`inline-flex items-center rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
-            editing ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+            editing ? 'bg-[#c2410c] text-white border-[#c2410c]' : 'bg-[#f6f1e6] text-[#6b6b6b] border-black/10 hover:bg-[#ede5d2]'
           }`}
         >
           {editing ? 'Done' : 'Edit'}
@@ -1888,11 +2101,11 @@ const NetworkTab: React.FC<{
       ) : (
         <div className="space-y-6">
           {globalError && (
-            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600">{globalError}</div>
+            <div className="rounded-md border border-[#DC2626]/20 bg-[#FEE2E2]/30 px-3 py-2 text-sm text-[#DC2626]">{globalError}</div>
           )}
 
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Add Connection</h4>
+          <div className="rounded-lg border border-black/10 bg-[#f6f1e6] p-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-[#9a9a9a]">Add Connection</h4>
             <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,2fr),minmax(0,1fr)]">
               <div>
                 <div className="mb-2 flex items-center gap-3 text-sm">
@@ -1905,8 +2118,8 @@ const NetworkTab: React.FC<{
                     <span>Inbound (to this actor)</span>
                   </label>
                 </div>
-                <label className="space-y-1 text-sm text-gray-600">
-                  <span className="font-medium text-gray-700">Search actors</span>
+                <label className="space-y-1 text-sm text-[#6b6b6b]">
+                  <span className="font-medium text-[#2a2a2a]">Search actors</span>
                   <input
                     value={term}
                     onChange={e => {
@@ -1914,14 +2127,14 @@ const NetworkTab: React.FC<{
                       setSelected(null);
                     }}
                     placeholder="Search by name, city, or state"
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                   />
                 </label>
-                <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+                <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-black/10 bg-[#fdfaf2]">
                   {isSearching ? (
-                    <div className="flex items-center justify-center py-6 text-sm text-gray-500">Searching…</div>
+                    <div className="flex items-center justify-center py-6 text-sm text-[#9a9a9a]">Searching…</div>
                   ) : results.length === 0 ? (
-                    <div className="py-5 text-center text-xs text-gray-400">
+                    <div className="py-5 text-center text-xs text-[#9a9a9a]">
                       {term.trim().length < 2 ? 'Type at least two characters to search' : 'No actors found'}
                     </div>
                   ) : (
@@ -1937,11 +2150,11 @@ const NetworkTab: React.FC<{
                                 setTerm(opt.name ?? '');
                               }}
                               className={`flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left transition ${
-                                sel ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'
+                                sel ? 'bg-blue-50 text-[#9a330a]' : 'hover:bg-[#f6f1e6]'
                               }`}
                             >
                               <span className="font-medium">{opt.name ?? 'Unnamed actor'}</span>
-                              <span className="text-xs text-gray-500">
+                              <span className="text-xs text-[#9a9a9a]">
                                 {opt.actor_type?.toUpperCase() ?? '—'}
                                 {(opt.city || opt.state) && ` • ${[opt.city, opt.state].filter(Boolean).join(', ')}`}
                               </span>
@@ -1954,30 +2167,30 @@ const NetworkTab: React.FC<{
                 </div>
               </div>
               <div className="space-y-3">
-                <label className="space-y-1 text-sm text-gray-600">
-                  <span className="font-medium text-gray-700">Relationship</span>
+                <label className="space-y-1 text-sm text-[#6b6b6b]">
+                  <span className="font-medium text-[#2a2a2a]">Relationship</span>
                   <input
                     value={relType}
                     onChange={e => setRelType(e.target.value)}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                     placeholder="member, staff, etc."
                   />
                 </label>
-                <label className="space-y-1 text-sm text-gray-600">
-                  <span className="font-medium text-gray-700">Role</span>
+                <label className="space-y-1 text-sm text-[#6b6b6b]">
+                  <span className="font-medium text-[#2a2a2a]">Role</span>
                   <input
                     value={role}
                     onChange={e => setRole(e.target.value)}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                     placeholder="Organizer"
                   />
                 </label>
-                {addError && <p className="text-xs font-medium text-rose-600">{addError}</p>}
+                {addError && <p className="text-xs font-medium text-[#DC2626]">{addError}</p>}
                 <button
                   type="button"
                   onClick={handleCreate}
                   disabled={isCreating || !selected}
-                  className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-blue-300"
+                  className="w-full rounded-lg bg-[#c2410c] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#9a330a] disabled:cursor-not-allowed disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCreating ? 'Linking…' : selected ? `Link ${selected.name ?? 'Actor'}` : 'Select an actor to link'}
                 </button>
@@ -1986,15 +2199,15 @@ const NetworkTab: React.FC<{
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="rounded-lg border border-black/10 bg-[#fdfaf2] p-4">
               <header className="mb-2 flex items-center justify-between">
                 <h4 className="text-sm font-semibold">Outbound</h4>
-                <span className="text-xs text-gray-500">{outbound.length}</span>
+                <span className="text-xs text-[#9a9a9a]">{outbound.length}</span>
               </header>
               {loading ? (
-                <div className="text-center text-sm text-gray-500 py-4">Loading…</div>
+                <div className="text-center text-sm text-[#9a9a9a] py-4">Loading…</div>
               ) : outbound.length === 0 ? (
-                <div className="text-center text-sm text-gray-500 py-4">No outbound links</div>
+                <div className="text-center text-sm text-[#9a9a9a] py-4">No outbound links</div>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {outbound.map(rel => {
@@ -2005,54 +2218,55 @@ const NetworkTab: React.FC<{
                     const err = rowErrors[key];
                     const saved = successKey === key;
                     return (
-                      <li key={key} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                      <li key={key} className="rounded-md border border-black/10 bg-[#f6f1e6] px-3 py-2">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <div className="font-medium text-gray-900">{rel.to_actor?.name ?? rel.to_actor_id}</div>
-                            <div className="text-xs text-gray-500">
+                            <div className="font-medium text-[#1a1a1a]">{rel.to_actor?.name ?? rel.to_actor_id}</div>
+                            <div className="text-xs text-[#9a9a9a]">
                               {rel.to_actor?.actor_type?.toUpperCase() ?? '—'}
-                              {(rel.to_actor?.city || rel.to_actor?.state) && ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
+                              {(rel.to_actor?.city || rel.to_actor?.state) &&
+                                ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
                             </div>
                           </div>
                           <button
                             type="button"
                             onClick={() => handleRemove(rel, false)}
                             disabled={isDeleting || isSaving}
-                            className="rounded border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                            className="rounded border border-[#DC2626]/20 px-2 py-1 text-xs font-semibold text-[#DC2626] hover:bg-[#FEE2E2]/30 disabled:opacity-60"
                           >
                             {isDeleting ? 'Removing…' : 'Remove'}
                           </button>
                         </div>
                         <div className="mt-3 grid gap-2 md:grid-cols-2">
-                          <label className="space-y-1 text-xs text-gray-600">
-                            <span className="font-medium text-gray-700">Relationship</span>
+                          <label className="space-y-1 text-xs text-[#6b6b6b]">
+                            <span className="font-medium text-[#2a2a2a]">Relationship</span>
                             <input
                               value={draft.relationship}
                               onChange={e => updateDraft(key, 'relationship', e.target.value)}
-                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              className="w-full rounded border border-black/10 px-2 py-1.5 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                               placeholder="member"
                             />
                           </label>
-                          <label className="space-y-1 text-xs text-gray-600">
-                            <span className="font-medium text-gray-700">Role</span>
+                          <label className="space-y-1 text-xs text-[#6b6b6b]">
+                            <span className="font-medium text-[#2a2a2a]">Role</span>
                             <input
                               value={draft.role}
                               onChange={e => updateDraft(key, 'role', e.target.value)}
-                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              className="w-full rounded border border-black/10 px-2 py-1.5 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                               placeholder="Organizer"
                             />
                           </label>
                         </div>
                         <div className="mt-2 flex items-center justify-between text-xs">
                           <div className="font-medium">
-                            {err && <span className="text-rose-600">{err}</span>}
+                            {err && <span className="text-[#DC2626]">{err}</span>}
                             {saved && !err && <span className="text-emerald-600">Saved</span>}
                           </div>
                           <button
                             type="button"
                             onClick={() => handleSave(rel)}
                             disabled={isSaving || isDeleting}
-                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60"
+                            className="rounded bg-[#c2410c] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#9a330a] disabled:opacity-60"
                           >
                             {isSaving ? 'Saving…' : 'Save changes'}
                           </button>
@@ -2064,15 +2278,15 @@ const NetworkTab: React.FC<{
               )}
             </div>
 
-            <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="rounded-lg border border-black/10 bg-[#fdfaf2] p-4">
               <header className="mb-2 flex items-center justify-between">
                 <h4 className="text-sm font-semibold">Inbound</h4>
-                <span className="text-xs text-gray-500">{inbound.length}</span>
+                <span className="text-xs text-[#9a9a9a]">{inbound.length}</span>
               </header>
               {loading ? (
-                <div className="text-center text-sm text-gray-500 py-4">Loading…</div>
+                <div className="text-center text-sm text-[#9a9a9a] py-4">Loading…</div>
               ) : inbound.length === 0 ? (
-                <div className="text-center text-sm text-gray-500 py-4">No inbound links</div>
+                <div className="text-center text-sm text-[#9a9a9a] py-4">No inbound links</div>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {inbound.map(rel => {
@@ -2083,54 +2297,55 @@ const NetworkTab: React.FC<{
                     const err = rowErrors[key];
                     const saved = successKey === key;
                     return (
-                      <li key={`in-${key}`} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                      <li key={`in-${key}`} className="rounded-md border border-black/10 bg-[#f6f1e6] px-3 py-2">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <div className="font-medium text-gray-900">{rel.to_actor?.name ?? rel.from_actor_id}</div>
-                            <div className="text-xs text-gray-500">
+                            <div className="font-medium text-[#1a1a1a]">{rel.to_actor?.name ?? rel.from_actor_id}</div>
+                            <div className="text-xs text-[#9a9a9a]">
                               {rel.to_actor?.actor_type?.toUpperCase() ?? '—'}
-                              {(rel.to_actor?.city || rel.to_actor?.state) && ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
+                              {(rel.to_actor?.city || rel.to_actor?.state) &&
+                                ` • ${[rel.to_actor?.city, rel.to_actor?.state].filter(Boolean).join(', ')}`}
                             </div>
                           </div>
                           <button
                             type="button"
                             onClick={() => handleRemove(rel, true)}
                             disabled={isDeleting || isSaving}
-                            className="rounded border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                            className="rounded border border-[#DC2626]/20 px-2 py-1 text-xs font-semibold text-[#DC2626] hover:bg-[#FEE2E2]/30 disabled:opacity-60"
                           >
                             {isDeleting ? 'Removing…' : 'Remove'}
                           </button>
                         </div>
                         <div className="mt-3 grid gap-2 md:grid-cols-2">
-                          <label className="space-y-1 text-xs text-gray-600">
-                            <span className="font-medium text-gray-700">Relationship</span>
+                          <label className="space-y-1 text-xs text-[#6b6b6b]">
+                            <span className="font-medium text-[#2a2a2a]">Relationship</span>
                             <input
                               value={draft.relationship}
                               onChange={e => updateDraft(key, 'relationship', e.target.value)}
-                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              className="w-full rounded border border-black/10 px-2 py-1.5 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                               placeholder="member"
                             />
                           </label>
-                          <label className="space-y-1 text-xs text-gray-600">
-                            <span className="font-medium text-gray-700">Role</span>
+                          <label className="space-y-1 text-xs text-[#6b6b6b]">
+                            <span className="font-medium text-[#2a2a2a]">Role</span>
                             <input
                               value={draft.role}
                               onChange={e => updateDraft(key, 'role', e.target.value)}
-                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                              className="w-full rounded border border-black/10 px-2 py-1.5 text-sm text-[#1a1a1a] focus:border-[#c2410c] focus:outline-none focus:ring-2 focus:ring-[#c2410c]/10"
                               placeholder="Organizer"
                             />
                           </label>
                         </div>
                         <div className="mt-2 flex items-center justify-between text-xs">
                           <div className="font-medium">
-                            {err && <span className="text-rose-600">{err}</span>}
+                            {err && <span className="text-[#DC2626]">{err}</span>}
                             {saved && !err && <span className="text-emerald-600">Saved</span>}
                           </div>
                           <button
                             type="button"
                             onClick={() => handleSave(rel)}
                             disabled={isSaving || isDeleting}
-                            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-60"
+                            className="rounded bg-[#c2410c] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#9a330a] disabled:opacity-60"
                           >
                             {isSaving ? 'Saving…' : 'Save changes'}
                           </button>
