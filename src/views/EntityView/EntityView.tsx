@@ -272,6 +272,13 @@ export const EntityView: React.FC = () => {
     }
   }, [networkMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fire when networkActorIds populates (async, after initial render)
+  useEffect(() => {
+    if (networkActorIds.length > 0 && networkEvents.length === 0) {
+      loadNetworkEvents();
+    }
+  }, [networkActorIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleToggleExpand = (eventId: string) => {
     setExpandedEvents(prev => {
       const next = new Set(prev);
